@@ -1,0 +1,18 @@
+services:
+  dev:
+    build: .
+    working_dir: /workspace
+    environment:
+      # Without this, pnpm's content-addressable store falls back to a path
+      # under the bind-mounted project root (polluting the host checkout).
+      # Keep it inside the already-isolated node_modules volume instead.
+      npm_config_store_dir: /workspace/node_modules/.pnpm-store
+    volumes:
+      - .:/workspace
+      - node_modules:/workspace/node_modules
+    stdin_open: true
+    tty: true
+    command: bash
+
+volumes:
+  node_modules:
