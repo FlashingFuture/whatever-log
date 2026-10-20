@@ -1,0 +1,24 @@
+{
+  "name": "whatever-log",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=22.22.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.6.0",
+    "typescript": "^7.0.2"
+  },
+  "scripts": {
+    "prepare": "husky",
+    "lint": "biome check .",
+    "format": "biome check --write ."
+  },
+  "lint-staged": {
+    "*": [
+      "biome check --write --no-errors-on-unmatched"
+    ]
+  }
+}
