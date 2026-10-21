@@ -1,4 +1,5 @@
-"""활성 프로세스를 주기적으로 샘플링해서 카운트를 쌓는 워커.
+"""foreground 프로세스와, 창이 있는 전체 프로세스(foreground 포함)를
+각각 독립적으로 샘플링해서 카운트를 쌓는 워커.
 
 사용법: python -m recorder --interval 5
 """
@@ -8,7 +9,10 @@ import sys
 import time
 from collections import Counter
 
-from recorder.active_window import get_active_process_name
+from recorder.window_snapshot import (
+    get_foreground_process_name,
+    get_windowed_process_names,
+)
 
 DEFAULT_INTERVAL_SECONDS = 15.0
 
@@ -18,25 +22,42 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
 
 
+def _print_tick(tag: str, name: str, counts: Counter[str]) -> None:
+    print(f"[{tag}][{name}] {counts[name]}회  (전체: {dict(counts)})")
+
+
 def run(interval: float) -> None:
-    counts: Counter[str] = Counter()
-    print(f"{interval}초 간격으로 활성 프로세스를 기록합니다. (Ctrl+C로 종료)")
+    foreground_counts: Counter[str] = Counter()
+    window_counts: Counter[str] = Counter()
+    print(
+        f"{interval}초 간격으로 foreground / 전체 윈도우 프로세스를 "
+        "독립적으로 기록합니다. (Ctrl+C로 종료)"
+    )
 
     try:
         while True:
-            name = get_active_process_name()
-            if name is not None:
-                counts[name] += 1
-                print(f"[{name}] {counts[name]}회  (전체: {dict(counts)})")
+            foreground = get_foreground_process_name()
+            if foreground is not None:
+                foreground_counts[foreground] += 1
+                _print_tick("FG", foreground, foreground_counts)
+
+            for name in get_windowed_process_names():
+                window_counts[name] += 1
+                _print_tick("WIN", name, window_counts)
+
             time.sleep(interval)
     except KeyboardInterrupt:
         print("\n종료합니다. 최종 집계:")
-        for name, count in counts.most_common():
-            print(f"  {name}: {count}")
+        print("  [foreground]")
+        for name, count in foreground_counts.most_common():
+            print(f"    {name}: {count}")
+        print("  [windowed (foreground 포함)]")
+        for name, count in window_counts.most_common():
+            print(f"    {name}: {count}")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="활성 프로세스 기록 워커")
+    parser = argparse.ArgumentParser(description="foreground / 전체 윈도우 프로세스 기록 워커")
     parser.add_argument(
         "--interval",
         type=float,
