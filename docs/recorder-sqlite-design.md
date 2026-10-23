@@ -100,3 +100,32 @@ def sample_tick() -> TickSample:
 "시간대별 타임라인" 기능도 원본 타임스탬프가 있어야 가능하므로 애초에 합계만
 남기는 방식으로는 구현할 수 없다. **매 틱을 SQLite에 raw row로 쓰는 방식**으로
 간다 — 메모리 누적 레이어는 아예 없앤다.
+
+## 나중에 고려할 것 (지금 당장 구현 안 함)
+
+비슷한 Python 프로세스 트래킹 프로젝트(ActivityWatch, WakaTime CLI) 조사 결과:
+
+- **ActivityWatch**(`aw-watcher-window` + `aw-server`, Python)
+  - 중복 실행 방지용 **lock file**(`QLockFile`)을 씀 — 데이터 디렉터리에 PID/호스트명을
+    적어두고, 시작할 때 lock이 있으면 이미 실행 중으로 판단. 같은 SQLite 파일에
+    두 프로세스가 동시에 쓰는 상황(경쟁/중복 집계)을 막아줌. 레코더가 중복 실행될
+    수 있는 상황이 생기면 도입.
+  - **수집기(watcher)와 저장소(server) 프로세스 분리** — watcher는 관찰만 하고 로컬
+    HTTP로 server에 전달, server만 SQLite를 소유. watcher가 죽어도 DB는 안전하고,
+    server가 죽으면 watcher도 "parent process died"로 깨끗하게 같이 종료. 지금은
+    단일 프로세스라 불필요하지만, 입력 감지 등을 별도 프로세스로 쪼갤 때 참고.
+  - **SQLite가 WAL이어도 실제로 깨지는 사례**가 있음("database disk image is
+    malformed", 보통 비정상 종료 + 디스크/안티바이러스 간섭 조합). 공식 복구 절차:
+    ```
+    sqlite3 corrupt.db '.recover' | sqlite3 recovered.db
+    ```
+    미리 막는 것만큼 "깨졌을 때 이 명령으로 복구한다"를 알아두는 것도 중요.
+  - 시작 시 재시도/타임아웃을 너무 짧게 잡으면 느린 부팅 환경에서 watcher가
+    server를 못 기다리고 죽는 실제 버그가 있었음 — 멀티 프로세스로 쪼갤 때 타임아웃을
+    너무 공격적으로 잡지 말 것.
+
+- **WakaTime CLI** (Go)
+  - 서버에 못 보낸 데이터를 메모리가 아니라 로컬 **BoltDB(임베디드 KV)에 즉시 써서**
+    durable queue로 들고 있다가 나중에 동기화. "관찰한 즉시 로컬에 내구성 있게
+    쓴다"는 원칙은 우리가 이미 결정한 "매 틱 SQLite row 쓰기"와 같은 방향 —
+    추가로 더 할 건 없고, 원칙이 맞다는 확인 정도.
