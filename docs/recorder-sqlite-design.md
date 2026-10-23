@@ -33,36 +33,62 @@
 틱마다 세 가지를 기록해야 하는데 데이터 모양이 다르다 — foreground와 입력 활동은
 틱당 1개, 윈도우 프로세스 목록은 틱당 0~N개. 이 모양을 그대로 테이블로 반영한다.
 
+프로세스 이름은 `processes` 테이블에 한 번만 저장하고 나머지는 정수 id로
+참조한다. (`tick_windowed_processes`에서 같은 process_name이 tick_id마다
+반복되는 건 버그가 아니다 — "몇 틱 동안 떠 있었나"를 행 개수로 세는 설계라 당연히
+그래야 한다. 다만 문자열을 매번 반복 저장하는 건 비효율적이라 id로 정규화했다.)
+
 ```sql
+CREATE TABLE processes (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
 CREATE TABLE ticks (
     id INTEGER PRIMARY KEY,
-    sampled_at TEXT NOT NULL,                -- ISO8601 UTC
-    foreground_process TEXT,                  -- 못 가져왔으면 NULL
-    seconds_since_last_input REAL NOT NULL    -- GetLastInputInfo 기반 idle 시간
+    sampled_at TEXT NOT NULL,                        -- ISO8601 UTC
+    foreground_process_id INTEGER REFERENCES processes(id),  -- 못 가져왔으면 NULL
+    seconds_since_last_input REAL NOT NULL            -- GetLastInputInfo 기반 idle 시간
 );
 
 CREATE TABLE tick_windowed_processes (
     tick_id INTEGER NOT NULL REFERENCES ticks(id) ON DELETE CASCADE,
-    process_name TEXT NOT NULL,
-    PRIMARY KEY (tick_id, process_name)
+    process_id INTEGER NOT NULL REFERENCES processes(id),
+    PRIMARY KEY (tick_id, process_id)
 );
 
 CREATE INDEX idx_ticks_sampled_at ON ticks(sampled_at);
-CREATE INDEX idx_ticks_foreground_process ON ticks(foreground_process);
-CREATE INDEX idx_tick_windowed_processes_name ON tick_windowed_processes(process_name);
+CREATE INDEX idx_ticks_foreground_process_id ON ticks(foreground_process_id);
+CREATE INDEX idx_tick_windowed_processes_process_id ON tick_windowed_processes(process_id);
 ```
+
+process id는 `INSERT ... ON CONFLICT(name) DO UPDATE SET name = name RETURNING id`
+(get-or-create 1쿼리)로 가져온다. `DO NOTHING`을 쓰면 충돌 시 RETURNING이 아무
+것도 안 돌려줘서, 항상 id를 받으려면 `DO UPDATE`(실질적으로는 no-op)가 필요하다.
 
 `seconds_since_last_input`은 boolean("활동 있었음")이 아니라 연속값으로 저장한다.
 "활동이 있었다고 볼 임계값"은 레코더가 아니라 **쿼리 시점**에 정한다
 (`WHERE seconds_since_last_input < 5` 등) — 나중에 기준을 바꿔도 과거 데이터를
 그대로 다시 해석할 수 있다.
 
-쿼리 예시:
+쿼리 예시 (이제 processes와 join 필요):
 
-- FG였던 시간: `SELECT COUNT(*) FROM ticks WHERE foreground_process = 'Code.exe'`
-- 떠 있었던(WIN) 시간: `SELECT COUNT(*) FROM tick_windowed_processes WHERE process_name = 'chrome.exe'`
-- 진짜 몰입해서 쓴 시간 (FG + 입력 활동 동시):
-  `SELECT COUNT(*) FROM ticks WHERE foreground_process = 'Code.exe' AND seconds_since_last_input < 5`
+```sql
+-- FG였던 시간
+SELECT COUNT(*) FROM ticks
+JOIN processes ON ticks.foreground_process_id = processes.id
+WHERE processes.name = 'Code.exe';
+
+-- 떠 있었던(WIN) 시간
+SELECT COUNT(*) FROM tick_windowed_processes
+JOIN processes ON tick_windowed_processes.process_id = processes.id
+WHERE processes.name = 'chrome.exe';
+
+-- 진짜 몰입해서 쓴 시간 (FG + 입력 활동 동시)
+SELECT COUNT(*) FROM ticks
+JOIN processes ON ticks.foreground_process_id = processes.id
+WHERE processes.name = 'Code.exe' AND ticks.seconds_since_last_input < 5;
+```
 
 ## 틱 처리 구조: 샘플링과 저장을 분리
 

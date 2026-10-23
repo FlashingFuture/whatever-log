@@ -9,10 +9,13 @@ docs/recorder-sqlite-design.md의 결정을 그대로 구현한다:
 - 파라미터 바인딩만 사용 — 문자열 포매팅으로 SQL을 만들지 않는다(인젝션 방지).
   프로세스 이름은 OS에서 온 값이라 대체로 안전하지만, 바인딩을 안 쓸 이유가 없다.
 - foreign_keys를 명시적으로 켠다 — SQLite는 기본값이 꺼짐이라, 안 켜면
-  tick_windowed_processes가 존재하지 않는 tick_id를 참조해도 막히지 않는다.
+  tick_windowed_processes/ticks가 존재하지 않는 process_id를 참조해도 막히지
+  않는다.
+- 프로세스 이름은 processes 테이블에 한 번만 저장하고 나머지는 정수 id로
+  참조한다 (같은 프로세스가 매 틱 반복돼도 문자열을 반복 저장하지 않음).
 - 틱당 ticks 1행 + tick_windowed_processes N행(윈도우 프로세스 개수만큼, 틱당
   연산이 가장 많이 발생하는 부분)을 하나의 트랜잭션으로 묶어서 커밋 1번으로
-  처리한다. N개를 executemany로 한 번에 보내서 Python↔SQLite 왕복도 줄인다.
+  처리한다.
 
 나중에 파일 전체 암호화(SQLCipher)가 필요해지면 여기(open_db)만 바꾸면 된다 —
 스키마나 save_tick은 그대로 둬도 된다.
@@ -24,23 +27,28 @@ from pathlib import Path
 from recorder.sampling import TickSample
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS processes (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
 CREATE TABLE IF NOT EXISTS ticks (
     id INTEGER PRIMARY KEY,
     sampled_at TEXT NOT NULL,
-    foreground_process TEXT,
+    foreground_process_id INTEGER REFERENCES processes(id),
     seconds_since_last_input REAL NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS tick_windowed_processes (
     tick_id INTEGER NOT NULL REFERENCES ticks(id) ON DELETE CASCADE,
-    process_name TEXT NOT NULL,
-    PRIMARY KEY (tick_id, process_name)
+    process_id INTEGER NOT NULL REFERENCES processes(id),
+    PRIMARY KEY (tick_id, process_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_ticks_sampled_at ON ticks(sampled_at);
-CREATE INDEX IF NOT EXISTS idx_ticks_foreground_process ON ticks(foreground_process);
-CREATE INDEX IF NOT EXISTS idx_tick_windowed_processes_name
-    ON tick_windowed_processes(process_name);
+CREATE INDEX IF NOT EXISTS idx_ticks_foreground_process_id ON ticks(foreground_process_id);
+CREATE INDEX IF NOT EXISTS idx_tick_windowed_processes_process_id
+    ON tick_windowed_processes(process_id);
 """
 
 
@@ -58,23 +66,50 @@ def open_db(path: Path) -> sqlite3.Connection:
     return conn
 
 
+def _get_or_create_process_id(conn: sqlite3.Connection, name: str) -> int:
+    """process 이름으로 id를 가져온다. 없으면 만들어서 반환한다 (get-or-create).
+
+    DO NOTHING이 아니라 DO UPDATE를 쓰는 이유: SQLite는 ON CONFLICT DO NOTHING이면
+    RETURNING이 아무 것도 안 돌려준다. DO UPDATE(사실상 no-op)여야 충돌이 나도
+    행이 "갱신됐다"고 취급되어 RETURNING으로 id를 받을 수 있다.
+    """
+    row = conn.execute(
+        "INSERT INTO processes (name) VALUES (?) "
+        "ON CONFLICT(name) DO UPDATE SET name = name "
+        "RETURNING id",
+        (name,),
+    ).fetchone()
+    return row[0]
+
+
 def save_tick(conn: sqlite3.Connection, sample: TickSample) -> None:
     """한 틱을 하나의 트랜잭션으로 저장한다. 실패하면 전부 롤백한다."""
     conn.execute("BEGIN")
     try:
+        foreground_process_id = (
+            _get_or_create_process_id(conn, sample.foreground_process)
+            if sample.foreground_process is not None
+            else None
+        )
+
         cursor = conn.execute(
-            "INSERT INTO ticks (sampled_at, foreground_process, seconds_since_last_input) "
+            "INSERT INTO ticks (sampled_at, foreground_process_id, seconds_since_last_input) "
             "VALUES (?, ?, ?)",
             (
                 sample.sampled_at.isoformat(),
-                sample.foreground_process,
+                foreground_process_id,
                 sample.seconds_since_last_input,
             ),
         )
         tick_id = cursor.lastrowid
+
+        windowed_rows = [
+            (tick_id, _get_or_create_process_id(conn, name))
+            for name in sample.windowed_processes
+        ]
         conn.executemany(
-            "INSERT INTO tick_windowed_processes (tick_id, process_name) VALUES (?, ?)",
-            [(tick_id, name) for name in sample.windowed_processes],
+            "INSERT INTO tick_windowed_processes (tick_id, process_id) VALUES (?, ?)",
+            windowed_rows,
         )
     except Exception:
         conn.execute("ROLLBACK")
