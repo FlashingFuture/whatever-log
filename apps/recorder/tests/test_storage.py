@@ -14,6 +14,7 @@ def _process_name(conn: sqlite3.Connection, process_id: int) -> str:
 
 
 def test_save_tick_persists_ticks_and_windowed_processes(tmp_path) -> None:
+    """ticks/tick_windowed_processes에 id가 processes의 올바른 이름으로 풀리는지 확인."""
     conn = open_db(tmp_path / "test.db")
     sample = TickSample(
         sampled_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -38,6 +39,7 @@ def test_save_tick_persists_ticks_and_windowed_processes(tmp_path) -> None:
 
 
 def test_save_tick_allows_null_foreground_process(tmp_path) -> None:
+    """foreground_process가 None이어도 DB 제약(NOT NULL 등)에 안 걸려야 한다."""
     conn = open_db(tmp_path / "test.db")
     sample = TickSample(
         sampled_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -77,6 +79,7 @@ def test_same_process_name_reuses_the_same_process_id(tmp_path) -> None:
 
 
 def test_foreign_keys_are_enforced(tmp_path) -> None:
+    """PRAGMA foreign_keys = ON이 실제로 걸려있는지 확인 (SQLite는 기본이 꺼짐)."""
     conn = open_db(tmp_path / "test.db")
 
     with pytest.raises(sqlite3.IntegrityError):
@@ -87,6 +90,7 @@ def test_foreign_keys_are_enforced(tmp_path) -> None:
 
 
 def test_each_tick_commits_as_one_transaction(tmp_path) -> None:
+    """윈도우 프로세스가 몇 개든 한 틱 = ticks 1행 + 그만큼의 연결 행이어야 한다."""
     conn = open_db(tmp_path / "test.db")
     sample = TickSample(
         sampled_at=datetime(2026, 1, 1, tzinfo=UTC),

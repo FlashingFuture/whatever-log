@@ -5,6 +5,7 @@ from recorder.sampling import sample_tick
 
 
 def test_sample_tick_combines_all_three_sources() -> None:
+    """세 소스를 모두 올바른 필드에 꽂아 넣는지 확인 (조합 로직 자체만 검증)."""
     with (
         patch(
             "recorder.sampling.get_foreground_process_name",
@@ -26,6 +27,7 @@ def test_sample_tick_combines_all_three_sources() -> None:
 
 
 def test_sample_tick_handles_no_foreground_process() -> None:
+    """foreground를 못 가져온 경우(None)에도 예외 없이 샘플을 만들어야 한다."""
     with (
         patch("recorder.sampling.get_foreground_process_name", return_value=None),
         patch("recorder.sampling.get_windowed_process_names", return_value=set()),

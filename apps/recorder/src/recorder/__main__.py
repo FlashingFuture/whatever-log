@@ -43,6 +43,7 @@ def _interval_type(value: str) -> float:
 
 
 def run(interval: float, db_path: Path) -> None:
+    """DB를 열어두고 interval마다 한 틱씩 기록하는 메인 루프. Ctrl+C로 종료한다."""
     conn = open_db(db_path)
     tick_count = 0
     print(f"{interval}초 간격으로 기록합니다. DB: {db_path} (Ctrl+C로 종료)")
@@ -65,6 +66,7 @@ def run(interval: float, db_path: Path) -> None:
 
 
 def main() -> None:
+    """CLI 인자(`--interval`, `--db-path`)를 파싱해서 run()에 넘기는 진입점."""
     parser = argparse.ArgumentParser(description="foreground / 전체 윈도우 프로세스 기록 워커")
     parser.add_argument(
         "--interval",

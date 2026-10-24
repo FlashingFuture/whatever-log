@@ -17,6 +17,8 @@ from recorder.window_snapshot import (
 
 @dataclass(frozen=True)
 class TickSample:
+    """한 틱에서 관찰한 값들의 불변 스냅샷. storage.save_tick()이 그대로 저장한다."""
+
     sampled_at: datetime
     foreground_process: str | None
     windowed_processes: frozenset[str]
@@ -24,6 +26,7 @@ class TickSample:
 
 
 def sample_tick() -> TickSample:
+    """지금 이 순간의 FG/창 목록/입력 idle 시간을 한 번에 읽어서 묶어 반환한다."""
     return TickSample(
         sampled_at=datetime.now(UTC),
         foreground_process=get_foreground_process_name(),

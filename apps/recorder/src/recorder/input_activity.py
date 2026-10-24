@@ -19,6 +19,7 @@ class _LastInputInfo(ctypes.Structure):
 
 
 def get_seconds_since_last_input() -> float:
+    """사용자가 실제로 자리에 있었는지 판단하는 데 쓸 idle 시간(초)을 반환한다."""
     if sys.platform != "win32":
         raise NotImplementedError(f"{sys.platform}은 아직 지원하지 않습니다.")
 

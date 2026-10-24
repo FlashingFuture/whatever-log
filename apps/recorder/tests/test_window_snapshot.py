@@ -7,6 +7,8 @@ from recorder.window_snapshot import (
 
 
 def test_get_foreground_process_name_resolves_pid_to_name() -> None:
+    """hwnd -> pid -> 프로세스명으로 이어지는 조회 체인이 올바르게 연결되는지 확인."""
+
     def fake_get_pid(_hwnd, pid_ref):
         pid_ref._obj.value = 1234
         return 1
@@ -26,11 +28,13 @@ def test_get_foreground_process_name_resolves_pid_to_name() -> None:
 
 
 def test_get_foreground_process_name_returns_none_when_no_window() -> None:
+    """포커스된 창이 없는 순간(hwnd=0)에는 예외 없이 None을 돌려줘야 한다."""
     with patch("ctypes.windll.user32.GetForegroundWindow", return_value=0):
         assert get_foreground_process_name() is None
 
 
 def test_get_windowed_process_names_filters_invisible_and_titleless_windows() -> None:
+    """"주요 프로세스" 정의(보이고 제목 있는 창)대로 안 보이거나 제목 없는 창은 걸러지는지 확인."""
     # hwnd -> (visible, title_length, pid)
     windows = {
         1: (True, 5, 100),  # 보임 + 제목 있음 -> 포함
