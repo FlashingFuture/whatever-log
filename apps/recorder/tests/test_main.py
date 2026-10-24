@@ -33,3 +33,11 @@ def test_rejects_non_numeric_value() -> None:
     """숫자로 변환할 수 없는 입력은 ValueError가 아니라 ArgumentTypeError로 나와야 한다."""
     with pytest.raises(argparse.ArgumentTypeError):
         _interval_type("fast")
+
+
+def test_rejects_nan_and_infinity() -> None:
+    """nan/inf는 크기 비교(< MIN_INTERVAL_SECONDS)를 그냥 통과해버리므로 별도로 막아야 한다."""
+    with pytest.raises(argparse.ArgumentTypeError):
+        _interval_type("nan")
+    with pytest.raises(argparse.ArgumentTypeError):
+        _interval_type("inf")

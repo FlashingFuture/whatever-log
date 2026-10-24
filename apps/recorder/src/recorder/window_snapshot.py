@@ -24,7 +24,11 @@ import psutil
 def _pid_to_process_name(pid: int) -> str | None:
     try:
         return psutil.Process(pid).name()
-    except psutil.NoSuchProcess:
+    except psutil.Error:
+        # NoSuchProcess뿐 아니라 AccessDenied(관리자 권한 프로세스 등)도 여기서
+        # 걸러야 한다 — 안 그러면 foreground 조회에서는 예외가 기록 루프까지
+        # 전파되고, EnumWindows 콜백 안에서는 ctypes가 콜백을 중단시켜서 그
+        # 틱의 창 목록이 중간에 잘린다.
         return None
 
 

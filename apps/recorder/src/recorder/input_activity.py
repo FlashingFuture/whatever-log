@@ -31,10 +31,11 @@ def get_seconds_since_last_input() -> float:
     last_input_tick = info.dwTime
     current_tick = ctypes.windll.kernel32.GetTickCount()
 
-    # GetTickCount()는 DWORD(32비트)라 약 49.7일마다 0으로 오버플로한다. 그
-    # 구간에 걸리면 음수가 나올 수 있는데, 그때는 0으로 처리한다 (활동 있었다고
-    # 보는 쪽으로 — "입력 없었음"을 거짓으로 길게 보고하는 것보다 안전).
-    elapsed_ms = current_tick - last_input_tick
-    if elapsed_ms < 0:
-        return 0.0
+    # GetTickCount()는 DWORD(32비트)라 약 49.7일마다 0으로 wrap된다. 게다가
+    # ctypes는 restype을 지정하지 않으면 반환값을 부호 있는 int로 해석하므로,
+    # 부팅 후 ~24.9일(2**31ms)부터 current_tick 자체가 음수로 나온다. info.dwTime은
+    # wintypes.DWORD로 선언돼 있어 항상 부호 없는 값이라, 둘을 그냥 빼면 24.9~49.7일
+    # 구간에서 진짜 wrap-around가 아닌데도 음수가 나온다. 32비트 모듈러 뺄셈으로
+    # 부호 문제와 실제 wrap-around를 한 번에 처리한다.
+    elapsed_ms = (current_tick - last_input_tick) & 0xFFFFFFFF
     return elapsed_ms / 1000

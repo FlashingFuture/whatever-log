@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock, patch
 
+import psutil
+
 from recorder.window_snapshot import (
     get_foreground_process_name,
     get_windowed_process_names,
@@ -25,6 +27,27 @@ def test_get_foreground_process_name_resolves_pid_to_name() -> None:
 
         assert get_foreground_process_name() == "Code.exe"
         mock_process.assert_called_once_with(1234)
+
+
+def test_get_foreground_process_name_returns_none_when_access_denied() -> None:
+    """관리자 권한으로 뜬 창 등 psutil.AccessDenied가 나도 예외가 전파되면 안 된다."""
+
+    def fake_get_pid(_hwnd, pid_ref):
+        pid_ref._obj.value = 1234
+        return 1
+
+    with (
+        patch("ctypes.windll.user32.GetForegroundWindow", return_value=42),
+        patch(
+            "ctypes.windll.user32.GetWindowThreadProcessId",
+            side_effect=fake_get_pid,
+        ),
+        patch(
+            "recorder.window_snapshot.psutil.Process",
+            side_effect=psutil.AccessDenied(1234),
+        ),
+    ):
+        assert get_foreground_process_name() is None
 
 
 def test_get_foreground_process_name_returns_none_when_no_window() -> None:

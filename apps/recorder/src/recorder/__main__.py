@@ -5,6 +5,7 @@ SQLite에 저장하는 워커.
 """
 
 import argparse
+import math
 import sys
 import time
 from pathlib import Path
@@ -33,6 +34,12 @@ def _interval_type(value: str) -> float:
         parsed = float(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(f"'{value}'는 숫자가 아닙니다.") from exc
+
+    # nan은 "< MIN_INTERVAL_SECONDS" 비교가 항상 거짓이라 아래 검증을 통과해버리고,
+    # inf도 숫자값 비교상 통과한다. 둘 다 이후 time.sleep()에서 처리되지 않은
+    # 예외(ValueError/OverflowError)로 워커가 죽으니 여기서 먼저 막는다.
+    if not math.isfinite(parsed):
+        raise argparse.ArgumentTypeError(f"'{value}'는 유한한 숫자여야 합니다.")
 
     if parsed < MIN_INTERVAL_SECONDS:
         raise argparse.ArgumentTypeError(
