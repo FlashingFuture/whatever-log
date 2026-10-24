@@ -2,14 +2,19 @@
 SQLite에 저장하는 워커.
 
 사용법: python -m recorder --interval 5
+
+백그라운드(콘솔 없이, pythonw.exe 등)로 실행하면 sys.stdout/stderr가 None이
+된다 — 그래서 상태는 print()가 아니라 파일 로그로 남긴다.
 """
 
 import argparse
+import logging
 import math
 import sys
 import time
 from pathlib import Path
 
+from recorder.lock import acquire_lock
 from recorder.sampling import sample_tick
 from recorder.storage import open_db, save_tick
 
@@ -19,14 +24,36 @@ DEFAULT_INTERVAL_SECONDS = 15.0
 # 시스템에 부담을 줄 수 있다 — CLI 인자로 그런 값을 넣는 걸 막는다.
 MIN_INTERVAL_SECONDS = 1.0
 
-DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent.parent / "recorder.db"
+_APP_DIR = Path(__file__).resolve().parent.parent.parent
+DEFAULT_DB_PATH = _APP_DIR / "recorder.db"
+DEFAULT_LOG_PATH = _APP_DIR / "recorder.log"
+DEFAULT_LOCK_PATH = _APP_DIR / "recorder.lock"
+
+logger = logging.getLogger("recorder")
 
 # Python 3.14는 아직 Windows에서 UTF-8을 기본으로 쓰지 않는다(3.15부터 기본값).
-# 터미널 코드페이지에 따라 한글이 깨지는 걸 막기 위해 명시적으로 맞춘다.
-# argparse 에러 메시지는 stderr로 나가므로 둘 다 맞춰야 한다.
+# 터미널 코드페이지에 따라 한글이 깨지는 걸 막기 위해 명시적으로 맞춘다. 콘솔 없이
+# (pythonw.exe 등으로) 실행되면 sys.stdout/stderr가 None이라 이 자체가 없을 수 있다.
 if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8")
-    sys.stderr.reconfigure(encoding="utf-8")
+    if sys.stdout is not None:
+        sys.stdout.reconfigure(encoding="utf-8")
+    if sys.stderr is not None:
+        sys.stderr.reconfigure(encoding="utf-8")
+
+
+def _configure_logging(log_path: Path) -> None:
+    """파일 로그는 항상 켜고, 콘솔(sys.stdout)이 있을 때만 거기에도 같이 남긴다."""
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()  # 같은 프로세스에서 다시 불려도(테스트 등) 핸들러가 안 쌓이게
+
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logger.addHandler(file_handler)
+
+    if sys.stdout is not None:
+        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler.setFormatter(logging.Formatter("%(message)s"))
+        logger.addHandler(stream_handler)
 
 
 def _interval_type(value: str) -> float:
@@ -49,31 +76,46 @@ def _interval_type(value: str) -> float:
     return parsed
 
 
-def run(interval: float, db_path: Path) -> None:
-    """DB를 열어두고 interval마다 한 틱씩 기록하는 메인 루프. Ctrl+C로 종료한다."""
-    conn = open_db(db_path)
-    tick_count = 0
-    print(f"{interval}초 간격으로 기록합니다. DB: {db_path} (Ctrl+C로 종료)")
+def run(interval: float, db_path: Path, lock_path: Path) -> None:
+    """lock을 잡고 DB를 열어 interval마다 한 틱씩 기록하는 메인 루프.
 
+    Ctrl+C(KeyboardInterrupt)로는 정상 종료(exit 0)하고, 그 외 예외는 로그에
+    남긴 뒤 다시 던진다 — supervisor가 비정상 종료를 보고 재시작할 수 있도록.
+    """
+    lock = acquire_lock(lock_path)
     try:
-        while True:
-            sample = sample_tick()
-            save_tick(conn, sample)
-            tick_count += 1
-            print(
-                f"[tick {tick_count}] FG={sample.foreground_process} "
-                f"WIN={len(sample.windowed_processes)}개 "
-                f"idle={sample.seconds_since_last_input:.1f}s"
+        conn = open_db(db_path)
+        tick_count = 0
+        logger.info("%s초 간격으로 기록합니다. DB: %s", interval, db_path)
+
+        try:
+            while True:
+                sample = sample_tick()
+                save_tick(conn, sample)
+                tick_count += 1
+                logger.info(
+                    "[tick %d] FG=%s WIN=%d개 idle=%.1fs",
+                    tick_count,
+                    sample.foreground_process,
+                    len(sample.windowed_processes),
+                    sample.seconds_since_last_input,
+                )
+                time.sleep(interval)
+        except KeyboardInterrupt:
+            logger.info("종료합니다. 총 %d틱 기록됨 (%s)", tick_count, db_path)
+        except Exception:
+            logger.exception(
+                "예기치 않은 오류로 종료합니다. 총 %d틱 기록됨 (%s)", tick_count, db_path
             )
-            time.sleep(interval)
-    except KeyboardInterrupt:
-        print(f"\n종료합니다. 총 {tick_count}틱 기록됨 ({db_path})")
+            raise
+        finally:
+            conn.close()
     finally:
-        conn.close()
+        lock.release()
 
 
 def main() -> None:
-    """CLI 인자(`--interval`, `--db-path`)를 파싱해서 run()에 넘기는 진입점."""
+    """CLI 인자를 파싱해서 로깅을 설정하고 run()에 넘기는 진입점."""
     parser = argparse.ArgumentParser(description="foreground / 전체 윈도우 프로세스 기록 워커")
     parser.add_argument(
         "--interval",
@@ -87,8 +129,27 @@ def main() -> None:
         default=DEFAULT_DB_PATH,
         help=f"SQLite 파일 경로 (기본: {DEFAULT_DB_PATH})",
     )
+    parser.add_argument(
+        "--log-path",
+        type=Path,
+        default=DEFAULT_LOG_PATH,
+        help=f"로그 파일 경로 (기본: {DEFAULT_LOG_PATH})",
+    )
+    parser.add_argument(
+        "--lock-path",
+        type=Path,
+        default=DEFAULT_LOCK_PATH,
+        help=f"중복 실행 방지 lock 파일 경로 (기본: {DEFAULT_LOCK_PATH})",
+    )
     args = parser.parse_args()
-    run(args.interval, args.db_path)
+    _configure_logging(args.log_path)
+    try:
+        run(args.interval, args.db_path, args.lock_path)
+    except RuntimeError:
+        # acquire_lock()의 중복 실행 에러. 콘솔 없는 환경에서는 stderr도 None일
+        # 수 있어 raw traceback이 오히려 또 다른 크래시가 되니, 로그로만 남긴다.
+        logger.exception("시작하지 못했습니다.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

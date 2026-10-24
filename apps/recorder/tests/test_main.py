@@ -1,8 +1,9 @@
 import argparse
+import logging
 
 import pytest
 
-from recorder.__main__ import MIN_INTERVAL_SECONDS, _interval_type
+from recorder.__main__ import MIN_INTERVAL_SECONDS, _configure_logging, _interval_type, logger
 
 
 def test_accepts_value_at_minimum() -> None:
@@ -41,3 +42,31 @@ def test_rejects_nan_and_infinity() -> None:
         _interval_type("nan")
     with pytest.raises(argparse.ArgumentTypeError):
         _interval_type("inf")
+
+
+def test_configure_logging_writes_to_file(tmp_path) -> None:
+    """콘솔이 없는 백그라운드 실행을 가정 — 파일 핸들러로 실제 로그가 남아야 한다."""
+    log_path = tmp_path / "recorder.log"
+    _configure_logging(log_path)
+    logger.info("hello")
+    for handler in logger.handlers:
+        handler.flush()
+
+    assert "hello" in log_path.read_text(encoding="utf-8")
+
+
+def test_configure_logging_is_idempotent(tmp_path) -> None:
+    """같은 프로세스에서 다시 불려도(테스트 등) 핸들러가 중복으로 쌓이면 안 된다."""
+    _configure_logging(tmp_path / "a.log")
+    handler_count_after_first = len(logger.handlers)
+
+    _configure_logging(tmp_path / "b.log")
+
+    assert len(logger.handlers) == handler_count_after_first
+
+
+@pytest.fixture(autouse=True)
+def _reset_logger_handlers():
+    yield
+    logger.handlers.clear()
+    logger.setLevel(logging.NOTSET)
