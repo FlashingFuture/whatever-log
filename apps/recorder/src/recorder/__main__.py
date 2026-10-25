@@ -86,7 +86,16 @@ def run(interval: float, db_path: Path) -> None:
     """
     lock = acquire_lock(_lock_path_for_db(db_path))
     try:
-        conn = open_db(db_path)
+        try:
+            conn = open_db(db_path)
+        except Exception:
+            # open_db()는 아래 틱 루프의 except Exception보다 바깥에 있어서, 안
+            # 감싸면 실패해도 로그에 안 남고 그냥 전파된다 — pythonw.exe 환경에서는
+            # stderr도 None이라 원인이 어디에도 안 남고, supervisor는 원인 없이
+            # 재시작만 반복하게 된다.
+            logger.exception("DB를 열지 못했습니다: %s", db_path)
+            raise
+
         tick_count = 0
         logger.info("%s초 간격으로 기록합니다. DB: %s", interval, db_path)
 

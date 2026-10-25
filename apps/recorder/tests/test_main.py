@@ -1,9 +1,12 @@
 import argparse
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
+from recorder import __main__ as main_module
 from recorder.__main__ import MIN_INTERVAL_SECONDS, _interval_type, _lock_path_for_db
+from recorder.log_setup import configure_logging
 
 
 def test_accepts_value_at_minimum() -> None:
@@ -60,3 +63,32 @@ def test_lock_path_for_db_is_same_for_relative_and_absolute_form(tmp_path, monke
     absolute = tmp_path / "recorder.db"
 
     assert _lock_path_for_db(Path("recorder.db")) == _lock_path_for_db(absolute)
+
+
+def test_run_logs_when_open_db_fails(tmp_path, monkeypatch) -> None:
+    """open_db() 실패는 틱 루프의 except Exception보다 바깥이라, 따로 감싸지
+    않으면 로그에 안 남고 그냥 전파된다 — pythonw.exe 환경에서는 stderr도 None이라
+    원인이 어디에도 안 남는다. lock은 실패하더라도 정상 해제돼야 한다.
+    """
+    configure_logging(main_module.logger, tmp_path / "recorder.log")
+
+    fake_lock = MagicMock()
+    monkeypatch.setattr(main_module, "acquire_lock", lambda _path: fake_lock)
+    monkeypatch.setattr(
+        main_module, "open_db", MagicMock(side_effect=RuntimeError("disk full"))
+    )
+
+    with pytest.raises(RuntimeError, match="disk full"):
+        main_module.run(5.0, tmp_path / "recorder.db")
+
+    fake_lock.release.assert_called_once()
+    for handler in main_module.logger.handlers:
+        handler.flush()
+    log_content = (tmp_path / "recorder.log").read_text(encoding="utf-8")
+    assert "DB를 열지 못했습니다" in log_content
+
+
+@pytest.fixture(autouse=True)
+def _reset_main_logger_handlers():
+    yield
+    main_module.logger.handlers.clear()
