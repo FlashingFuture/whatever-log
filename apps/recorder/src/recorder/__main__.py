@@ -9,12 +9,13 @@ SQLite에 저장하는 워커.
 
 import argparse
 import logging
+import logging.handlers
 import math
 import sys
 import time
 from pathlib import Path
 
-from recorder.lock import acquire_lock
+from recorder.lock import AlreadyRunningError, acquire_lock
 from recorder.sampling import sample_tick
 from recorder.storage import open_db, save_tick
 
@@ -27,7 +28,15 @@ MIN_INTERVAL_SECONDS = 1.0
 _APP_DIR = Path(__file__).resolve().parent.parent.parent
 DEFAULT_DB_PATH = _APP_DIR / "recorder.db"
 DEFAULT_LOG_PATH = _APP_DIR / "recorder.log"
-DEFAULT_LOCK_PATH = _APP_DIR / "recorder.lock"
+
+# 로그 파일이 상시 실행 전제라 무한정 커지는 걸 막는다. 1MB x 3백업 = 최대 4MB.
+LOG_MAX_BYTES = 1_000_000
+LOG_BACKUP_COUNT = 3
+
+# acquire_lock()의 AlreadyRunningError를 구분하기 위한 전용 종료 코드. supervisor는
+# 이 코드를 받으면 재시작을 멈춘다 — 다른 recorder가 이미 돌고 있는 상황은 "크래시"가
+# 아니라서 재시도해도 해결되지 않고, 계속 재시도하면 로그만 계속 쌓인다.
+EXIT_ALREADY_RUNNING = 2
 
 logger = logging.getLogger("recorder")
 
@@ -46,7 +55,9 @@ def _configure_logging(log_path: Path) -> None:
     logger.setLevel(logging.INFO)
     logger.handlers.clear()  # 같은 프로세스에서 다시 불려도(테스트 등) 핸들러가 안 쌓이게
 
-    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler = logging.handlers.RotatingFileHandler(
+        log_path, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding="utf-8"
+    )
     file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logger.addHandler(file_handler)
 
@@ -76,13 +87,25 @@ def _interval_type(value: str) -> float:
     return parsed
 
 
-def run(interval: float, db_path: Path, lock_path: Path) -> None:
+def _lock_path_for_db(db_path: Path) -> Path:
+    """lock 경로를 독립 옵션으로 두지 않고 DB 경로에서 파생시킨다.
+
+    --db-path와 --lock-path를 따로 받으면, 같은 DB를 가리키면서 lock 경로만
+    다르게 줄 수 있다 — 그러면 두 recorder가 각자 lock을 획득한 채 같은 SQLite
+    파일에 동시에 쓰게 되어 lock을 두는 목적 자체가 무너진다. DB 경로 1개만
+    받고 lock 경로는 항상 거기서 결정되게 해서 이 경우를 원천적으로 막는다.
+    """
+    return db_path.resolve().with_suffix(".lock")
+
+
+def run(interval: float, db_path: Path) -> None:
     """lock을 잡고 DB를 열어 interval마다 한 틱씩 기록하는 메인 루프.
 
-    Ctrl+C(KeyboardInterrupt)로는 정상 종료(exit 0)하고, 그 외 예외는 로그에
-    남긴 뒤 다시 던진다 — supervisor가 비정상 종료를 보고 재시작할 수 있도록.
+    Ctrl+C(KeyboardInterrupt)로는 정상 종료(exit 0)하고, AlreadyRunningError는
+    호출부(main)가 처리하도록 그대로 던진다. 그 외 예외는 로그에 남긴 뒤 다시
+    던진다 — supervisor가 비정상 종료를 보고 재시작할 수 있도록.
     """
-    lock = acquire_lock(lock_path)
+    lock = acquire_lock(_lock_path_for_db(db_path))
     try:
         conn = open_db(db_path)
         tick_count = 0
@@ -135,21 +158,15 @@ def main() -> None:
         default=DEFAULT_LOG_PATH,
         help=f"로그 파일 경로 (기본: {DEFAULT_LOG_PATH})",
     )
-    parser.add_argument(
-        "--lock-path",
-        type=Path,
-        default=DEFAULT_LOCK_PATH,
-        help=f"중복 실행 방지 lock 파일 경로 (기본: {DEFAULT_LOCK_PATH})",
-    )
     args = parser.parse_args()
     _configure_logging(args.log_path)
     try:
-        run(args.interval, args.db_path, args.lock_path)
-    except RuntimeError:
-        # acquire_lock()의 중복 실행 에러. 콘솔 없는 환경에서는 stderr도 None일
-        # 수 있어 raw traceback이 오히려 또 다른 크래시가 되니, 로그로만 남긴다.
+        run(args.interval, args.db_path)
+    except AlreadyRunningError:
+        # 콘솔 없는 환경에서는 stderr도 None일 수 있어 raw traceback이 오히려 또
+        # 다른 크래시가 되니, 로그로만 남긴다.
         logger.exception("시작하지 못했습니다.")
-        sys.exit(1)
+        sys.exit(EXIT_ALREADY_RUNNING)
 
 
 if __name__ == "__main__":

@@ -34,6 +34,23 @@ def test_restarts_after_crash_then_stops_on_clean_exit(monkeypatch) -> None:
     mock_sleep.assert_called_once_with(supervisor.RESTART_DELAY_SECONDS)
 
 
+def test_stops_without_restarting_when_already_running(monkeypatch) -> None:
+    """다른 recorder가 이미 lock을 잡고 있는 상황(EXIT_ALREADY_RUNNING)은 크래시가
+    아니므로 재시작하면 안 된다 — 안 그러면 5초마다 영원히 재시도하며 로그만 쌓인다.
+    """
+    monkeypatch.setattr(sys, "argv", ["supervisor"])
+
+    with (
+        patch("recorder.supervisor.subprocess.run") as mock_run,
+        patch("recorder.supervisor.time.sleep") as mock_sleep,
+    ):
+        mock_run.return_value = MagicMock(returncode=supervisor.EXIT_ALREADY_RUNNING)
+        supervisor.main()
+
+    mock_run.assert_called_once()
+    mock_sleep.assert_not_called()
+
+
 def test_passes_through_cli_args(monkeypatch) -> None:
     """supervisor 자신에게 들어온 인자를 그대로 recorder 자식 프로세스에 넘겨야 한다."""
     monkeypatch.setattr(sys, "argv", ["supervisor", "--interval", "30", "--db-path", "x.db"])

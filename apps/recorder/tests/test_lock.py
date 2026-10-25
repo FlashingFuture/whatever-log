@@ -1,6 +1,6 @@
 import pytest
 
-from recorder.lock import acquire_lock
+from recorder.lock import AlreadyRunningError, acquire_lock
 
 
 def test_acquire_lock_succeeds_when_free(tmp_path) -> None:
@@ -11,12 +11,16 @@ def test_acquire_lock_succeeds_when_free(tmp_path) -> None:
 
 
 def test_acquire_lock_fails_when_already_held(tmp_path) -> None:
-    """이미 다른 쪽이 잡고 있으면 기다리지 않고 바로 RuntimeError여야 한다(중복 실행 방지)."""
+    """이미 다른 쪽이 잡고 있으면 기다리지 않고 바로 AlreadyRunningError여야 한다.
+
+    일반 RuntimeError가 아니라 이 전용 타입이어야 호출부가 다른 종류의
+    RuntimeError(NotImplementedError 등)와 구분해서 처리할 수 있다.
+    """
     lock_path = tmp_path / "test.lock"
     first = acquire_lock(lock_path)
 
     try:
-        with pytest.raises(RuntimeError):
+        with pytest.raises(AlreadyRunningError):
             acquire_lock(lock_path)
     finally:
         first.release()

@@ -15,6 +15,8 @@ import subprocess
 import sys
 import time
 
+from recorder.__main__ import EXIT_ALREADY_RUNNING
+
 RESTART_DELAY_SECONDS = 5.0
 
 
@@ -22,11 +24,14 @@ def main() -> None:
     """recorder를 실행하고, 비정상 종료(exit code != 0)면 잠깐 쉬었다가 재시작한다.
 
     정상 종료(exit 0 — 사용자가 Ctrl+C로 끈 경우 등)면 재시작하지 않고 끝낸다.
+    EXIT_ALREADY_RUNNING(다른 recorder가 이미 lock을 잡고 있음)도 재시작하지
+    않는다 — 크래시가 아니라서 재시도해도 안 풀리고, 계속 재시도하면 로그만
+    계속 쌓인다.
     """
     args = sys.argv[1:]
     while True:
         result = subprocess.run([sys.executable, "-m", "recorder", *args])
-        if result.returncode == 0:
+        if result.returncode in (0, EXIT_ALREADY_RUNNING):
             break
         time.sleep(RESTART_DELAY_SECONDS)
 
