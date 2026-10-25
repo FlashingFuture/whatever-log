@@ -23,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-from recorder.__main__ import EXIT_ALREADY_RUNNING
+from recorder.__main__ import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
 from recorder.log_setup import configure_logging
 
 RESTART_DELAY_SECONDS = 5.0
@@ -39,7 +39,8 @@ def main() -> None:
     정상 종료(exit 0 — 사용자가 Ctrl+C로 끈 경우 등)면 재시작하지 않고 끝낸다.
     EXIT_ALREADY_RUNNING(다른 recorder가 이미 lock을 잡고 있음)도 재시작하지
     않는다 — 크래시가 아니라서 재시도해도 안 풀리고, 계속 재시도하면 로그만
-    계속 쌓인다.
+    계속 쌓인다. EXIT_ARGUMENT_ERROR(argparse 인자 오류)도 같은 인자로 다시
+    띄워봐야 똑같이 실패하니 재시작하지 않는다.
     """
     configure_logging(logger, DEFAULT_LOG_PATH)
     args = sys.argv[1:]
@@ -50,6 +51,12 @@ def main() -> None:
 
         if result.returncode == 0:
             logger.info("recorder가 정상 종료했습니다. supervisor를 끝냅니다.")
+            break
+        if result.returncode == EXIT_ARGUMENT_ERROR:
+            logger.error(
+                "recorder 인자가 잘못되었습니다 (args=%s). 재시작하지 않고 supervisor를 끝냅니다.",
+                args,
+            )
             break
         if result.returncode == EXIT_ALREADY_RUNNING:
             logger.info(

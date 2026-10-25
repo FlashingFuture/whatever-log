@@ -61,6 +61,34 @@ def test_stops_without_restarting_when_already_running(monkeypatch) -> None:
     mock_sleep.assert_not_called()
 
 
+def test_stops_without_restarting_on_argument_error(monkeypatch) -> None:
+    """인자 오류(EXIT_ARGUMENT_ERROR)는 같은 인자로 재시도해도 똑같이 실패하므로
+    재시작하면 안 되고, "이미 실행 중"이 아니라 인자 오류로 로그에 남아야 한다.
+    """
+    monkeypatch.setattr(sys, "argv", ["supervisor", "--interval", "0"])
+
+    with (
+        patch("recorder.supervisor.subprocess.run") as mock_run,
+        patch("recorder.supervisor.time.sleep") as mock_sleep,
+    ):
+        mock_run.return_value = MagicMock(returncode=supervisor.EXIT_ARGUMENT_ERROR)
+        supervisor.main()
+
+    mock_run.assert_called_once()
+    mock_sleep.assert_not_called()
+
+    for handler in supervisor.logger.handlers:
+        handler.flush()
+    log_content = supervisor.DEFAULT_LOG_PATH.read_text(encoding="utf-8")
+    assert "인자가 잘못되었습니다" in log_content
+    assert "이미 실행 중" not in log_content
+
+
+def test_exit_codes_do_not_collide() -> None:
+    """argparse 인자 오류와 중복 실행이 같은 종료 코드를 쓰면 supervisor가 둘을 구분하지 못한다."""
+    assert supervisor.EXIT_ARGUMENT_ERROR != supervisor.EXIT_ALREADY_RUNNING
+
+
 def test_passes_through_cli_args(monkeypatch) -> None:
     """supervisor 자신에게 들어온 인자를 그대로 recorder 자식 프로세스에 넘겨야 한다."""
     monkeypatch.setattr(sys, "argv", ["supervisor", "--interval", "30", "--db-path", "x.db"])
