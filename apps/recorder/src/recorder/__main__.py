@@ -9,13 +9,13 @@ SQLite에 저장하는 워커.
 
 import argparse
 import logging
-import logging.handlers
 import math
 import sys
 import time
 from pathlib import Path
 
 from recorder.lock import AlreadyRunningError, acquire_lock
+from recorder.log_setup import configure_logging
 from recorder.sampling import sample_tick
 from recorder.storage import open_db, save_tick
 
@@ -28,10 +28,6 @@ MIN_INTERVAL_SECONDS = 1.0
 _APP_DIR = Path(__file__).resolve().parent.parent.parent
 DEFAULT_DB_PATH = _APP_DIR / "recorder.db"
 DEFAULT_LOG_PATH = _APP_DIR / "recorder.log"
-
-# 로그 파일이 상시 실행 전제라 무한정 커지는 걸 막는다. 1MB x 3백업 = 최대 4MB.
-LOG_MAX_BYTES = 1_000_000
-LOG_BACKUP_COUNT = 3
 
 # acquire_lock()의 AlreadyRunningError를 구분하기 위한 전용 종료 코드. supervisor는
 # 이 코드를 받으면 재시작을 멈춘다 — 다른 recorder가 이미 돌고 있는 상황은 "크래시"가
@@ -48,23 +44,6 @@ if sys.platform == "win32":
         sys.stdout.reconfigure(encoding="utf-8")
     if sys.stderr is not None:
         sys.stderr.reconfigure(encoding="utf-8")
-
-
-def _configure_logging(log_path: Path) -> None:
-    """파일 로그는 항상 켜고, 콘솔(sys.stdout)이 있을 때만 거기에도 같이 남긴다."""
-    logger.setLevel(logging.INFO)
-    logger.handlers.clear()  # 같은 프로세스에서 다시 불려도(테스트 등) 핸들러가 안 쌓이게
-
-    file_handler = logging.handlers.RotatingFileHandler(
-        log_path, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding="utf-8"
-    )
-    file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-    logger.addHandler(file_handler)
-
-    if sys.stdout is not None:
-        stream_handler = logging.StreamHandler(sys.stdout)
-        stream_handler.setFormatter(logging.Formatter("%(message)s"))
-        logger.addHandler(stream_handler)
 
 
 def _interval_type(value: str) -> float:
@@ -159,7 +138,7 @@ def main() -> None:
         help=f"로그 파일 경로 (기본: {DEFAULT_LOG_PATH})",
     )
     args = parser.parse_args()
-    _configure_logging(args.log_path)
+    configure_logging(logger, args.log_path)
     try:
         run(args.interval, args.db_path)
     except AlreadyRunningError:

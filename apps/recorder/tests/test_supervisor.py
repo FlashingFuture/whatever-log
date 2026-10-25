@@ -1,7 +1,17 @@
 import sys
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from recorder import supervisor
+
+
+@pytest.fixture(autouse=True)
+def _use_temp_log_path(tmp_path, monkeypatch):
+    """실제 apps/recorder/supervisor.log를 건드리지 않고 임시 파일로 로깅하게 한다."""
+    monkeypatch.setattr(supervisor, "DEFAULT_LOG_PATH", tmp_path / "supervisor.log")
+    yield
+    supervisor.logger.handlers.clear()
 
 
 def test_stops_after_clean_exit(monkeypatch) -> None:
@@ -61,3 +71,24 @@ def test_passes_through_cli_args(monkeypatch) -> None:
 
     called_args = mock_run.call_args[0][0]
     assert called_args == [sys.executable, "-m", "recorder", "--interval", "30", "--db-path", "x.db"]
+
+
+def test_restart_decision_is_logged_to_file(monkeypatch) -> None:
+    """recorder.__main__과 같은 방식으로, 재시작 사유가 실제 로그 파일에 남아야 한다
+    (이전에는 supervisor가 아무 로그도 안 남겼음)."""
+    monkeypatch.setattr(sys, "argv", ["supervisor"])
+
+    with (
+        patch("recorder.supervisor.subprocess.run") as mock_run,
+        patch("recorder.supervisor.time.sleep"),
+    ):
+        mock_run.side_effect = [MagicMock(returncode=1), MagicMock(returncode=0)]
+        supervisor.main()
+
+    for handler in supervisor.logger.handlers:
+        handler.flush()
+    log_content = supervisor.DEFAULT_LOG_PATH.read_text(encoding="utf-8")
+
+    assert "exit code 1" in log_content
+    assert "재시작" in log_content
+    assert "정상 종료" in log_content
