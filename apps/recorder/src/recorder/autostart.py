@@ -34,28 +34,40 @@ def _command() -> str:
 
 
 def enable() -> None:
-    """로그인 시 supervisor가 자동으로 뜨도록 Registry Run 키에 등록한다."""
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY_PATH, 0, winreg.KEY_SET_VALUE) as key:
+    """로그인 시 supervisor가 자동으로 뜨도록 Registry Run 키에 등록한다.
+
+    OpenKey가 아니라 CreateKeyEx를 쓴다 — 한 번도 자동시작 앱을 등록한 적
+    없는 깨끗한 프로필에는 Run 키 자체가 없을 수 있고, 그 상태에서
+    OpenKey는 FileNotFoundError로 실패한다. CreateKeyEx는 이미 있으면 그걸
+    열고, 없으면 만들어서 연다.
+    """
+    with winreg.CreateKeyEx(
+        winreg.HKEY_CURRENT_USER, _RUN_KEY_PATH, 0, winreg.KEY_SET_VALUE
+    ) as key:
         winreg.SetValueEx(key, _VALUE_NAME, 0, winreg.REG_SZ, _command())
 
 
 def disable() -> None:
-    """자동 시작 등록을 해제한다. 등록되어 있지 않았어도 조용히 넘어간다."""
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY_PATH, 0, winreg.KEY_SET_VALUE) as key:
-        try:
+    """자동 시작 등록을 해제한다. 등록되어 있지 않았어도(Run 키 자체가 없어도) 조용히 넘어간다."""
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, _RUN_KEY_PATH, 0, winreg.KEY_SET_VALUE
+        ) as key:
             winreg.DeleteValue(key, _VALUE_NAME)
-        except FileNotFoundError:
-            pass
+    except FileNotFoundError:
+        pass
 
 
 def is_enabled() -> bool:
-    """자동 시작이 지금 등록되어 있는지 확인한다."""
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY_PATH, 0, winreg.KEY_READ) as key:
-        try:
+    """자동 시작이 지금 등록되어 있는지 확인한다. Run 키 자체가 없으면 등록 안 된 것으로 본다."""
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, _RUN_KEY_PATH, 0, winreg.KEY_READ
+        ) as key:
             winreg.QueryValueEx(key, _VALUE_NAME)
             return True
-        except FileNotFoundError:
-            return False
+    except FileNotFoundError:
+        return False
 
 
 def main() -> None:
