@@ -20,6 +20,13 @@ from ctypes import wintypes
 
 import psutil
 
+if sys.platform == "win32":
+    # restype을 지정하지 않으면 ctypes가 반환값을 부호 있는 32비트 int로 해석한다.
+    # HWND 값이 실제로 2**31을 넘는 일은 거의 없어서 지금은 문제가 안 되지만,
+    # GetTickCount()에서 바로 이 문제로 실제 버그가 났던 적이 있어(input_activity.py)
+    # 같은 함정을 방어적으로 막아둔다.
+    ctypes.windll.user32.GetForegroundWindow.restype = wintypes.HWND
+
 
 def _pid_to_process_name(pid: int) -> str | None:
     try:
