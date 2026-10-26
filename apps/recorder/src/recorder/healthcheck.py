@@ -74,6 +74,11 @@ def check(db_path: Path, expected_interval: float) -> tuple[bool, str]:
     conn = sqlite3.connect(db_path)
     try:
         row = conn.execute("SELECT sampled_at FROM ticks ORDER BY id DESC LIMIT 1").fetchone()
+    except sqlite3.OperationalError:
+        # recorder가 lock은 잡았지만 open_db()의 executescript()로 테이블을 만들기
+        # 전인 아주 짧은 순간에 체크하면 "no such table: ticks"로 여기서 터진다.
+        # 그냥 두면 check()가 (bool, str) 계약을 깨고 예외로 죽는다.
+        return False, f"실행 중이지만 DB 스키마를 읽을 수 없습니다: {db_path}"
     finally:
         conn.close()
 

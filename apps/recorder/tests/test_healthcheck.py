@@ -38,6 +38,20 @@ def test_unhealthy_when_running_but_no_db(tmp_path) -> None:
     assert "DB 파일이 아직 없습니다" in message
 
 
+def test_unhealthy_when_db_exists_but_schema_is_not_ready_yet(tmp_path) -> None:
+    """recorder가 lock은 잡았지만 open_db()로 테이블을 만들기 전인 아주 짧은
+    순간에 체크하면 "no such table: ticks"(sqlite3.OperationalError)가 난다 —
+    그대로 전파되면 안 되고 (False, 메시지)로 처리돼야 한다."""
+    db_path = tmp_path / "recorder.db"
+    sqlite3.connect(db_path).close()  # 파일만 있고 테이블은 없는 상태
+
+    with patch("recorder.healthcheck.acquire_lock", side_effect=AlreadyRunningError("x")):
+        healthy, message = healthcheck.check(db_path, expected_interval=15.0)
+
+    assert healthy is False
+    assert "DB 스키마를 읽을 수 없습니다" in message
+
+
 def test_unhealthy_when_no_ticks_yet(tmp_path) -> None:
     """DB는 있어도 ticks 테이블이 비어 있으면(막 시작한 직후 등) 비정상으로 봐야 한다."""
     db_path = tmp_path / "recorder.db"
