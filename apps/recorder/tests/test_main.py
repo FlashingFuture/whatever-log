@@ -53,7 +53,8 @@ def test_lock_path_is_derived_from_db_path(tmp_path) -> None:
     DB 경로 하나로만 lock 경로가 결정돼야 그 경우를 막을 수 있다.
     """
     db_path = tmp_path / "recorder.db"
-    assert _lock_path_for_db(db_path) == db_path.resolve().with_suffix(".lock")
+    resolved = db_path.resolve()
+    assert _lock_path_for_db(db_path) == resolved.with_name(f"{resolved.name}.lock")
 
 
 def test_lock_path_for_db_is_same_for_relative_and_absolute_form(tmp_path, monkeypatch) -> None:
@@ -63,6 +64,15 @@ def test_lock_path_for_db_is_same_for_relative_and_absolute_form(tmp_path, monke
     absolute = tmp_path / "recorder.db"
 
     assert _lock_path_for_db(Path("recorder.db")) == _lock_path_for_db(absolute)
+
+
+def test_lock_path_does_not_collide_across_different_db_extensions(tmp_path) -> None:
+    """recorder.db와 recorder.sqlite처럼 stem은 같고 확장자만 다른 DB는 서로 다른
+    DB이므로 lock 경로도 달라야 한다 — with_suffix로 확장자를 바꾸면 둘 다
+    recorder.lock으로 겹쳐서 서로 다른 DB에 대한 lock이 충돌해버린다."""
+    assert _lock_path_for_db(tmp_path / "recorder.db") != _lock_path_for_db(
+        tmp_path / "recorder.sqlite"
+    )
 
 
 def test_run_logs_when_open_db_fails(tmp_path, monkeypatch) -> None:
