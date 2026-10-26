@@ -10,10 +10,12 @@ __pycache__/
 recorder.db
 recorder.db-wal
 recorder.db-shm
+recorder.lock
 
 .env
 .env.*
 !.env.example
 
 *.log
+*.log.*
 .DS_Store

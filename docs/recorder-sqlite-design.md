@@ -127,15 +127,55 @@ def sample_tick() -> TickSample:
 남기는 방식으로는 구현할 수 없다. **매 틱을 SQLite에 raw row로 쓰는 방식**으로
 간다 — 메모리 누적 레이어는 아예 없앤다.
 
+## 백그라운드 상시 실행 (구현 완료)
+
+recorder의 핵심 기능(`GetForegroundWindow`, `EnumWindows`)은 **사용자의
+인터랙티브 데스크톱 세션 안**에서만 의미가 있다. 이게 "어떻게 상시 실행할까"의
+선택지를 좁힌다.
+
+**Windows 서비스는 쓰지 않는다** — 서비스는 기본적으로 Session 0(비대화형,
+격리된 세션)에서 돌고, Vista 이후로 "서비스가 데스크톱과 상호작용" 옵션 자체가
+보안상 제거됐다. 서비스로 만들면 `GetForegroundWindow()`가 사용자의 실제 활성
+창을 못 본다 — recorder의 존재 목적과 아키텍처적으로 충돌한다.
+
+대신 ActivityWatch가 실제로 쓰는 방식을 그대로 따랐다 (Task Scheduler가 아니라):
+
+- **Registry Run 키** (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`)에
+  `pythonw.exe -m recorder.supervisor`를 등록 — 로그인 시 자동 시작, 콘솔 창
+  없음 (`autostart.py`, `python -m recorder.autostart --enable/--disable/--status`)
+- **자체 supervisor** (`supervisor.py`) — recorder를 자식 프로세스로 띄우고,
+  비정상 종료(exit code != 0)면 5초 후 재시작. 정상 종료(Ctrl+C 등, exit 0)면
+  재시작하지 않음. ActivityWatch의 `aw-qt`가 `aw-watcher-window`/`aw-watcher-afk`를
+  감시하는 것과 같은 패턴. Task Scheduler의 재시작 횟수 제한에 의존하지 않고
+  Python 코드로 직접 제어.
+
+**백그라운드 실행 전제가 바꾼 recorder 자체의 코드**:
+
+- `print()` → `logging`(파일 핸들러 + 콘솔 있으면 스트림 핸들러도)으로 교체.
+  `pythonw.exe`로 실행하면 `sys.stdout`/`sys.stderr`가 `None`이 되는데,
+  그 상태에서 `print()`를 호출하면 그 자리에서 죽는다. `_configure_logging()`은
+  같은 프로세스에서 다시 불려도(테스트 등) 핸들러가 안 쌓이게 매번
+  `logger.handlers.clear()`부터 한다.
+- `run()`에서 `KeyboardInterrupt`가 아닌 예외는 `logger.exception()`으로 남긴
+  뒤 다시 던진다 — supervisor가 "왜 죽었는지"를 로그로 알 수 있게.
+
+**중복 실행 방지 lock file** — 아래에서 "나중에 고려할 것"으로 적어뒀던
+ActivityWatch의 QLockFile 패턴을 이제 실제로 구현했다 (`lock.py`,
+`filelock` 패키지 사용). 자동 시작 + supervisor 재시작이 겹치면 두 인스턴스가
+동시에 뜰 수 있어서 우선순위가 올라갔다. PID 파일을 직접 구현하지 않고
+OS 레벨 파일 잠금을 쓰는 이유:
+
+- 중복 실행 방지용 **lock file**(`QLockFile`)을 씀 — 데이터 디렉터리에 PID/호스트명을
+  적어두고, 시작할 때 lock이 있으면 이미 실행 중으로 판단. 같은 SQLite 파일에
+  두 프로세스가 동시에 쓰는 상황(경쟁/중복 집계)을 막아줌. (이제 `filelock`으로
+  구현 완료 — 프로세스가 죽으면 OS가 자동으로 잠금을 풀어줘서 stale lock 문제가
+  원천적으로 없다.)
+
 ## 나중에 고려할 것 (지금 당장 구현 안 함)
 
 비슷한 Python 프로세스 트래킹 프로젝트(ActivityWatch, WakaTime CLI) 조사 결과:
 
 - **ActivityWatch**(`aw-watcher-window` + `aw-server`, Python)
-  - 중복 실행 방지용 **lock file**(`QLockFile`)을 씀 — 데이터 디렉터리에 PID/호스트명을
-    적어두고, 시작할 때 lock이 있으면 이미 실행 중으로 판단. 같은 SQLite 파일에
-    두 프로세스가 동시에 쓰는 상황(경쟁/중복 집계)을 막아줌. 레코더가 중복 실행될
-    수 있는 상황이 생기면 도입.
   - **수집기(watcher)와 저장소(server) 프로세스 분리** — watcher는 관찰만 하고 로컬
     HTTP로 server에 전달, server만 SQLite를 소유. watcher가 죽어도 DB는 안전하고,
     server가 죽으면 watcher도 "parent process died"로 깨끗하게 같이 종료. 지금은
