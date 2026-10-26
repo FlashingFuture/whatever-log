@@ -25,6 +25,8 @@ def configure_logging(logger: logging.Logger, log_path: Path) -> None:
     안 쌓이게 매번 비우고 다시 붙인다.
     """
     logger.setLevel(logging.INFO)
+    for old_handler in logger.handlers:
+        old_handler.close()  # clear()만 하면 파일 핸들이 GC될 때까지 안 풀린다
     logger.handlers.clear()
 
     file_handler = logging.handlers.RotatingFileHandler(

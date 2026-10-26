@@ -40,7 +40,15 @@ def enable() -> None:
     없는 깨끗한 프로필에는 Run 키 자체가 없을 수 있고, 그 상태에서
     OpenKey는 FileNotFoundError로 실패한다. CreateKeyEx는 이미 있으면 그걸
     열고, 없으면 만들어서 연다.
+
+    pythonw.exe가 실제로 있는지 미리 확인한다 — 없는 채로 등록해버리면
+    로그인 시점에 조용히 실행이 안 되고, 그걸 알아챌 방법이 없다(콘솔도
+    없고 recorder.log도 아예 안 생김).
     """
+    pythonw_path = _pythonw_path()
+    if not pythonw_path.exists():
+        raise FileNotFoundError(f"pythonw.exe를 찾을 수 없습니다: {pythonw_path}")
+
     with winreg.CreateKeyEx(
         winreg.HKEY_CURRENT_USER, _RUN_KEY_PATH, 0, winreg.KEY_SET_VALUE
     ) as key:
@@ -71,6 +79,7 @@ def is_enabled() -> bool:
 
 
 def main() -> None:
+    """CLI 인자(`--enable`/`--disable`/`--status`)를 파싱해서 해당 동작을 실행한다."""
     if sys.platform != "win32":
         raise NotImplementedError(f"{sys.platform}은 아직 지원하지 않습니다.")
 

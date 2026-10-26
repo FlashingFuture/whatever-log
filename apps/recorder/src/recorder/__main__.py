@@ -78,8 +78,14 @@ def _lock_path_for_db(db_path: Path) -> Path:
     다르게 줄 수 있다 — 그러면 두 recorder가 각자 lock을 획득한 채 같은 SQLite
     파일에 동시에 쓰게 되어 lock을 두는 목적 자체가 무너진다. DB 경로 1개만
     받고 lock 경로는 항상 거기서 결정되게 해서 이 경우를 원천적으로 막는다.
+
+    with_suffix로 확장자만 바꾸면 recorder.db와 recorder.sqlite처럼 stem은
+    같고 확장자만 다른 DB들이 같은 lock 경로(recorder.lock)로 겹친다 — 이러면
+    서로 다른 DB를 쓰는 두 recorder가 엉뚱하게 같은 lock을 두고 충돌한다.
+    파일명 전체 뒤에 .lock을 덧붙여 DB 파일별로 lock 경로가 고유하게 한다.
     """
-    return db_path.resolve().with_suffix(".lock")
+    resolved_db_path = db_path.resolve()
+    return resolved_db_path.with_name(f"{resolved_db_path.name}.lock")
 
 
 def run(interval: float, db_path: Path) -> None:

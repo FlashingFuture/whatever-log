@@ -7,6 +7,7 @@ from recorder.log_setup import configure_logging
 
 @pytest.fixture
 def test_logger():
+    """실제 recorder/supervisor 로거와 분리된, 테스트 전용 로거. 테스트가 끝나면 핸들러를 치운다."""
     logger = logging.getLogger("recorder.test_log_setup")
     yield logger
     logger.handlers.clear()
