@@ -1,3 +1,5 @@
+import urllib.request
+
 import pytest
 
 from desktop.__main__ import DEV_SERVER_URL, _resolve_url
@@ -17,3 +19,22 @@ def test_missing_build_raises_a_clear_error(monkeypatch) -> None:
 
     with pytest.raises(FileNotFoundError):
         _resolve_url(use_dev_server=False)
+
+
+def test_build_is_served_over_http_not_file(tmp_path, monkeypatch) -> None:
+    """file://로 직접 열면 Chromium 계열에서 ES 모듈 스크립트가 fetch()의 file://
+    차단으로 안 돌 수 있다 — 빌드 결과는 로컬 HTTP로 띄워서 열어야 한다."""
+    import desktop.__main__ as main_module
+
+    dist_dir = tmp_path / "dist"
+    dist_dir.mkdir()
+    (dist_dir / "index.html").write_text("<h1>ok</h1>", encoding="utf-8")
+
+    monkeypatch.setattr(main_module, "_UI_DIST_DIR", dist_dir)
+    monkeypatch.setattr(main_module, "_UI_DIST_INDEX", dist_dir / "index.html")
+
+    url = _resolve_url(use_dev_server=False)
+
+    assert url.startswith("http://127.0.0.1:")
+    with urllib.request.urlopen(url, timeout=2) as response:
+        assert "ok" in response.read().decode("utf-8")

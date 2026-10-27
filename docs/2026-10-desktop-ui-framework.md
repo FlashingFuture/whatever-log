@@ -40,8 +40,14 @@ apps/
 ├─ ui/         # 신규: 조회 화면 (Vite + TS, pnpm 워크스페이스 멤버)
 └─ desktop/    # 신규: 네이티브 창 셸 (Python/uv, pywebview)
                  개발 중엔 Vite dev server(http://localhost:5173)를 열고,
-                 빌드 후엔 apps/ui/dist/index.html을 연다.
+                 빌드 후엔 apps/ui/dist를 로컬 HTTP(127.0.0.1)로 띄워서 연다.
 ```
+
+빌드 결과를 `file://`로 직접 열지 않는 이유: Chromium 계열 엔진은 `<script type="module">`을
+`fetch()`로 로드하는데, `fetch()`의 `file://` 접근 자체를 막아둬서 코드가 여러 청크로
+쪼개지면(동적 import 등) 화면이 안 뜰 수 있다. 지금처럼 번들이 파일 하나뿐이면 당장은
+재현되지 않지만, 화면이 복잡해지기 전에 `apps/desktop`이 임시 로컬 HTTP 서버(데몬 스레드,
+127.0.0.1에만 바인딩)로 `dist`를 서빙하도록 미리 막아뒀다.
 
 `ui`와 `desktop`을 같은 폴더에 두지 않은 이유: pnpm 워크스페이스는 `apps/*` 바로 아래의
 `package.json`만 멤버로 잡고, Python 쪽은 `src/<패키지명>` 레이아웃(recorder와 동일)을
