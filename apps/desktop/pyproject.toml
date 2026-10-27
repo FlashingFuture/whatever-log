@@ -1,0 +1,23 @@
+[project]
+name = "desktop"
+version = "0.1.0"
+description = "apps/ui를 네이티브 창(webview)으로 띄우는 셸"
+requires-python = ">=3.14"
+dependencies = [
+    "pywebview>=5.4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/desktop"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
