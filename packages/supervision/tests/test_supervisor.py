@@ -105,6 +105,30 @@ def test_stop_event_terminates_the_running_child_and_returns() -> None:
     process.terminate.assert_called_once()
 
 
+def test_stop_event_kills_the_child_if_it_ignores_terminate() -> None:
+    """terminate()에 5초 안에 안 죽으면(멈춰 있는 프로세스 등), 그냥 두고
+    리턴하면 포트/lock을 쥔 채로 좀비가 남는다 — kill()로 강제 종료해야
+    한다."""
+    import subprocess
+
+    stop_event = threading.Event()
+    process = MagicMock()
+    process.poll.return_value = None  # 계속 살아있는 것처럼 흉내
+    process.wait.side_effect = [subprocess.TimeoutExpired(cmd="cmd", timeout=5), None]
+
+    def _set_stop_soon() -> None:
+        time.sleep(0.05)
+        stop_event.set()
+
+    with patch("supervision.supervisor.subprocess.Popen", return_value=process):
+        threading.Thread(target=_set_stop_soon, daemon=True).start()
+        supervise(["cmd"], logger=logger, classify_exit=lambda code: None, stop_event=stop_event)
+
+    process.terminate.assert_called_once()
+    process.kill.assert_called_once()
+    assert process.wait.call_count == 2
+
+
 def test_stop_event_set_before_start_never_launches_the_process() -> None:
     """이미 중지 요청이 와 있는 상태로 호출되면, 애초에 프로세스를 띄우지
     않아야 한다."""

@@ -60,7 +60,15 @@ def supervise(
             if stop_event.wait(timeout=0.2):
                 logger.info("중지 요청을 받아 %s를 종료합니다", command)
                 process.terminate()
-                process.wait(timeout=5)
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    # terminate()에 5초 안에 안 죽으면(멈춰 있는 등), 그냥
+                    # 두고 리턴해버리면 포트/lock을 쥔 채로 좀비가 남는다 —
+                    # 다음 실행이 "이미 실행 중"으로 막혀버린다.
+                    logger.warning("%s가 5초 안에 종료되지 않아 강제 종료합니다", command)
+                    process.kill()
+                    process.wait()
                 return
 
         exit_code = process.returncode

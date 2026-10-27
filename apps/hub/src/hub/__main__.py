@@ -17,13 +17,14 @@ print()로는 아무것도 안 남는다.
 import argparse
 import json
 import logging
+import re
+import sqlite3
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from aggregation.today import today_usage
 from recorder.__main__ import DEFAULT_DB_PATH
-from recorder.storage import open_db
 from supervision.lock import AlreadyRunningError, acquire_lock
 from supervision.log_setup import configure_logging
 
@@ -42,10 +43,14 @@ EXIT_ALREADY_RUNNING = 3
 logger = logging.getLogger("hub")
 
 # apps/ui는 apps/desktop이 서빙하는 다른 포트(또는 다른 오리진)에서 뜨기
-# 때문에, 이 API를 fetch하는 건 브라우저 기준 cross-origin 요청이다 — 허용
-# 헤더가 없으면 CORS로 막힌다. 둘 다 127.0.0.1에서만 뜨는 개인용 로컬 앱이라
-# origin을 와일드카드로 허용해도 위험이 없다.
-_CORS_HEADERS = {"Access-Control-Allow-Origin": "*"}
+# 때문에, 이 API를 fetch하는 건 브라우저 기준 cross-origin 요청이다. 응답에는
+# 프로세스별 사용 시간(개인 활동 정보)이 들어 있어서, Access-Control-Allow-Origin을
+# 와일드카드(*)로 열면 사용자가 띄워둔 아무 웹사이트나 이 API를 fetch해서 읽어갈
+# 수 있다 — 127.0.0.1에만 바인딩한 것만으로는 그걸 막지 못한다(브라우저의 로컬
+# 네트워크 접근 제한에 기대지 않는다). 요청의 Origin이 127.0.0.1/localhost일
+# 때만 그 origin을 그대로 돌려줘서 허용한다 — desktop이 서빙하는 UI(임의
+# 포트)와 Vite dev server(5173) 둘 다 이 패턴에 맞는다.
+_ALLOWED_ORIGIN = re.compile(r"http://(127\.0\.0\.1|localhost)(:\d+)?")
 
 
 def _lock_path_for_port(port: int) -> Path:
@@ -68,22 +73,38 @@ class _Handler(BaseHTTPRequestHandler):
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
-        for key, value in _CORS_HEADERS.items():
-            self.send_header(key, value)
+        origin = self.headers.get("Origin", "")
+        if _ALLOWED_ORIGIN.fullmatch(origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self) -> None:
-        """지금은 /api/today 하나뿐이다 — 늘어나면 라우팅을 분리한다."""
-        if self.path == "/api/today":
-            conn = open_db(self.db_path)
+        """지금은 /api/today 하나뿐이다 — 늘어나면 라우팅을 분리한다.
+
+        읽기 전용(mode=ro)으로 연다 — hub는 조회만 하는 쪽이라 쓰기 가능한
+        연결을 열어둘 이유가 없고, recorder가 쓰는 도중에도 안전하게 읽을 수
+        있다(WAL 모드). DB가 아직 없거나(recorder가 한 번도 안 돈 경우) 읽는
+        중 문제가 생기면, 응답 없이 연결이 끊기는 대신 503으로 알린다.
+        """
+        if self.path != "/api/today":
+            self._send_json(404, {"error": "not found"})
+            return
+
+        try:
+            conn = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
             try:
-                self._send_json(200, today_usage(conn))
+                payload = today_usage(conn)
             finally:
                 conn.close()
-        else:
-            self._send_json(404, {"error": "not found"})
+        except sqlite3.Error:
+            logger.exception("집계 DB를 읽지 못했습니다: %s", self.db_path)
+            self._send_json(503, {"error": "database unavailable"})
+            return
+
+        self._send_json(200, payload)
 
     def log_message(self, log_format: str, *args: object) -> None:
         pass  # 기본 동작(stderr에 접근 로그 출력)을 끈다.

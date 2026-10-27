@@ -44,9 +44,15 @@ packages/
 
 `apps/ui`는 `apps/desktop`이 서빙하는 포트에서 뜨고, `apps/hub`는 다른 포트에서 뜬다 —
 둘이 다른 origin이라 `fetch()`가 **실제로** cross-origin 요청이 된다(이전에 다뤘던
-file:// 이슈와는 다른, 진짜로 적용되는 CORS 사례). `apps/hub`가 모든 응답에
-`Access-Control-Allow-Origin: *`를 붙여서 허용한다 — 둘 다 127.0.0.1에서만 뜨는
-개인용 로컬 앱이라 와일드카드로 허용해도 위험이 없다.
+file:// 이슈와는 다른, 진짜로 적용되는 CORS 사례).
+
+처음엔 `Access-Control-Allow-Origin: *`로 전부 허용했는데, 이건 "127.0.0.1에만
+바인딩했으니 안전하다"는 잘못된 가정이었다 — 와일드카드를 열면 사용자가 띄워둔
+**아무 웹사이트나** 이 API를 fetch해서 프로세스별 사용 시간(개인 활동 정보)을
+읽어갈 수 있다. 브라우저의 로컬 네트워크 접근 제한에 기대는 것도 위험하다. 지금은
+요청의 `Origin`이 `http://(127.0.0.1|localhost)(:포트)?` 패턴일 때만 그 origin을
+그대로 반사하고 `Vary: Origin`을 같이 보낸다 — desktop이 서빙하는 UI(임의 포트)와
+Vite dev server(5173) 둘 다 이 패턴에 맞는다.
 
 ## uv workspace로 전환
 
@@ -115,3 +121,33 @@ recorder의 `supervisor.py`/`healthcheck.py`/`__main__.py`도 이 공통 모듈�
 `apps/ui`(TS)는 언어 경계를 넘어가므로 지금은 독립된 `interface`를 유지한다 — 엔드포인트가
 하나뿐인 지금 JSON Schema/codegen 같은 인프라를 들이는 건 과한 선투자라고 보고, 엔드포인트가
 늘어나거나 모양이 복잡해지면 그때 공유 스펙을 두는 걸 고려한다.
+
+## 코드리뷰로 추가로 고친 것들
+
+- **hub의 DB 연결을 읽기 전용(`mode=ro`)으로**: `recorder.storage.open_db()`는 WAL 모드를
+  설정하고 스키마가 없으면 만드는, 쓰기 가능한 연결이다. hub는 조회만 하는 쪽이므로 이
+  연결을 열어둘 이유가 없었다. 지금은 `sqlite3.connect(..., uri=True)`로 읽기 전용 연결을
+  열고, DB가 아직 없거나(recorder가 한 번도 안 돈 경우) 읽기 중 문제가 생기면 응답 없이
+  연결이 끊기는 대신 503으로 알린다. `apps/ui`도 `response.ok`를 확인하지 않으면 503의
+  에러 바디를 `TodayUsage`인 것처럼 렌더링하려다 깨지므로 같이 고쳤다.
+- **desktop이 hub 대기 시간 초과를 삼키지 않도록**: `_wait_for_hub_port`가 타임아웃을
+  던지면 `webview.create_window`가 전혀 호출되지 않아 창이 안 뜨고, `pythonw.exe`
+  환경이라 traceback도 안 보여서 사용자는 아무것도 못 봤다. 지금은 타임아웃을
+  `hub_supervisor_logger`에만 남기고 창은 그대로 연다 — `apps/ui`가 fetch 실패를
+  감지해서 화면에 에러로 보여준다.
+- **supervise()의 강제 종료 경로**: `stop_event`가 set됐을 때 `process.terminate()` 후
+  `process.wait(timeout=5)`가 `TimeoutExpired`를 던지면(멈춰 있는 프로세스 등) 예외가
+  `supervise()` 밖으로 전파돼서, 종료되지 않은 hub가 포트/lock을 계속 쥔 채로 좀비가
+  되고 다음 실행이 `EXIT_ALREADY_RUNNING`으로 막혀버렸다. `TimeoutExpired`를 잡아서
+  `kill()`로 강제 종료하도록 고쳤다.
+- **일광절약시간 전환일의 자정 경계**: `_local_day_bounds_utc`가 `now.astimezone()`의
+  tzinfo(조회 시점의 고정 UTC 오프셋)를 자정/다음 자정에 그대로 재사용해서, 오프셋이
+  바뀌는 전환일에 하루가 틀어질 수 있었다. 자정 경계를 naive datetime으로 만든 뒤 각자
+  `astimezone(UTC)`로 변환해서, 각 시각에 맞는 오프셋을 다시 계산하게 했다(이 Windows
+  dev 환경엔 `tzdata`가 없어 실제 DST 전환을 자동 테스트로 재현하진 못했다 — Python
+  문서에 명시된 naive `astimezone()` 동작에 근거한 수정이다).
+- **루트 `uv sync`가 workspace 멤버를 설치하지 않는다는 리뷰는 반영하지 않음**: 실제로
+  `.venv`/`uv.lock`을 지우고 새로 `uv sync`를 돌려봤는데, 루트 `pyproject.toml`에
+  `[project]`가 없는 "virtual workspace root"라서 기본 동작으로 전체 멤버가 설치됐다
+  (`uv run pytest`도 바로 통과). 리뷰가 가정한 문제는 루트에 `[project]`가 있는
+  워크스페이스에서나 해당하는 것으로 보인다.

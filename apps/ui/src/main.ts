@@ -51,7 +51,15 @@ function renderError(app: Element, message: string): void {
 const app = document.querySelector("#app");
 if (app) {
   fetch(`${HUB_URL}/api/today`)
-    .then((response) => response.json() as Promise<TodayUsage>)
+    .then((response) => {
+      // fetch()는 HTTP 상태와 무관하게 resolve된다 — hub가 DB를 못 읽어
+      // 503을 주면 { "error": ... } 모양이라, 체크 없이 바로 TodayUsage로
+      // 취급하면 renderUsage가 undefined 필드에서 깨진다.
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      return response.json() as Promise<TodayUsage>;
+    })
     .then((usage) => renderUsage(app, usage))
     .catch((error: unknown) => renderError(app, String(error)));
 }

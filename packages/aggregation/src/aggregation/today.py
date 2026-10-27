@@ -43,9 +43,15 @@ def _local_day_bounds_utc(now: datetime) -> tuple[str, str]:
     sampled_at은 UTC로 저장되는데 "오늘"은 로컬 날짜 기준이어야 해서, 자정
     경계를 로컬 타임존에서 잡은 뒤 UTC로 바꾼다 — UTC 기준으로 그냥 자르면
     자정 근처 틱이 하루 어긋나게 집계된다.
+
+    local_start/local_end는 tzinfo를 떼서(naive) 각자 따로 astimezone(UTC)로
+    변환한다 — now.astimezone()이 돌려주는 tzinfo는 "지금 이 순간"의 UTC
+    오프셋으로 고정돼 있어서, 그걸 자정/다음 자정에 그대로 재사용하면 일광
+    절약시간 전환일에 오프셋이 하루 전체에 걸쳐 틀어진다. naive datetime을
+    astimezone(UTC)로 변환하면 그 시각 자체에 맞는 오프셋을 다시 계산해준다.
     """
     local_now = now.astimezone()
-    local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
     local_end = local_start + timedelta(days=1)
     return (
         local_start.astimezone(UTC).isoformat(),

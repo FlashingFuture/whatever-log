@@ -135,7 +135,15 @@ def main() -> None:
     supervisor_thread.start()
 
     try:
-        _wait_for_hub_port(HUB_PORT, _HUB_READY_TIMEOUT_SECONDS)
+        try:
+            _wait_for_hub_port(HUB_PORT, _HUB_READY_TIMEOUT_SECONDS)
+        except TimeoutError:
+            # hub가 콜드 스타트 등으로 늦게 뜰 수 있다. 여기서 예외를 던지면
+            # webview.create_window가 전혀 호출되지 않아 창이 아예 안 뜨고,
+            # pythonw.exe 환경이라 traceback도 안 보여서 사용자는 아무것도
+            # 못 본다. 로그에만 남기고 창은 그대로 연다 — apps/ui가 fetch
+            # 실패를 감지해서 화면에 에러로 보여준다.
+            hub_supervisor_logger.exception("hub 준비를 기다리지 못했지만 창은 엽니다.")
         webview.create_window("whatever.log", _resolve_url(args.dev))
         webview.start()
     finally:

@@ -1,6 +1,8 @@
 import socket
+import sys
 import threading
 import urllib.request
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -90,3 +92,26 @@ def test_classify_hub_exit_treats_unknown_codes_as_crashes() -> None:
     """모르는 종료 코드는 크래시로 보고 None을 돌려줘서 supervise()가
     재시도하게 해야 한다."""
     assert _classify_hub_exit(1) is None
+
+
+def test_main_opens_window_even_when_hub_is_not_ready_in_time(tmp_path, monkeypatch) -> None:
+    """hub가 제때 안 뜨면(콜드 스타트 등) 로그만 남기고도 창은 열어야 한다 —
+    안 그러면 webview.create_window가 전혀 호출되지 않아 창이 아예 안 뜨고,
+    pythonw.exe 환경이라 traceback도 안 보여서 사용자는 아무것도 못 본다."""
+    import desktop.__main__ as main_module
+
+    monkeypatch.setattr(sys, "argv", ["desktop"])
+    monkeypatch.setattr(main_module, "_HUB_READY_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(main_module, "HUB_PORT", 65535)
+    monkeypatch.setattr(main_module, "DEFAULT_HUB_SUPERVISOR_LOG_PATH", tmp_path / "hub-supervisor.log")
+    monkeypatch.setattr(main_module, "supervise", MagicMock())
+    monkeypatch.setattr(main_module, "_resolve_url", lambda use_dev_server: "http://example.test")
+
+    try:
+        with patch("desktop.__main__.webview") as mock_webview:
+            main_module.main()
+    finally:
+        main_module.hub_supervisor_logger.handlers.clear()
+
+    mock_webview.create_window.assert_called_once()
+    mock_webview.start.assert_called_once()
