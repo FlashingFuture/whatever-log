@@ -47,4 +47,10 @@
 
 ## 아직 정해지지 않은 것
 
-앱/패키지별 빌드·테스트 명령, 데스크톱 앱 프레임워크 선택은 이후 Phase에서 구현하면서 채웁니다.
+앱/패키지별 빌드·테스트 명령은 이후 Phase에서 구현하면서 채웁니다.
+
+데스크톱 앱 프레임워크는 Vite(`apps/ui`) + pywebview(`apps/desktop`)로 정했습니다
+(`docs/2026-10-desktop-ui-framework.md` 참고). `apps/ui`는 조회 화면(TS, pnpm 워크스페이스
+멤버)이고, `apps/desktop`은 그걸 네이티브 창으로 띄우는 셸(Python/uv)입니다 — 두 앱으로
+나눈 이유는 pnpm 워크스페이스가 `apps/*` 바로 아래 `package.json`만 멤버로 잡고, Python
+쪽 src-layout 관습(`src/<패키지명>`)이 Vite의 `src/`와 한 폴더에서 충돌하기 때문입니다.
