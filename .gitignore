@@ -10,6 +10,7 @@ __pycache__/
 recorder.db
 recorder.db-wal
 recorder.db-shm
+recorder.db.lock
 recorder.lock
 
 .env

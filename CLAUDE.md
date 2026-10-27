@@ -38,12 +38,12 @@
 - **Lint/Format**: Biome. `pnpm lint`(검사) / `pnpm format`(수정). ESLint·Prettier는 쓰지 않습니다.
 - **커밋 전 검증**: Husky `pre-commit` → `lint-staged`가 staged 파일에 Biome을 적용합니다.
 - **커밋 메시지 본문**: 한글로 작성합니다.
-- **Node**: LTS 24.x 기준 (`engines.node: ">=22.22.1"`, `lint-staged`의 실제 요구 버전). Node 18은 2025-04 EOL이라 지원하지 않습니다.
+- **Node**: LTS 24.x 기준 (`engines.node: ">=22.23.4"`, `lint-staged`의 실제 요구 버전 + 2026-10 Node 보안 릴리스 반영). Node 18은 2025-04 EOL이라 지원하지 않습니다.
 - **Dockerfile + docker-compose.yml (루트)**: 디바이스 간 Node 버전을 동일하게 맞추기 위한 개발 컨테이너입니다. 앱을 빌드/배포하는 용도가 아닙니다. `docker compose run --rm dev bash`로 들어가서 씁니다. 빌드·실행 검증 완료 (Node/pnpm 버전이 호스트와 일치함을 확인함).
   - `node_modules`는 named volume(`node_modules`)으로 분리되어 있습니다. 호스트(Windows)와 컨테이너(Linux)는 네이티브 바이너리가 다르므로(예: `@biomejs/cli-win32-x64` vs `cli-linux-x64`) **절대 호스트의 `node_modules`를 컨테이너와 공유(bind mount)하지 마세요** — 서로의 설치를 깨뜨립니다.
   - pnpm store 위치도 `npm_config_store_dir` 환경변수로 `node_modules` volume 안쪽에 고정되어 있습니다. 이게 없으면 컨테이너의 pnpm이 store를 프로젝트 루트(호스트 bind mount)에 흘려서 `.pnpm-store/`가 커밋 대상에 섞여 들어갑니다. 이 설정을 건드릴 때는 이 사실을 기억하세요.
   - Python 등 다른 스택이 들어오면 `Dockerfile`에 추가하되, 아직 쓰이지 않는 스택을 미리 넣지 마세요.
-- **mise (`.mise.toml`, 루트)**: Node 버전만 고정되어 있습니다(`node = "24.20.0"`). `engines.node`/Dockerfile의 Node 버전과 반드시 같이 맞추세요. 다른 스택(Python 등)이 들어오면 여기에도 추가.
+- **mise (`.mise.toml`, 루트)**: Node 버전만 고정되어 있습니다(`node = "24.22.1"`). `engines.node`/Dockerfile의 Node 버전과 반드시 같이 맞추세요. 다른 스택(Python 등)이 들어오면 여기에도 추가.
 
 ## 아직 정해지지 않은 것
 
