@@ -6,11 +6,13 @@ requires-python = ">=3.14"
 dependencies = [
     "aggregation",
     "recorder",
+    "supervision",
 ]
 
 [tool.uv.sources]
 aggregation = { workspace = true }
 recorder = { workspace = true }
+supervision = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

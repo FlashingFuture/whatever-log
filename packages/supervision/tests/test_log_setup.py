@@ -2,13 +2,13 @@ import logging
 
 import pytest
 
-from recorder.log_setup import configure_logging
+from supervision.log_setup import configure_logging
 
 
 @pytest.fixture
 def test_logger():
-    """실제 recorder/supervisor 로거와 분리된, 테스트 전용 로거. 테스트가 끝나면 핸들러를 치운다."""
-    logger = logging.getLogger("recorder.test_log_setup")
+    """실제 사용처 로거와 분리된, 테스트 전용 로거. 테스트가 끝나면 핸들러를 치운다."""
+    logger = logging.getLogger("supervision.test_log_setup")
     yield logger
     logger.handlers.clear()
     logger.setLevel(logging.NOTSET)

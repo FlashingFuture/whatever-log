@@ -9,6 +9,7 @@ members = [
     "hub",
     "recorder",
     "summary",
+    "supervision",
 ]
 
 [[package]]
@@ -94,6 +95,7 @@ source = { editable = "apps/desktop" }
 dependencies = [
     { name = "hub" },
     { name = "pywebview" },
+    { name = "supervision" },
 ]
 
 [package.dev-dependencies]
@@ -105,6 +107,7 @@ dev = [
 requires-dist = [
     { name = "hub", editable = "apps/hub" },
     { name = "pywebview", specifier = ">=5.4" },
+    { name = "supervision", editable = "packages/supervision" },
 ]
 
 [package.metadata.requires-dev]
@@ -126,6 +129,7 @@ source = { editable = "apps/hub" }
 dependencies = [
     { name = "aggregation" },
     { name = "recorder" },
+    { name = "supervision" },
 ]
 
 [package.dev-dependencies]
@@ -137,6 +141,7 @@ dev = [
 requires-dist = [
     { name = "aggregation", editable = "packages/aggregation" },
     { name = "recorder", editable = "apps/recorder" },
+    { name = "supervision", editable = "packages/supervision" },
 ]
 
 [package.metadata.requires-dev]
@@ -370,8 +375,8 @@ name = "recorder"
 version = "0.1.0"
 source = { editable = "apps/recorder" }
 dependencies = [
-    { name = "filelock" },
     { name = "psutil" },
+    { name = "supervision" },
 ]
 
 [package.dev-dependencies]
@@ -381,8 +386,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "filelock", specifier = ">=4.2.4" },
     { name = "psutil", specifier = ">=6.1.0" },
+    { name = "supervision", editable = "packages/supervision" },
 ]
 
 [package.metadata.requires-dev]
@@ -392,6 +397,25 @@ dev = [{ name = "pytest", specifier = ">=9.1.1" }]
 name = "summary"
 version = "0.1.0"
 source = { editable = "packages/summary" }
+
+[[package]]
+name = "supervision"
+version = "0.1.0"
+source = { editable = "packages/supervision" }
+dependencies = [
+    { name = "filelock" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "filelock", specifier = ">=4.2.4" }]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=9.1.1" }]
 
 [[package]]
 name = "typing-extensions"

@@ -12,9 +12,12 @@ file:// 접근 자체를 막아둬서 코드가 여러 청크로 쪼개지면(�
 되지만, 화면이 복잡해지기 전에 로컬 HTTP 서빙으로 미리 막아둔다.
 
 창을 띄우기 전에 hub(apps/hub, 집계 API 서버)를 자식 프로세스로 함께
-띄운다 — apps/ui가 "오늘 사용 현황" 등을 그 API로 fetch하기 때문이다.
-recorder의 수집 루프와는 완전히 분리된 별도 프로세스라, hub가 느려지거나
-죽어도 recorder에는 영향이 없다(docs/2026-10-hub-architecture.md 참고).
+띄우고, 떠 있는 동안 계속 감시한다(packages/supervision의 supervise()) —
+apps/ui가 "오늘 사용 현황" 등을 그 API로 fetch하기 때문이다. recorder의
+수집 루프와는 완전히 분리된 별도 프로세스라, hub가 느려지거나 죽어도
+recorder에는 영향이 없다(docs/2026-10-hub-architecture.md 참고). 창이
+닫히면 hub 감시도 같이 멈추고 hub를 종료시킨다 — supervise()의
+stop_event로 신호를 보낸다.
 
 사용법:
     uv run python -m desktop            # 빌드된 apps/ui/dist 열기
@@ -22,8 +25,8 @@ recorder의 수집 루프와는 완전히 분리된 별도 프로세스라, hub�
 """
 
 import argparse
+import logging
 import socket
-import subprocess
 import sys
 import threading
 import time
@@ -33,13 +36,21 @@ from pathlib import Path
 
 import webview
 from hub.__main__ import DEFAULT_PORT as HUB_PORT
+from hub.__main__ import EXIT_ALREADY_RUNNING as HUB_EXIT_ALREADY_RUNNING
+from hub.__main__ import EXIT_ARGUMENT_ERROR as HUB_EXIT_ARGUMENT_ERROR
+from supervision.log_setup import configure_logging
+from supervision.supervisor import supervise
 
 DEV_SERVER_URL = "http://localhost:5173"
 
-_UI_DIST_DIR = Path(__file__).resolve().parents[3] / "ui" / "dist"
+_APP_DIR = Path(__file__).resolve().parents[2]
+_UI_DIST_DIR = _APP_DIR.parent / "ui" / "dist"
 _UI_DIST_INDEX = _UI_DIST_DIR / "index.html"
 
 _HUB_READY_TIMEOUT_SECONDS = 5.0
+DEFAULT_HUB_SUPERVISOR_LOG_PATH = _APP_DIR / "hub-supervisor.log"
+
+hub_supervisor_logger = logging.getLogger("desktop.hub_supervisor")
 
 
 def _serve_dist(directory: Path) -> str:
@@ -69,17 +80,27 @@ def _resolve_url(use_dev_server: bool) -> str:
     return _serve_dist(_UI_DIST_DIR)
 
 
-def _wait_for_hub(hub_process: subprocess.Popen, port: int, timeout: float) -> None:
+def _classify_hub_exit(exit_code: int) -> str | None:
+    """hub가 재시도해도 안 풀리는 종료 코드로 죽었으면 멈출 사유를, 크래시면
+    None을 돌려준다(recorder.supervisor._classify_exit와 같은 패턴)."""
+    if exit_code == 0:
+        return "hub가 정상 종료했습니다"
+    if exit_code == HUB_EXIT_ARGUMENT_ERROR:
+        return "hub 인자가 잘못되었습니다"
+    if exit_code == HUB_EXIT_ALREADY_RUNNING:
+        return "다른 hub가 이미 실행 중입니다"
+    return None
+
+
+def _wait_for_hub_port(port: int, timeout: float) -> None:
     """hub가 포트를 열 때까지 기다린다.
 
     안 기다리면 창이 뜬 직후 apps/ui의 첫 fetch가 hub가 아직 리스닝하기
-    전이라 연결 거부로 실패할 수 있다. hub_process가 이미 죽어버렸으면(예:
-    포트 충돌) 타임아웃까지 기다릴 필요 없이 바로 알린다.
+    전이라 연결 거부로 실패할 수 있다. hub가 계속 크래시를 반복해도 여기서는
+    그냥 타임아웃으로 처리한다 — 왜 못 떴는지는 hub-supervisor.log에 남는다.
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if hub_process.poll() is not None:
-            raise RuntimeError(f"hub가 바로 종료되었습니다 (exit code {hub_process.returncode}).")
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=0.2):
                 return
@@ -89,7 +110,7 @@ def _wait_for_hub(hub_process: subprocess.Popen, port: int, timeout: float) -> N
 
 
 def main() -> None:
-    """CLI 인자(`--dev`)를 파싱해서 hub를 띄우고 webview 창을 연다."""
+    """CLI 인자(`--dev`)를 파싱해서 hub를 supervise하며 webview 창을 연다."""
     parser = argparse.ArgumentParser(description="whatever.log 데스크톱 창")
     parser.add_argument(
         "--dev",
@@ -98,14 +119,28 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    hub_process = subprocess.Popen([sys.executable, "-m", "hub"])
+    configure_logging(hub_supervisor_logger, DEFAULT_HUB_SUPERVISOR_LOG_PATH)
+
+    stop_event = threading.Event()
+    supervisor_thread = threading.Thread(
+        target=supervise,
+        args=([sys.executable, "-m", "hub"],),
+        kwargs={
+            "logger": hub_supervisor_logger,
+            "classify_exit": _classify_hub_exit,
+            "stop_event": stop_event,
+        },
+        daemon=True,
+    )
+    supervisor_thread.start()
+
     try:
-        _wait_for_hub(hub_process, HUB_PORT, _HUB_READY_TIMEOUT_SECONDS)
+        _wait_for_hub_port(HUB_PORT, _HUB_READY_TIMEOUT_SECONDS)
         webview.create_window("whatever.log", _resolve_url(args.dev))
         webview.start()
     finally:
-        hub_process.terminate()
-        hub_process.wait(timeout=5)
+        stop_event.set()
+        supervisor_thread.join(timeout=10)
 
 
 if __name__ == "__main__":

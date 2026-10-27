@@ -1,9 +1,10 @@
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from recorder import supervisor
+from recorder.__main__ import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
 
 
 @pytest.fixture(autouse=True)
@@ -14,157 +15,51 @@ def _use_temp_log_path(tmp_path, monkeypatch):
     supervisor.logger.handlers.clear()
 
 
-def test_stops_after_clean_exit(monkeypatch) -> None:
-    """정상 종료(exit 0)면 재시작하지 않고 끝나야 한다."""
-    monkeypatch.setattr(sys, "argv", ["supervisor", "--interval", "5"])
-
-    with (
-        patch("recorder.supervisor.subprocess.run") as mock_run,
-        patch("recorder.supervisor.time.sleep") as mock_sleep,
-    ):
-        mock_run.return_value = MagicMock(returncode=0)
-        supervisor.main()
-
-    mock_run.assert_called_once()
-    mock_sleep.assert_not_called()
-
-
-def test_restarts_after_crash_then_stops_on_clean_exit(monkeypatch) -> None:
-    """비정상 종료 후 재시작하고, 그다음 정상 종료되면 거기서 멈춰야 한다."""
-    monkeypatch.setattr(sys, "argv", ["supervisor"])
-
-    with (
-        patch("recorder.supervisor.subprocess.run") as mock_run,
-        patch("recorder.supervisor.time.sleep") as mock_sleep,
-    ):
-        mock_run.side_effect = [MagicMock(returncode=1), MagicMock(returncode=0)]
-        supervisor.main()
-
-    assert mock_run.call_count == 2
-    mock_sleep.assert_called_once_with(supervisor.RESTART_DELAY_SECONDS)
-
-
-def test_stops_without_restarting_when_already_running(monkeypatch) -> None:
-    """다른 recorder가 이미 lock을 잡고 있는 상황(EXIT_ALREADY_RUNNING)은 크래시가
-    아니므로 재시작하면 안 된다 — 안 그러면 5초마다 영원히 재시도하며 로그만 쌓인다.
-    """
-    monkeypatch.setattr(sys, "argv", ["supervisor"])
-
-    with (
-        patch("recorder.supervisor.subprocess.run") as mock_run,
-        patch("recorder.supervisor.time.sleep") as mock_sleep,
-    ):
-        mock_run.return_value = MagicMock(returncode=supervisor.EXIT_ALREADY_RUNNING)
-        supervisor.main()
-
-    mock_run.assert_called_once()
-    mock_sleep.assert_not_called()
-
-
-def test_stops_without_restarting_on_argument_error(monkeypatch) -> None:
-    """인자 오류(EXIT_ARGUMENT_ERROR)는 같은 인자로 재시도해도 똑같이 실패하므로
-    재시작하면 안 되고, "이미 실행 중"이 아니라 인자 오류로 로그에 남아야 한다.
-    """
-    monkeypatch.setattr(sys, "argv", ["supervisor", "--interval", "0"])
-
-    with (
-        patch("recorder.supervisor.subprocess.run") as mock_run,
-        patch("recorder.supervisor.time.sleep") as mock_sleep,
-    ):
-        mock_run.return_value = MagicMock(returncode=supervisor.EXIT_ARGUMENT_ERROR)
-        supervisor.main()
-
-    mock_run.assert_called_once()
-    mock_sleep.assert_not_called()
-
-    for handler in supervisor.logger.handlers:
-        handler.flush()
-    log_content = supervisor.DEFAULT_LOG_PATH.read_text(encoding="utf-8")
-    assert "인자가 잘못되었습니다" in log_content
-    assert "이미 실행 중" not in log_content
-
-
-def test_gives_up_after_too_many_consecutive_crashes(monkeypatch) -> None:
-    """디스크 꽉 참 같은, 재시도해도 절대 안 풀리는 문제로 계속 바로 죽으면
-    영원히 재시도하지 말고 포기해야 한다."""
-    monkeypatch.setattr(sys, "argv", ["supervisor"])
-
-    with (
-        patch("recorder.supervisor.subprocess.run") as mock_run,
-        patch("recorder.supervisor.time.sleep") as mock_sleep,
-    ):
-        mock_run.return_value = MagicMock(returncode=1)
-        supervisor.main()
-
-    assert mock_run.call_count == supervisor.MAX_CONSECUTIVE_FAILURES
-    assert mock_sleep.call_count == supervisor.MAX_CONSECUTIVE_FAILURES - 1
-
-    for handler in supervisor.logger.handlers:
-        handler.flush()
-    log_content = supervisor.DEFAULT_LOG_PATH.read_text(encoding="utf-8")
-    assert "반복되는 것으로 보여" in log_content
-
-
-def test_long_stable_run_resets_the_consecutive_failure_count(monkeypatch) -> None:
-    """한동안 잘 버티다가 가끔 한 번씩 죽는 정상적인 패턴은, 크래시 루프가 아니므로
-    연속 실패 횟수가 리셋되어 cap에 걸리지 않고 계속 재시작되어야 한다."""
-    monkeypatch.setattr(sys, "argv", ["supervisor"])
-
-    crash_count = supervisor.MAX_CONSECUTIVE_FAILURES * 2
-    results = [MagicMock(returncode=1) for _ in range(crash_count)] + [
-        MagicMock(returncode=0)
-    ]
-
-    # 매 실행이 MIN_STABLE_RUN_SECONDS보다 훨씬 오래 걸렸다고 보고되도록, monotonic()
-    # 호출마다 큰 값만큼 증가시킨다 (한 실행마다 시작/종료로 두 번씩 호출됨).
-    monotonic_values = iter(float(i) * 1000.0 for i in range(len(results) * 2 + 1))
-
-    with (
-        patch("recorder.supervisor.subprocess.run", side_effect=results) as mock_run,
-        patch("recorder.supervisor.time.sleep"),
-        patch(
-            "recorder.supervisor.time.monotonic",
-            side_effect=lambda: next(monotonic_values),
-        ),
-    ):
-        supervisor.main()
-
-    assert mock_run.call_count == len(results)
-
-
 def test_exit_codes_do_not_collide() -> None:
-    """argparse 인자 오류와 중복 실행이 같은 종료 코드를 쓰면 supervisor가 둘을 구분하지 못한다."""
-    assert supervisor.EXIT_ARGUMENT_ERROR != supervisor.EXIT_ALREADY_RUNNING
+    """argparse 인자 오류와 중복 실행이 같은 종료 코드를 쓰면 구분할 수 없다."""
+    assert EXIT_ARGUMENT_ERROR != EXIT_ALREADY_RUNNING
 
 
-def test_passes_through_cli_args(monkeypatch) -> None:
-    """supervisor 자신에게 들어온 인자를 그대로 recorder 자식 프로세스에 넘겨야 한다."""
+@pytest.mark.parametrize(
+    ("exit_code", "expected_fragment"),
+    [
+        (0, "정상 종료"),
+        (EXIT_ARGUMENT_ERROR, "인자가 잘못되었습니다"),
+        (EXIT_ALREADY_RUNNING, "이미 실행 중"),
+    ],
+)
+def test_classify_exit_recognizes_known_codes(exit_code, expected_fragment) -> None:
+    """알고 있는 종료 코드는 재시작하지 않을 사유를 돌려줘야 한다 — 재시도해도
+    안 풀리거나(인자 오류, 중복 실행) 더 돌 필요가 없는(정상 종료) 경우다."""
+    reason = supervisor._classify_exit(exit_code)
+    assert reason is not None
+    assert expected_fragment in reason
+
+
+def test_classify_exit_treats_unknown_codes_as_crashes() -> None:
+    """모르는 종료 코드(디스크 꽉 참 등)는 크래시로 보고 None을 돌려줘서
+    supervise()가 재시도하게 해야 한다. 재시작/포기 메커니즘 자체는
+    packages/supervision에서 검증한다."""
+    assert supervisor._classify_exit(1) is None
+
+
+def test_passes_through_cli_args_and_wiring_to_supervise(monkeypatch) -> None:
+    """supervisor 자신에게 들어온 인자를 recorder 자식 프로세스 커맨드에 그대로
+    넘기고, classify_exit/logger를 올바르게 supervise()에 연결해야 한다."""
     monkeypatch.setattr(sys, "argv", ["supervisor", "--interval", "30", "--db-path", "x.db"])
 
-    with patch("recorder.supervisor.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0)
+    with patch("recorder.supervisor.supervise") as mock_supervise:
         supervisor.main()
 
-    called_args = mock_run.call_args[0][0]
-    assert called_args == [sys.executable, "-m", "recorder", "--interval", "30", "--db-path", "x.db"]
-
-
-def test_restart_decision_is_logged_to_file(monkeypatch) -> None:
-    """recorder.__main__과 같은 방식으로, 재시작 사유가 실제 로그 파일에 남아야 한다
-    (이전에는 supervisor가 아무 로그도 안 남겼음)."""
-    monkeypatch.setattr(sys, "argv", ["supervisor"])
-
-    with (
-        patch("recorder.supervisor.subprocess.run") as mock_run,
-        patch("recorder.supervisor.time.sleep"),
-    ):
-        mock_run.side_effect = [MagicMock(returncode=1), MagicMock(returncode=0)]
-        supervisor.main()
-
-    for handler in supervisor.logger.handlers:
-        handler.flush()
-    log_content = supervisor.DEFAULT_LOG_PATH.read_text(encoding="utf-8")
-
-    assert "exit code 1" in log_content
-    assert "재시작" in log_content
-    assert "정상 종료" in log_content
+    called_command = mock_supervise.call_args[0][0]
+    assert called_command == [
+        sys.executable,
+        "-m",
+        "recorder",
+        "--interval",
+        "30",
+        "--db-path",
+        "x.db",
+    ]
+    assert mock_supervise.call_args.kwargs["classify_exit"] is supervisor._classify_exit
+    assert mock_supervise.call_args.kwargs["logger"] is supervisor.logger

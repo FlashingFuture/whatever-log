@@ -1,11 +1,12 @@
-"""recorder와 supervisor가 공통으로 쓰는 파일 로깅 설정.
+"""콘솔 없이 백그라운드로 상시 실행되는 프로세스가 공통으로 쓰는 파일 로깅 설정.
 
-둘 다 pythonw.exe(콘솔 없음)로 백그라운드 상시 실행되는 전제라, 같은 방식으로
-로그를 남겨야 한다 — 그래야 "recorder가 왜 죽었는지"와 "supervisor가 왜
-재시작했는지"를 같은 포맷으로 추적할 수 있다. 두 프로세스는 별개 OS 프로세스라
-RotatingFileHandler를 같은 파일에 공유하면 롤오버 시점에 서로 부딪힐 수 있으니,
-로거 이름뿐 아니라 로그 파일도 각자 둔다(__main__.py는 recorder.log,
-supervisor.py는 supervisor.log).
+원래 recorder 전용으로 있었다(apps/recorder) — recorder/supervisor처럼
+pythonw.exe(콘솔 없음)로 백그라운드 상시 실행되는 프로세스는 print() 대신
+파일 로그로만 상태를 남길 수 있는데, hub도 같은 처지라 공통 모듈로 뺐다.
+
+서로 다른 프로세스가 RotatingFileHandler를 같은 파일에 공유하면 롤오버
+시점에 부딪힐 수 있으니, 호출부마다 로거 이름뿐 아니라 로그 파일도 각자
+둬야 한다(recorder.log / supervisor.log / hub.log 처럼).
 """
 
 import logging

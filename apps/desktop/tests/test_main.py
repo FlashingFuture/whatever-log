@@ -1,12 +1,17 @@
 import socket
-import subprocess
 import threading
 import urllib.request
-from unittest.mock import MagicMock
 
 import pytest
 
-from desktop.__main__ import DEV_SERVER_URL, _resolve_url, _wait_for_hub
+from desktop.__main__ import (
+    DEV_SERVER_URL,
+    HUB_EXIT_ALREADY_RUNNING,
+    HUB_EXIT_ARGUMENT_ERROR,
+    _classify_hub_exit,
+    _resolve_url,
+    _wait_for_hub_port,
+)
 
 
 def test_dev_flag_returns_dev_server_url() -> None:
@@ -44,7 +49,7 @@ def test_build_is_served_over_http_not_file(tmp_path, monkeypatch) -> None:
         assert "ok" in response.read().decode("utf-8")
 
 
-def test_wait_for_hub_returns_once_port_is_listening() -> None:
+def test_wait_for_hub_port_returns_once_port_is_listening() -> None:
     """포트가 열리면(hub가 준비되면) 바로 리턴해야 한다."""
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind(("127.0.0.1", 0))
@@ -53,30 +58,35 @@ def test_wait_for_hub_returns_once_port_is_listening() -> None:
     threading.Thread(target=server.accept, daemon=True).start()
 
     try:
-        fake_process = MagicMock(spec=subprocess.Popen)
-        fake_process.poll.return_value = None
-
-        _wait_for_hub(fake_process, port, timeout=2.0)
+        _wait_for_hub_port(port, timeout=2.0)
     finally:
         server.close()
 
 
-def test_wait_for_hub_fails_fast_when_hub_exits_immediately() -> None:
-    """hub가 포트 충돌 등으로 바로 죽어버리면, 타임아웃까지 기다리지 않고
-    바로 알려야 한다."""
-    fake_process = MagicMock(spec=subprocess.Popen)
-    fake_process.poll.return_value = 1
-    fake_process.returncode = 1
-
-    with pytest.raises(RuntimeError):
-        _wait_for_hub(fake_process, port=65535, timeout=2.0)
-
-
-def test_wait_for_hub_times_out_when_port_never_opens() -> None:
-    """hub가 살아있지만 포트를 안 여는 상태가 계속되면 타임아웃으로 알려야 한다."""
-    fake_process = MagicMock(spec=subprocess.Popen)
-    fake_process.poll.return_value = None
-
+def test_wait_for_hub_port_times_out_when_port_never_opens() -> None:
+    """포트가 안 열리는 상태가 계속되면(hub가 계속 크래시하는 경우 등)
+    타임아웃으로 알려야 한다 — 왜 못 떴는지는 supervise()가 로그에 남긴다."""
     # 65535는 실제로 열려 있을 가능성이 거의 없는 포트라 연결이 계속 거부된다.
     with pytest.raises(TimeoutError):
-        _wait_for_hub(fake_process, port=65535, timeout=0.3)
+        _wait_for_hub_port(port=65535, timeout=0.3)
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "expected_fragment"),
+    [
+        (0, "정상 종료"),
+        (HUB_EXIT_ARGUMENT_ERROR, "인자가 잘못되었습니다"),
+        (HUB_EXIT_ALREADY_RUNNING, "이미 실행 중"),
+    ],
+)
+def test_classify_hub_exit_recognizes_known_codes(exit_code, expected_fragment) -> None:
+    """알고 있는 종료 코드는 재시작하지 않을 사유를 돌려줘야 한다."""
+    reason = _classify_hub_exit(exit_code)
+    assert reason is not None
+    assert expected_fragment in reason
+
+
+def test_classify_hub_exit_treats_unknown_codes_as_crashes() -> None:
+    """모르는 종료 코드는 크래시로 보고 None을 돌려줘서 supervise()가
+    재시도하게 해야 한다."""
+    assert _classify_hub_exit(1) is None

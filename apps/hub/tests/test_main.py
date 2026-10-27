@@ -1,15 +1,18 @@
 import json
+import sys
 import threading
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
+from http.server import ThreadingHTTPServer
 
 import pytest
 from recorder.sampling import TickSample
 from recorder.storage import open_db, save_tick
+from supervision.lock import acquire_lock
 
-from hub.__main__ import _Handler
-from http.server import ThreadingHTTPServer
+import hub.__main__ as hub_main
+from hub.__main__ import EXIT_ALREADY_RUNNING, _Handler, _lock_path_for_port, main
 
 
 @pytest.fixture
@@ -55,3 +58,21 @@ def test_unknown_path_returns_404(running_server) -> None:
         urllib.request.urlopen(f"{running_server}/unknown", timeout=2)
 
     assert exc_info.value.code == 404
+
+
+def test_main_exits_with_already_running_code_when_lock_is_held(tmp_path, monkeypatch) -> None:
+    """다른 hub가 이미 같은 포트의 lock을 잡고 있으면, 포트 바인딩을 시도하다가
+    알기 어려운 에러로 죽는 대신 바로 EXIT_ALREADY_RUNNING으로 종료해야 한다."""
+    port = 59123
+    monkeypatch.setattr(sys, "argv", ["hub", "--port", str(port)])
+    monkeypatch.setattr(hub_main, "DEFAULT_LOG_PATH", tmp_path / "hub.log")
+
+    held_lock = acquire_lock(_lock_path_for_port(port))
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+    finally:
+        held_lock.release()
+        hub_main.logger.handlers.clear()
+
+    assert exc_info.value.code == EXIT_ALREADY_RUNNING

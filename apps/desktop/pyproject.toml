@@ -6,10 +6,12 @@ requires-python = ">=3.14"
 dependencies = [
     "pywebview>=5.4",
     "hub",
+    "supervision",
 ]
 
 [tool.uv.sources]
 hub = { workspace = true }
+supervision = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

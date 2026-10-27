@@ -1,6 +1,6 @@
 import pytest
 
-from recorder.lock import AlreadyRunningError, acquire_lock
+from supervision.lock import AlreadyRunningError, acquire_lock
 
 
 def test_acquire_lock_succeeds_when_free(tmp_path) -> None:

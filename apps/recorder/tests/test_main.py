@@ -6,7 +6,7 @@ import pytest
 
 from recorder import __main__ as main_module
 from recorder.__main__ import MIN_INTERVAL_SECONDS, _interval_type, _lock_path_for_db
-from recorder.log_setup import configure_logging
+from supervision.log_setup import configure_logging
 
 
 def test_accepts_value_at_minimum() -> None:

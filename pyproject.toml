@@ -5,6 +5,7 @@ members = [
     "apps/hub",
     "packages/aggregation",
     "packages/summary",
+    "packages/supervision",
 ]
 
 [tool.pytest.ini_options]
@@ -19,4 +20,5 @@ testpaths = [
     "apps/desktop/tests",
     "apps/hub/tests",
     "packages/aggregation/tests",
+    "packages/supervision/tests",
 ]
