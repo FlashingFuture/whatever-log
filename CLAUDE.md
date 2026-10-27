@@ -54,3 +54,15 @@
 멤버)이고, `apps/desktop`은 그걸 네이티브 창으로 띄우는 셸(Python/uv)입니다 — 두 앱으로
 나눈 이유는 pnpm 워크스페이스가 `apps/*` 바로 아래 `package.json`만 멤버로 잡고, Python
 쪽 src-layout 관습(`src/<패키지명>`)이 Vite의 `src/`와 한 폴더에서 충돌하기 때문입니다.
+
+집계/조회 API는 `apps/hub`(중앙 관리소)가 전담합니다(`docs/2026-10-hub-architecture.md`
+참고). recorder는 수집만, hub는 recorder.db를 읽기 전용으로 열어 집계 결과를 로컬 HTTP
+API로 서빙만 합니다 — `apps/desktop`이 창을 열 때 hub를 자식 프로세스로 함께 띄웁니다.
+집계 쿼리 자체는 `packages/aggregation`에 재사용 가능한 형태로 분리했습니다.
+`packages/summary`(AI 요약)는 Phase 3 전까지 폴더 구조만 있고 구현은 없습니다.
+
+Python 쪽도 pnpm workspace와 같은 방식으로 uv workspace(루트 `pyproject.toml`의
+`[tool.uv.workspace]`)로 묶여 있습니다 — 여러 앱이 서로를 import하면서 앱별 독립
+`.venv`로는 부족해졌기 때문입니다. `uv sync`/`uv run`은 루트에서 한 번만 하면 되고,
+`apps/recorder`처럼 각 앱 디렉터리 안에서 실행해도 가장 가까운 워크스페이스 루트의
+공유 `.venv`를 그대로 씁니다.

@@ -1,7 +1,57 @@
 import "./style.css";
 
+// apps/hub가 고정 포트로 뜬다(apps/desktop이 자식 프로세스로 띄움).
+const HUB_URL = "http://127.0.0.1:8787";
+
+interface ProcessUsage {
+  process: string;
+  seconds: number;
+}
+
+interface TodayUsage {
+  date: string;
+  total_seconds: number;
+  by_process: ProcessUsage[];
+}
+
+function formatMinutes(seconds: number): string {
+  return `${(seconds / 60).toFixed(1)}분`;
+}
+
+function renderUsage(app: Element, usage: TodayUsage): void {
+  app.innerHTML = `
+    <h1>오늘 사용 현황</h1>
+    <p>${usage.date} · 총 ${formatMinutes(usage.total_seconds)}</p>
+  `;
+
+  const list = document.createElement("ul");
+  if (usage.by_process.length === 0) {
+    const empty = document.createElement("li");
+    empty.textContent = "기록된 사용 내역이 없습니다.";
+    list.append(empty);
+  } else {
+    for (const row of usage.by_process) {
+      const item = document.createElement("li");
+      // 프로세스 이름은 OS에서 온 값이라 innerHTML로 바로 꽂지 않고
+      // textContent로 넣어 혹시 모를 마크업 삽입을 피한다.
+      item.textContent = `${row.process} — ${formatMinutes(row.seconds)}`;
+      list.append(item);
+    }
+  }
+  app.append(list);
+}
+
+function renderError(app: Element, message: string): void {
+  app.innerHTML = "<h1>오늘 사용 현황</h1>";
+  const error = document.createElement("p");
+  error.textContent = `불러오지 못했습니다: ${message}`;
+  app.append(error);
+}
+
 const app = document.querySelector("#app");
 if (app) {
-  app.innerHTML =
-    "<h1>whatever.log</h1><p>Vite + pywebview 연결 확인용 placeholder.</p>";
+  fetch(`${HUB_URL}/api/today`)
+    .then((response) => response.json() as Promise<TodayUsage>)
+    .then((usage) => renderUsage(app, usage))
+    .catch((error: unknown) => renderError(app, String(error)));
 }

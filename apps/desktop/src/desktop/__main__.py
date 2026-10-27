@@ -11,23 +11,35 @@ file:// 접근 자체를 막아둬서 코드가 여러 청크로 쪼개지면(�
 화면이 안 뜰 수 있다. 지금처럼 번들이 파일 하나뿐이면 당장은 재현 안
 되지만, 화면이 복잡해지기 전에 로컬 HTTP 서빙으로 미리 막아둔다.
 
+창을 띄우기 전에 hub(apps/hub, 집계 API 서버)를 자식 프로세스로 함께
+띄운다 — apps/ui가 "오늘 사용 현황" 등을 그 API로 fetch하기 때문이다.
+recorder의 수집 루프와는 완전히 분리된 별도 프로세스라, hub가 느려지거나
+죽어도 recorder에는 영향이 없다(docs/2026-10-hub-architecture.md 참고).
+
 사용법:
     uv run python -m desktop            # 빌드된 apps/ui/dist 열기
     uv run python -m desktop --dev      # Vite dev server(기본 http://localhost:5173) 열기
 """
 
 import argparse
+import socket
+import subprocess
+import sys
 import threading
+import time
 from functools import partial
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
 import webview
+from hub.__main__ import DEFAULT_PORT as HUB_PORT
 
 DEV_SERVER_URL = "http://localhost:5173"
 
 _UI_DIST_DIR = Path(__file__).resolve().parents[3] / "ui" / "dist"
 _UI_DIST_INDEX = _UI_DIST_DIR / "index.html"
+
+_HUB_READY_TIMEOUT_SECONDS = 5.0
 
 
 def _serve_dist(directory: Path) -> str:
@@ -57,8 +69,27 @@ def _resolve_url(use_dev_server: bool) -> str:
     return _serve_dist(_UI_DIST_DIR)
 
 
+def _wait_for_hub(hub_process: subprocess.Popen, port: int, timeout: float) -> None:
+    """hub가 포트를 열 때까지 기다린다.
+
+    안 기다리면 창이 뜬 직후 apps/ui의 첫 fetch가 hub가 아직 리스닝하기
+    전이라 연결 거부로 실패할 수 있다. hub_process가 이미 죽어버렸으면(예:
+    포트 충돌) 타임아웃까지 기다릴 필요 없이 바로 알린다.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if hub_process.poll() is not None:
+            raise RuntimeError(f"hub가 바로 종료되었습니다 (exit code {hub_process.returncode}).")
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                return
+        except OSError:
+            time.sleep(0.1)
+    raise TimeoutError(f"hub가 {timeout}초 안에 포트 {port}를 열지 않았습니다.")
+
+
 def main() -> None:
-    """CLI 인자(`--dev`)를 파싱해서 webview 창을 띄운다."""
+    """CLI 인자(`--dev`)를 파싱해서 hub를 띄우고 webview 창을 연다."""
     parser = argparse.ArgumentParser(description="whatever.log 데스크톱 창")
     parser.add_argument(
         "--dev",
@@ -67,8 +98,14 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    webview.create_window("whatever.log", _resolve_url(args.dev))
-    webview.start()
+    hub_process = subprocess.Popen([sys.executable, "-m", "hub"])
+    try:
+        _wait_for_hub(hub_process, HUB_PORT, _HUB_READY_TIMEOUT_SECONDS)
+        webview.create_window("whatever.log", _resolve_url(args.dev))
+        webview.start()
+    finally:
+        hub_process.terminate()
+        hub_process.wait(timeout=5)
 
 
 if __name__ == "__main__":

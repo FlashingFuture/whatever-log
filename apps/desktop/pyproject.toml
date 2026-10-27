@@ -5,7 +5,11 @@ description = "apps/ui를 네이티브 창(webview)으로 띄우는 셸"
 requires-python = ">=3.14"
 dependencies = [
     "pywebview>=5.4",
+    "hub",
 ]
+
+[tool.uv.sources]
+hub = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

@@ -1,0 +1,28 @@
+[project]
+name = "hub"
+version = "0.1.0"
+description = "recorder.db를 읽어 집계 결과를 로컬 HTTP API로 제공하는 중앙 관리소"
+requires-python = ">=3.14"
+dependencies = [
+    "aggregation",
+    "recorder",
+]
+
+[tool.uv.sources]
+aggregation = { workspace = true }
+recorder = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hub"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
