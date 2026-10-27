@@ -1,9 +1,9 @@
 {
   "name": "whatever-log",
   "private": true,
-  "packageManager": "pnpm@9.15.0",
+  "packageManager": "pnpm@12.15.0",
   "engines": {
-    "node": ">=22.22.1"
+    "node": ">=22.23.4"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",

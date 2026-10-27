@@ -6,7 +6,7 @@
 # Note: apps/recorder reads the Windows foreground window (ctypes.windll),
 # so it only runs on a real Windows desktop session — not inside this
 # (Linux) container. The container is still useful there for linting/tests.
-FROM node:24.20.0-bookworm-slim
+FROM node:24.22.1-bookworm-slim
 
 RUN corepack enable
 
