@@ -45,11 +45,20 @@ function renderError(app: Element, message: string): void {
   app.innerHTML = "<h1>오늘 사용 현황</h1>";
   const error = document.createElement("p");
   error.textContent = `불러오지 못했습니다: ${message}`;
-  app.append(error);
+
+  // hub가 콜드 스타트로 늦게 뜨면 desktop은 이 화면을 보여준 채로 창을 연다
+  // (apps/desktop/__main__.py의 _wait_for_hub_port 타임아웃 처리). hub는
+  // 백그라운드에서 계속 재시도되니, 다시 열지 않고도 재시도할 방법이 있어야
+  // 한다.
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.textContent = "다시 시도";
+  retry.addEventListener("click", () => loadUsage(app));
+
+  app.append(error, retry);
 }
 
-const app = document.querySelector("#app");
-if (app) {
+function loadUsage(app: Element): void {
   fetch(`${HUB_URL}/api/today`)
     .then((response) => {
       // fetch()는 HTTP 상태와 무관하게 resolve된다 — hub가 DB를 못 읽어
@@ -62,4 +71,9 @@ if (app) {
     })
     .then((usage) => renderUsage(app, usage))
     .catch((error: unknown) => renderError(app, String(error)));
+}
+
+const app = document.querySelector("#app");
+if (app) {
+  loadUsage(app);
 }
