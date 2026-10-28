@@ -116,8 +116,8 @@ recorder의 `supervisor.py`/`healthcheck.py`/`__main__.py`도 이 공통 모듈�
 
 ## 타입(인터페이스)을 패키지에서 관리하는 구조
 
-`aggregation`/`hub`는 같은 언어(Python)라 공유 타입을 안 쓸 이유가 없어서, `today_usage()`의
-반환 모양을 `TypedDict`(`ProcessUsage`, `TodayUsage`)로 `packages/aggregation`에 정의해뒀다.
+`aggregation`/`hub`는 같은 언어(Python)라 공유 타입을 안 쓸 이유가 없어서, 집계 함수의
+반환 모양을 `TypedDict`(`ProcessUsage`, `RangeUsage`)로 `packages/aggregation`에 정의해뒀다.
 `apps/ui`(TS)는 언어 경계를 넘어가므로 지금은 독립된 `interface`를 유지한다 — 엔드포인트가
 하나뿐인 지금 JSON Schema/codegen 같은 인프라를 들이는 건 과한 선투자라고 보고, 엔드포인트가
 늘어나거나 모양이 복잡해지면 그때 공유 스펙을 두는 걸 고려한다.
@@ -151,3 +151,31 @@ recorder의 `supervisor.py`/`healthcheck.py`/`__main__.py`도 이 공통 모듈�
   `[project]`가 없는 "virtual workspace root"라서 기본 동작으로 전체 멤버가 설치됐다
   (`uv run pytest`도 바로 통과). 리뷰가 가정한 문제는 루트에 `[project]`가 있는
   워크스페이스에서나 해당하는 것으로 보인다.
+
+## "오늘" 한 줄 요약에서 "최근 24시간" 막대 차트로
+
+`today_usage()`(로컬 오늘, foreground 시간만)를 `packages/aggregation/src/aggregation/range.py`의
+`usage_by_range(conn, start, end)`로 대체했다 — 임의의 `[start, end)` UTC 구간을 받는
+범용 함수로 일반화해서, 나중에 기간 선택 UI가 붙어도 그대로 재사용할 수 있게 했다.
+hub는 지금 `range=24h`(최근 24시간, rolling) 하나만 지원하고(`/api/usage?range=24h`),
+모르는 값은 400으로 거부한다 — 기간 선택 UI가 올 자리를 명시적으로 남겨둔 것이다.
+
+집계 결과도 필드 하나(`seconds`)에서 둘로 늘었다:
+
+- `active_seconds`: foreground였고 동시에 idle(90초 이상 입력 없음, 자세한 건
+  `docs/2026-10-idle-threshold.md`)이 아니었던 시간 — 막대의 진한 색.
+- `total_seconds`: foreground 여부·idle 여부와 무관하게 창이 떠 있기만 했으면
+  더한 시간(`tick_windowed_processes` 기반, background 포함) — 막대의 연한 색.
+  여러 프로세스가 동시에 떠 있으면 같은 구간이 각자에게 중복으로 더해진다(서로
+  다른 프로세스의 "열려 있던 시간"이라 겹치는 게 맞다 — `total_seconds`를 모든
+  프로세스에 대해 그냥 더하면 실제 경과 시간보다 커질 수 있다는 뜻이기도 하다).
+
+"UTC 오늘"과 "로컬 오늘" 중 하나를 고르는 대신 "최근 24시간"을 택한 이유: UTC
+오늘은 한국 시간(UTC+9) 기준 자정이 아니라 오전 9시에 날짜가 바뀌어서 사용자
+체감과 안 맞고, 로컬 오늘은 타임존/DST 경계 처리가 또 필요하다(이미 한 번 버그를
+냈던 부분). 최근 24시간은 그런 경계 계산이 전혀 필요 없다.
+
+`apps/ui`는 차트 라이브러리 없이 CSS 중첩 div(연한 색 막대 안에 진한 색 막대를
+폭만 다르게 겹침)로 그린다 — 지금은 "프로세스별 막대 하나"짜리 단순한 화면이라
+라이브러리를 들일 이유가 없고, 나중에 차트 종류가 늘어나면(시간대별 타임라인 등)
+그때 고려한다.

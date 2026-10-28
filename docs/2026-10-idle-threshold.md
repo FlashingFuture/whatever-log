@@ -1,0 +1,55 @@
+# idle 판정 임계값
+
+"최근 24시간 사용 현황" 막대 차트에서 "foreground에서 idle하지 않았던(활성) 시간"을
+판정하려면 `seconds_since_last_input`이 얼마 이상이면 idle로 볼지 임계값이 필요하다.
+지금은 **90초**로 잠정 결정했다 — 근거와, 왜 다른 툴의 값을 그대로 못 가져다 썼는지를
+정리해둔다.
+
+## 찾아본 레퍼런스
+
+**유사 툴들의 idle/AFK 임계값** (대부분 명시적 근거 설명은 없음):
+
+- **ActivityWatch**: 고정 180초(3분). 명시적 근거는 못 찾았고, 포럼에서 한 유저가
+  "짧은 타임아웃으로 기록해두면 나중에 더 긴 타임아웃으로 후처리해서 합칠 수 있지만
+  반대는 안 된다"는 이유를 추정으로 들었다 — 보존적으로 짧게 잡은 것으로 보인다.
+  ([ActivityWatch forum](https://forum.activitywatch.net/t/disable-or-prolong-afk-watcher/483))
+- **RescueTime**: 고정 5분(300초).
+  ([RescueTime help](https://newrescuetime.helpscoutdocs.com/article/369-what-does-rescuetime-do-when-i-am-away-from-my-computer))
+- **직원 모니터링 툴**(Hubstaff, Time Doctor 등): 역할별로 5~30분. 지식노동자는
+  10~20분 이상 추천하는 경우도 있다.
+
+**집중력/주의 전환 관련 인지과학 연구** (Gloria Mark, UC Irvine):
+
+- 컴퓨터로 작업할 때 한 화면/작업에 머무는 시간이 평균 **40~47초**밖에 안 된다 —
+  2004년엔 2.5분이었는데 지금은 훨씬 짧아졌다고 한다.
+  ([UC Irvine Informatics](https://www.informatics.uci.edu/?p=7800))
+- 한 번 중단되면 원래 작업으로 완전히 돌아오기까지 평균 **23~25분** 걸린다(CHI 2005).
+  ([관련 보도](https://inc.com/jessica-stillman/research-the-attention-span-of-the-average-digital-worker-is-all-of-40-seconds.html))
+- 3초짜리 아주 짧은 방해도 그 이후 실수율을 2배로 높인다(Michigan State 연구).
+
+## 왜 그대로 못 가져다 썼는지
+
+이 둘은 서로 다른 질문에 답하는 수치라, 그대로 쓰면 안 된다.
+
+- aw/RescueTime의 3~5분, 직원 모니터링 툴의 5~30분은 "자리를 완전히 비웠는지(AFK)"를
+  판정하는 임계값이다. 우리가 보려는 건 그거랑 다르다 — "이 창을 얼마나 **몰입해서**
+  썼는지"를 "그냥 떠있던 시간"과 구분하려는 것이다. AFK용 값을 그대로 쓰면 너무
+  느슨해서, 중간에 몇 분씩 딴짓해도 전부 "활성"으로 뭉개진다. 직원 모니터링 툴의
+  5~30분은 책임 추궁 방지 목적으로 일부러 길게 잡힌 값이라 더 안 맞는다.
+- Gloria Mark의 연구(40~47초 단위로 전환)는 반대 방향의 위험을 보여준다 — 너무 짧은
+  임계값(15~30초)을 쓰면, 잠깐 생각하거나 읽는 동안의 자연스러운 멈춤까지 "idle"로
+  끊어버려서 오히려 활성 시간을 과소평가하게 된다.
+
+## 결정
+
+recorder 기본 샘플링 간격(15초)의 6배인 **90초**를 잠정값으로 쓴다
+(`packages/aggregation/src/aggregation/range.py`의 `IDLE_THRESHOLD_SECONDS`). "진짜 손을
+뗀 것"과 "짧게 멈춘 것"을 구분하는 균형점으로 60~90초 사이를 보고 있었는데, 조금 더
+여유를 둔 쪽을 골랐다.
+
+## 남겨둔 과제
+
+이건 정답이 있는 값이 아니라 보정이 필요한 파라미터다. 실제 사용 데이터를 쌓은 뒤
+직접 눈으로 비교해보면서(예: "방금 5분 쉰 걸 활성으로 잡았나?") 조정하는 게 맞다.
+지금은 상수(`IDLE_THRESHOLD_SECONDS`)로 분리해뒀으니 값만 바꾸면 되고, 나중에
+설정 화면이 생기면 사용자가 직접 조정하게 할 수도 있다.
