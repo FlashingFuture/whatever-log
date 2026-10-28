@@ -23,13 +23,18 @@ IDLE_THRESHOLD_SECONDS = 90.0
 
 
 class ProcessUsage(TypedDict):
-    """프로세스 하나의 구간 내 사용 시간."""
+    """프로세스 하나의 구간 내 사용 시간. 세 값은 서로 겹치지 않고
+    active_seconds + idle_seconds + background_seconds == total_seconds다."""
 
     process: str
     active_seconds: float
-    """foreground였고 동시에 idle이 아니었던 시간(막대 차트의 진한 색)."""
+    """foreground였고 동시에 idle이 아니었던 시간."""
+    idle_seconds: float
+    """foreground였지만 idle_threshold_seconds 이상 입력이 없었던(idle) 시간."""
+    background_seconds: float
+    """foreground가 아니었지만 창이 떠 있던(background) 시간."""
     total_seconds: float
-    """foreground(idle 포함) 또는 background로 떠 있던 시간 전체(연한 색까지 합친 총합)."""
+    """위 세 값의 합."""
 
 
 class RangeUsage(TypedDict):
@@ -47,17 +52,20 @@ def usage_by_range(
     *,
     idle_threshold_seconds: float = IDLE_THRESHOLD_SECONDS,
 ) -> RangeUsage:
-    """[start, end) 구간의 틱을 프로세스별 active/total 사용 시간(초)으로 집계한다.
+    """[start, end) 구간의 틱을 프로세스별 active/idle/background 시간(초)으로 집계한다.
 
     각 틱이 대표하는 구간의 길이는 다음 틱까지의 거리로 보고(마지막 틱은
-    다음 틱이 없어 집계에서 뺀다), 그 구간 동안:
-    - total_seconds: 그 틱 시점에 창이 떠 있던(tick_windowed_processes) 모든
-      프로세스에 더한다 — foreground가 아니어도(background) 포함된다. 여러
-      프로세스가 동시에 떠 있으면 같은 구간이 각자에게 중복으로 더해진다
-      (서로 다른 프로세스의 "열려 있던 시간"이라 겹치는 게 맞다).
-    - active_seconds: 그 틱의 foreground 프로세스가, idle_threshold_seconds
-      이상 idle 상태가 아니었을 때만 더한다. foreground는 한 틱에 하나뿐이라
-      겹치지 않는다.
+    다음 틱이 없어 집계에서 뺀다), 그 구간 동안 틱 시점에 열려 있던 각
+    프로세스를 아래 셋 중 **정확히 하나**로 분류한다(겹치지 않음):
+
+    - active_seconds: 그 틱의 foreground 프로세스였고, idle_threshold_seconds
+      이상 idle 상태가 아니었다.
+    - idle_seconds: 그 틱의 foreground 프로세스였지만, idle_threshold_seconds
+      이상 idle 상태였다.
+    - background_seconds: foreground가 아니었지만 창이 떠 있었다
+      (tick_windowed_processes). 여러 프로세스가 동시에 떠 있으면 같은
+      구간이 각자에게 중복으로 더해진다(서로 다른 프로세스의 "열려 있던
+      시간"이라 겹치는 게 맞다).
     """
     start_iso, end_iso = start.isoformat(), end.isoformat()
 
@@ -90,9 +98,10 @@ def usage_by_range(
         windowed_by_tick.setdefault(tick_id, set()).add(name)
 
     active_seconds: dict[str, float] = {}
-    total_seconds: dict[str, float] = {}
+    idle_seconds: dict[str, float] = {}
+    background_seconds: dict[str, float] = {}
 
-    for (tick_id, sampled_at, fg_name, idle_seconds), (_, next_sampled_at, _, _) in zip(
+    for (tick_id, sampled_at, fg_name, since_last_input), (_, next_sampled_at, _, _) in zip(
         ticks, ticks[1:]
     ):
         gap = (
@@ -104,26 +113,34 @@ def usage_by_range(
         # get_foreground_process_name()과 get_windowed_process_names()는
         # 서로 독립적으로 조회된다(window_snapshot.py) — 제목 없는 foreground
         # 창은 창 목록 필터(GetWindowTextLengthW == 0 제외)에서 빠질 수 있다.
-        # foreground를 total에도 직접 합쳐야 active_seconds <= total_seconds가
-        # 항상 보장된다.
-        total_names = windowed_by_tick.get(tick_id, set())
+        # foreground를 열려 있던 프로세스 집합에 직접 합쳐야 누락 없이 active/idle
+        # 로 분류된다.
+        open_names = windowed_by_tick.get(tick_id, set())
         if fg_name is not None:
-            total_names = total_names | {fg_name}
-        for name in total_names:
-            total_seconds[name] = total_seconds.get(name, 0.0) + gap
+            open_names = open_names | {fg_name}
 
-        if fg_name is not None and idle_seconds < idle_threshold_seconds:
-            active_seconds[fg_name] = active_seconds.get(fg_name, 0.0) + gap
+        for name in open_names:
+            if name == fg_name:
+                bucket = active_seconds if since_last_input < idle_threshold_seconds else idle_seconds
+            else:
+                bucket = background_seconds
+            bucket[name] = bucket.get(name, 0.0) + gap
 
-    names = set(active_seconds) | set(total_seconds)
-    by_process: list[ProcessUsage] = [
-        {
-            "process": name,
-            "active_seconds": active_seconds.get(name, 0.0),
-            "total_seconds": total_seconds.get(name, 0.0),
-        }
-        for name in names
-    ]
+    names = set(active_seconds) | set(idle_seconds) | set(background_seconds)
+    by_process: list[ProcessUsage] = []
+    for name in names:
+        active = active_seconds.get(name, 0.0)
+        idle = idle_seconds.get(name, 0.0)
+        background = background_seconds.get(name, 0.0)
+        by_process.append(
+            {
+                "process": name,
+                "active_seconds": active,
+                "idle_seconds": idle,
+                "background_seconds": background,
+                "total_seconds": active + idle + background,
+            }
+        )
     by_process.sort(key=lambda row: -row["total_seconds"])
 
     return {"start": start_iso, "end": end_iso, "by_process": by_process}

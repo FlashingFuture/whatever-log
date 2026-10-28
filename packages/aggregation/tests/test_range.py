@@ -21,36 +21,36 @@ def _tick(
     )
 
 
-def test_active_seconds_only_counts_non_idle_foreground_time(tmp_path) -> None:
-    """foreground였어도 idle_threshold_seconds 이상 idle이었으면 active에서
-    빠져야 하고, total에는(background 포함이라) 그대로 들어가야 한다."""
+def test_splits_foreground_time_into_active_and_idle(tmp_path) -> None:
+    """foreground였던 시간은 idle 여부에 따라 active와 idle로 나뉘어야 하고,
+    둘이 섞이거나 겹치면 안 된다."""
     conn = open_db(tmp_path / "recorder.db")
     now = datetime.now(UTC)
-    save_tick(conn, _tick(now, "chrome.exe", {"chrome.exe", "explorer.exe"}, idle_seconds=0.0))
+    save_tick(conn, _tick(now, "chrome.exe", {"chrome.exe"}, idle_seconds=0.0))
     save_tick(
         conn,
         _tick(
             now + timedelta(seconds=15),
             "chrome.exe",
-            {"chrome.exe", "explorer.exe"},
+            {"chrome.exe"},
             idle_seconds=100.0,  # IDLE_THRESHOLD_SECONDS(90)를 넘김
         ),
     )
-    save_tick(conn, _tick(now + timedelta(seconds=30), "code.exe", {"code.exe", "explorer.exe"}))
+    save_tick(conn, _tick(now + timedelta(seconds=30), "chrome.exe", {"chrome.exe"}))
 
     result = usage_by_range(conn, now, now + timedelta(seconds=31))
 
-    by_process = {row["process"]: row for row in result["by_process"]}
-    assert by_process["chrome.exe"]["active_seconds"] == 15.0  # 첫 구간만
-    assert by_process["chrome.exe"]["total_seconds"] == 30.0  # 두 구간 다
-    assert by_process["explorer.exe"]["active_seconds"] == 0.0  # foreground였던 적 없음
-    assert by_process["explorer.exe"]["total_seconds"] == 30.0  # 두 구간 다 떠 있었음
-    assert "code.exe" not in by_process  # 마지막 틱이라 다음 구간이 없음
+    row = result["by_process"][0]
+    assert row["process"] == "chrome.exe"
+    assert row["active_seconds"] == 15.0  # [0,15): idle=0 at t0 → active
+    assert row["idle_seconds"] == 15.0  # [15,30): idle=100 at t15 → idle
+    assert row["background_seconds"] == 0.0
+    assert row["total_seconds"] == 30.0
 
 
-def test_background_windows_accumulate_total_without_being_foreground(tmp_path) -> None:
-    """동시에 떠 있던 여러 창은 각자 total_seconds를 중복으로 받아야 한다 —
-    서로 다른 프로세스의 "열려 있던 시간"이라 겹치는 게 맞다."""
+def test_background_windows_accumulate_without_being_foreground(tmp_path) -> None:
+    """동시에 떠 있던 여러 창은 각자 background_seconds를 중복으로 받아야
+    한다 — 서로 다른 프로세스의 "열려 있던 시간"이라 겹치는 게 맞다."""
     conn = open_db(tmp_path / "recorder.db")
     now = datetime.now(UTC)
     save_tick(conn, _tick(now, "code.exe", {"code.exe", "spotify.exe", "slack.exe"}))
@@ -60,15 +60,17 @@ def test_background_windows_accumulate_total_without_being_foreground(tmp_path) 
 
     by_process = {row["process"]: row for row in result["by_process"]}
     assert by_process["code.exe"]["active_seconds"] == 15.0
+    assert by_process["code.exe"]["background_seconds"] == 0.0
     assert by_process["spotify.exe"]["active_seconds"] == 0.0
+    assert by_process["spotify.exe"]["background_seconds"] == 15.0
     assert by_process["spotify.exe"]["total_seconds"] == 15.0
-    assert by_process["slack.exe"]["total_seconds"] == 15.0
+    assert by_process["slack.exe"]["background_seconds"] == 15.0
 
 
-def test_foreground_is_counted_in_total_even_when_missing_from_windowed_set(tmp_path) -> None:
+def test_foreground_is_counted_even_when_missing_from_windowed_set(tmp_path) -> None:
     """get_foreground_process_name()과 get_windowed_process_names()는 서로
     독립적으로 조회된다 — 제목 없는 foreground 창은 창 목록 필터에서 빠질 수
-    있다. 이 경우에도 active_seconds <= total_seconds가 보장되어야 한다."""
+    있다. 이 경우에도 active/idle 집계에서 빠지면 안 된다."""
     conn = open_db(tmp_path / "recorder.db")
     now = datetime.now(UTC)
     # "ghost.exe"가 foreground지만 windowed_processes에는 없는 상황을 흉내낸다.
@@ -83,8 +85,8 @@ def test_foreground_is_counted_in_total_even_when_missing_from_windowed_set(tmp_
 
 
 def test_excludes_gaps_longer_than_threshold(tmp_path) -> None:
-    """PC 절전이나 recorder 중단으로 생긴 긴 틱 간격은 active/total 어느 쪽에도
-    더해지면 안 된다."""
+    """PC 절전이나 recorder 중단으로 생긴 긴 틱 간격은 어느 쪽에도 더해지면
+    안 된다."""
     conn = open_db(tmp_path / "recorder.db")
     now = datetime.now(UTC)
     save_tick(conn, _tick(now, "chrome.exe", {"chrome.exe"}))
