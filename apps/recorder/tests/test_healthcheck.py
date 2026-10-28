@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from recorder import healthcheck
-from recorder.lock import AlreadyRunningError
+from supervision.lock import AlreadyRunningError
 
 
 def _make_db_with_last_tick(db_path, when: datetime) -> None:

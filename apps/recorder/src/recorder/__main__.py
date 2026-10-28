@@ -14,10 +14,10 @@ import sys
 import time
 from pathlib import Path
 
-from recorder.lock import AlreadyRunningError, acquire_lock
-from recorder.log_setup import configure_logging
+from supervision.log_setup import configure_logging
 from recorder.sampling import sample_tick
 from recorder.storage import open_db, save_tick
+from supervision.lock import AlreadyRunningError, acquire_lock
 
 DEFAULT_INTERVAL_SECONDS = 15.0
 

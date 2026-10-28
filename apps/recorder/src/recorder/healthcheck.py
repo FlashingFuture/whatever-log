@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from recorder.__main__ import DEFAULT_DB_PATH, DEFAULT_INTERVAL_SECONDS, _lock_path_for_db
-from recorder.lock import AlreadyRunningError, acquire_lock
+from supervision.lock import AlreadyRunningError, acquire_lock
 
 # 틱이 이 배수(interval 기준)만큼 안 들어오면 "멈춘 것"으로 본다. 체크 시점이
 # 다음 샘플링 직전일 수도 있어서 1배보다는 여유를 둔다.

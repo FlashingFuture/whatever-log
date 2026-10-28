@@ -54,3 +54,27 @@
 멤버)이고, `apps/desktop`은 그걸 네이티브 창으로 띄우는 셸(Python/uv)입니다 — 두 앱으로
 나눈 이유는 pnpm 워크스페이스가 `apps/*` 바로 아래 `package.json`만 멤버로 잡고, Python
 쪽 src-layout 관습(`src/<패키지명>`)이 Vite의 `src/`와 한 폴더에서 충돌하기 때문입니다.
+
+집계/조회 API는 `apps/hub`(중앙 관리소)가 전담합니다(`docs/2026-10-hub-architecture.md`
+참고). recorder는 수집만, hub는 recorder.db를 읽기 전용으로 열어 집계 결과를 로컬 HTTP
+API로 서빙만 합니다 — `apps/desktop`이 창을 열 때 hub를 자식 프로세스로 함께 띄웁니다.
+집계 쿼리 자체는 `packages/aggregation`에 재사용 가능한 형태로 분리했습니다.
+`packages/summary`(AI 요약)는 Phase 3 전까지 폴더 구조만 있고 구현은 없습니다.
+
+중복 실행을 막는 lock과 자식 프로세스 재시작(crash-loop 포기 포함) 로직은
+`packages/supervision`에 있습니다. 원래 `apps/recorder`에만 있던 걸 `apps/hub`도 똑같이
+필요해져서 공통 모듈로 뺐습니다 — recorder/hub 둘 다 이 모듈을 씁니다
+(`docs/2026-10-hub-architecture.md` 참고).
+
+Python 쪽도 pnpm workspace와 같은 방식으로 uv workspace(루트 `pyproject.toml`의
+`[tool.uv.workspace]`)로 묶여 있습니다 — 여러 앱이 서로를 import하면서 앱별 독립
+`.venv`로는 부족해졌기 때문입니다. `uv sync`/`uv run`은 루트에서 한 번만 하면 되고,
+`apps/recorder`처럼 각 앱 디렉터리 안에서 실행해도 가장 가까운 워크스페이스 루트의
+공유 `.venv`를 그대로 씁니다.
+
+**주의**: Windows 자동 시작(Registry Run 키)은 `recorder.autostart`가 등록 시점의
+`pythonw.exe` 경로를 그대로 문자열로 박아둡니다. `.venv` 위치가 바뀌면(이번 workspace
+전환처럼) 기존에 등록해둔 경로가 조용히 깨지고, 아무 에러 없이 다음 로그인부터 recorder가
+그냥 안 뜬다 — 실제로 이 전환 때 이 문제가 터져서 recorder가 몇 시간 동안 안 돌고
+있었다. `.venv` 경로가 바뀌면 `uv run python -m recorder.autostart --enable`을 꼭 다시
+실행해야 한다.

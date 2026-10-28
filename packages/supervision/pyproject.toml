@@ -1,0 +1,23 @@
+[project]
+name = "supervision"
+version = "0.1.0"
+description = "중복 실행을 막는 lock과, 자식 프로세스를 감시하며 재시작하는 supervisor"
+requires-python = ">=3.14"
+dependencies = [
+    "filelock>=4.2.4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/supervision"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

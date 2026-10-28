@@ -1,0 +1,24 @@
+[tool.uv.workspace]
+members = [
+    "apps/recorder",
+    "apps/desktop",
+    "apps/hub",
+    "packages/aggregation",
+    "packages/summary",
+    "packages/supervision",
+]
+
+[tool.pytest.ini_options]
+# 여러 앱의 tests/test_main.py처럼 파일명이 겹치는 경우, 기본 import 방식은
+# 패키지 이름만 보고 먼저 import된 모듈을 재사용해버려서 다른 앱의 테스트를
+# 엉뚱하게 가져와 충돌한다. importlib 모드는 파일 경로로 모듈을 구분해서 이
+# 문제를 피한다. (각 앱 디렉터리 안에서 `uv run pytest`로 그 앱만 돌릴 때는
+# 그 앱의 pyproject.toml이 더 가까운 설정이라 이 설정과 무관하게 동작한다.)
+addopts = "--import-mode=importlib"
+testpaths = [
+    "apps/recorder/tests",
+    "apps/desktop/tests",
+    "apps/hub/tests",
+    "packages/aggregation/tests",
+    "packages/supervision/tests",
+]
