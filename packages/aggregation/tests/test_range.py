@@ -65,6 +65,23 @@ def test_background_windows_accumulate_total_without_being_foreground(tmp_path) 
     assert by_process["slack.exe"]["total_seconds"] == 15.0
 
 
+def test_foreground_is_counted_in_total_even_when_missing_from_windowed_set(tmp_path) -> None:
+    """get_foreground_process_name()과 get_windowed_process_names()는 서로
+    독립적으로 조회된다 — 제목 없는 foreground 창은 창 목록 필터에서 빠질 수
+    있다. 이 경우에도 active_seconds <= total_seconds가 보장되어야 한다."""
+    conn = open_db(tmp_path / "recorder.db")
+    now = datetime.now(UTC)
+    # "ghost.exe"가 foreground지만 windowed_processes에는 없는 상황을 흉내낸다.
+    save_tick(conn, _tick(now, "ghost.exe", set()))
+    save_tick(conn, _tick(now + timedelta(seconds=15), "ghost.exe", set()))
+
+    result = usage_by_range(conn, now, now + timedelta(seconds=16))
+
+    by_process = {row["process"]: row for row in result["by_process"]}
+    assert by_process["ghost.exe"]["active_seconds"] == 15.0
+    assert by_process["ghost.exe"]["total_seconds"] == 15.0
+
+
 def test_excludes_gaps_longer_than_threshold(tmp_path) -> None:
     """PC 절전이나 recorder 중단으로 생긴 긴 틱 간격은 active/total 어느 쪽에도
     더해지면 안 된다."""

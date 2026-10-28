@@ -14,17 +14,16 @@
   반대는 안 된다"는 이유를 추정으로 들었다 — 보존적으로 짧게 잡은 것으로 보인다.
   ([ActivityWatch forum](https://forum.activitywatch.net/t/disable-or-prolong-afk-watcher/483))
 - **RescueTime**: 고정 5분(300초).
-  ([RescueTime help](https://newrescuetime.helpscoutdocs.com/article/369-what-does-rescuetime-do-when-i-am-away-from-my-computer))
+  ([RescueTime help](https://help.rescuetime.com/article/19-why-dont-i-see-60-minutes-in-my-by-hour))
 - **직원 모니터링 툴**(Hubstaff, Time Doctor 등): 역할별로 5~30분. 지식노동자는
   10~20분 이상 추천하는 경우도 있다.
 
 **집중력/주의 전환 관련 인지과학 연구** (Gloria Mark, UC Irvine):
 
 - 컴퓨터로 작업할 때 한 화면/작업에 머무는 시간이 평균 **40~47초**밖에 안 된다 —
-  2004년엔 2.5분이었는데 지금은 훨씬 짧아졌다고 한다.
-  ([UC Irvine Informatics](https://www.informatics.uci.edu/?p=7800))
-- 한 번 중단되면 원래 작업으로 완전히 돌아오기까지 평균 **23~25분** 걸린다(CHI 2005).
-  ([관련 보도](https://inc.com/jessica-stillman/research-the-attention-span-of-the-average-digital-worker-is-all-of-40-seconds.html))
+  2003년엔 2.5분이었는데 지금은 훨씬 짧아졌다고 한다.
+- 한 번 중단되면 원래 작업으로 완전히 돌아오기까지 평균 **약 25분** 걸린다.
+  ([UCI News — Gloria Mark 인터뷰](https://news.uci.edu/2023/05/05/uci-podcast-if-you-cant-pay-attention-youre-not-alone))
 - 3초짜리 아주 짧은 방해도 그 이후 실수율을 2배로 높인다(Michigan State 연구).
 
 ## 왜 그대로 못 가져다 썼는지

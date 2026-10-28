@@ -72,14 +72,17 @@ def usage_by_range(
     if len(ticks) < 2:
         return {"start": start_iso, "end": end_iso, "by_process": []}
 
-    tick_ids = [row[0] for row in ticks]
-    placeholders = ",".join("?" * len(tick_ids))
+    # 틱 id를 모아서 IN (...)에 바인딩하지 않는다 — recorder는 --interval 1초도
+    # 허용하는데, 그 간격으로 24시간이면 틱이 8만 개를 넘어 SQLite의 파라미터
+    # 개수 한도(기본 32766개)를 넘길 수 있다. 대신 틱과 같은 sampled_at 범위로
+    # 직접 조인한다.
     windowed_rows = conn.execute(
         "SELECT tick_windowed_processes.tick_id, processes.name "
         "FROM tick_windowed_processes "
         "JOIN processes ON processes.id = tick_windowed_processes.process_id "
-        f"WHERE tick_windowed_processes.tick_id IN ({placeholders})",
-        tick_ids,
+        "JOIN ticks ON ticks.id = tick_windowed_processes.tick_id "
+        "WHERE ticks.sampled_at >= ? AND ticks.sampled_at < ?",
+        (start_iso, end_iso),
     ).fetchall()
 
     windowed_by_tick: dict[int, set[str]] = {}
@@ -98,7 +101,15 @@ def usage_by_range(
         if gap > _MAX_GAP_SECONDS:
             continue
 
-        for name in windowed_by_tick.get(tick_id, ()):
+        # get_foreground_process_name()과 get_windowed_process_names()는
+        # 서로 독립적으로 조회된다(window_snapshot.py) — 제목 없는 foreground
+        # 창은 창 목록 필터(GetWindowTextLengthW == 0 제외)에서 빠질 수 있다.
+        # foreground를 total에도 직접 합쳐야 active_seconds <= total_seconds가
+        # 항상 보장된다.
+        total_names = windowed_by_tick.get(tick_id, set())
+        if fg_name is not None:
+            total_names = total_names | {fg_name}
+        for name in total_names:
             total_seconds[name] = total_seconds.get(name, 0.0) + gap
 
         if fg_name is not None and idle_seconds < idle_threshold_seconds:
