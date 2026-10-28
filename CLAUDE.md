@@ -71,3 +71,10 @@ Python 쪽도 pnpm workspace와 같은 방식으로 uv workspace(루트 `pyproje
 `.venv`로는 부족해졌기 때문입니다. `uv sync`/`uv run`은 루트에서 한 번만 하면 되고,
 `apps/recorder`처럼 각 앱 디렉터리 안에서 실행해도 가장 가까운 워크스페이스 루트의
 공유 `.venv`를 그대로 씁니다.
+
+**주의**: Windows 자동 시작(Registry Run 키)은 `recorder.autostart`가 등록 시점의
+`pythonw.exe` 경로를 그대로 문자열로 박아둡니다. `.venv` 위치가 바뀌면(이번 workspace
+전환처럼) 기존에 등록해둔 경로가 조용히 깨지고, 아무 에러 없이 다음 로그인부터 recorder가
+그냥 안 뜬다 — 실제로 이 전환 때 이 문제가 터져서 recorder가 몇 시간 동안 안 돌고
+있었다. `.venv` 경로가 바뀌면 `uv run python -m recorder.autostart --enable`을 꼭 다시
+실행해야 한다.
