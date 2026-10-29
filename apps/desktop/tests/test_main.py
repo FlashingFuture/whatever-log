@@ -131,11 +131,29 @@ def test_main_exits_without_launching_hub_when_dev_server_is_down(monkeypatch) -
     monkeypatch.setattr(main_module, "DEV_SERVER_URL", "http://127.0.0.1:65535")
     monkeypatch.setattr(main_module, "supervise", MagicMock())
 
-    with pytest.raises(SystemExit) as exc_info:
+    with patch("desktop.__main__.webview"), pytest.raises(SystemExit) as exc_info:
         main_module.main()
 
     assert exc_info.value.code == 1
     main_module.supervise.assert_not_called()
+
+
+def test_dev_server_missing_message_is_shown_in_window_without_console(monkeypatch) -> None:
+    """pythonw.exe로 띄우면 sys.stderr가 None이라 콘솔 안내가 어디에도 안
+    보인다 — 창 안에도 같은 안내를 띄워야 창 없이 조용히 종료되지 않는다."""
+    import desktop.__main__ as main_module
+
+    monkeypatch.setattr(sys, "argv", ["desktop", "--dev"])
+    monkeypatch.setattr(sys, "stderr", None)
+    monkeypatch.setattr(main_module, "DEV_SERVER_URL", "http://127.0.0.1:65535")
+    monkeypatch.setattr(main_module, "supervise", MagicMock())
+
+    with patch("desktop.__main__.webview") as mock_webview, pytest.raises(SystemExit):
+        main_module.main()
+
+    page = mock_webview.create_window.call_args.kwargs["html"]
+    assert "pnpm run dev" in page
+    mock_webview.start.assert_called_once()
 
 
 def test_main_enables_devtools_in_dev_mode(tmp_path, monkeypatch) -> None:

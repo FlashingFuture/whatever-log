@@ -32,6 +32,7 @@ stop_event로 신호를 보낸다.
 """
 
 import argparse
+import html
 import logging
 import socket
 import sys
@@ -104,6 +105,11 @@ def _dev_server_is_up(timeout: float) -> bool:
         return False
 
 
+def _message_page(message: str) -> str:
+    lines = "<br>".join(html.escape(line) for line in message.splitlines())
+    return f'<body style="font-family: system-ui, sans-serif; margin: 2rem;">{lines}</body>'
+
+
 def _classify_hub_exit(exit_code: int) -> str | None:
     """hub가 재시도해도 안 풀리는 종료 코드로 죽었으면 멈출 사유를, 크래시면
     None을 돌려준다(recorder.supervisor._classify_exit와 같은 패턴)."""
@@ -144,11 +150,16 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.dev and not _dev_server_is_up(timeout=1.0):
-        print(
+        message = (
             f"Vite dev server({DEV_SERVER_URL})가 떠 있지 않습니다.\n"
-            "apps/ui에서 `pnpm run dev`를 먼저 실행한 뒤 다시 시도하세요.",
-            file=sys.stderr,
+            "apps/ui에서 `pnpm run dev`를 먼저 실행한 뒤 다시 시도하세요."
         )
+        if sys.stderr is not None:
+            print(message, file=sys.stderr)
+        # pythonw.exe로 띄우면 sys.stderr가 None이라 위 출력이 어디에도 안
+        # 남고 창도 없이 종료돼버린다 — 창 안에도 같은 안내를 띄운다.
+        webview.create_window("whatever.log", html=_message_page(message))
+        webview.start()
         sys.exit(1)
 
     configure_logging(hub_supervisor_logger, DEFAULT_HUB_SUPERVISOR_LOG_PATH)
