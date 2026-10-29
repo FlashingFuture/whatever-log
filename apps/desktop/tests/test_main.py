@@ -11,6 +11,7 @@ from desktop.__main__ import (
     HUB_EXIT_ALREADY_RUNNING,
     HUB_EXIT_ARGUMENT_ERROR,
     _classify_hub_exit,
+    _dev_server_is_up,
     _resolve_url,
     _wait_for_hub_port,
 )
@@ -92,6 +93,97 @@ def test_classify_hub_exit_treats_unknown_codes_as_crashes() -> None:
     """모르는 종료 코드는 크래시로 보고 None을 돌려줘서 supervise()가
     재시도하게 해야 한다."""
     assert _classify_hub_exit(1) is None
+
+
+def test_dev_server_is_up_detects_a_listening_port(monkeypatch) -> None:
+    """Vite dev server가 떠 있으면(포트가 열려 있으면) True를 돌려줘야 한다."""
+    import desktop.__main__ as main_module
+
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    port = server.getsockname()[1]
+    threading.Thread(target=server.accept, daemon=True).start()
+
+    try:
+        monkeypatch.setattr(main_module, "DEV_SERVER_URL", f"http://127.0.0.1:{port}")
+        assert _dev_server_is_up(timeout=1.0) is True
+    finally:
+        server.close()
+
+
+def test_dev_server_is_up_returns_false_when_nothing_is_listening(monkeypatch) -> None:
+    """Vite dev server를 안 띄워놓고 --dev로 실행하면, webview가 연결 거부로
+    빈 화면만 보여주기 전에 미리 알아챌 수 있어야 한다."""
+    import desktop.__main__ as main_module
+
+    # 65535는 실제로 열려 있을 가능성이 거의 없는 포트라 연결이 계속 거부된다.
+    monkeypatch.setattr(main_module, "DEV_SERVER_URL", "http://127.0.0.1:65535")
+    assert _dev_server_is_up(timeout=0.3) is False
+
+
+def test_main_exits_without_launching_hub_when_dev_server_is_down(monkeypatch) -> None:
+    """--dev인데 Vite dev server가 안 떠 있으면, hub/webview를 띄우기 전에
+    바로 종료해서 안내 메시지가 보이게 해야 한다."""
+    import desktop.__main__ as main_module
+
+    monkeypatch.setattr(sys, "argv", ["desktop", "--dev"])
+    monkeypatch.setattr(main_module, "DEV_SERVER_URL", "http://127.0.0.1:65535")
+    monkeypatch.setattr(main_module, "supervise", MagicMock())
+
+    with patch("desktop.__main__.webview"), pytest.raises(SystemExit) as exc_info:
+        main_module.main()
+
+    assert exc_info.value.code == 1
+    main_module.supervise.assert_not_called()
+
+
+def test_dev_server_missing_message_is_shown_in_window_without_console(monkeypatch) -> None:
+    """pythonw.exe로 띄우면 sys.stderr가 None이라 콘솔 안내가 어디에도 안
+    보인다 — 창 안에도 같은 안내를 띄워야 창 없이 조용히 종료되지 않는다."""
+    import desktop.__main__ as main_module
+
+    monkeypatch.setattr(sys, "argv", ["desktop", "--dev"])
+    monkeypatch.setattr(sys, "stderr", None)
+    monkeypatch.setattr(main_module, "DEV_SERVER_URL", "http://127.0.0.1:65535")
+    monkeypatch.setattr(main_module, "supervise", MagicMock())
+
+    with patch("desktop.__main__.webview") as mock_webview, pytest.raises(SystemExit):
+        main_module.main()
+
+    page = mock_webview.create_window.call_args.kwargs["html"]
+    assert "pnpm run dev" in page
+    mock_webview.start.assert_called_once()
+
+
+def test_main_enables_devtools_in_dev_mode(tmp_path, monkeypatch) -> None:
+    """--dev일 때는 DevTools를 켜야 한다 — pythonw.exe의 콘솔 없는 환경에서
+    브라우저 개발자 도구 없이는 디버깅할 방법이 없다."""
+    import desktop.__main__ as main_module
+
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    port = server.getsockname()[1]
+    threading.Thread(target=server.accept, daemon=True).start()
+
+    try:
+        monkeypatch.setattr(sys, "argv", ["desktop", "--dev"])
+        monkeypatch.setattr(main_module, "DEV_SERVER_URL", f"http://127.0.0.1:{port}")
+        monkeypatch.setattr(main_module, "HUB_PORT", 65535)
+        monkeypatch.setattr(main_module, "_HUB_READY_TIMEOUT_SECONDS", 0.05)
+        monkeypatch.setattr(main_module, "DEFAULT_HUB_SUPERVISOR_LOG_PATH", tmp_path / "hub-supervisor.log")
+        monkeypatch.setattr(main_module, "supervise", MagicMock())
+
+        try:
+            with patch("desktop.__main__.webview") as mock_webview:
+                main_module.main()
+        finally:
+            main_module.hub_supervisor_logger.handlers.clear()
+
+        mock_webview.start.assert_called_once_with(debug=True)
+    finally:
+        server.close()
 
 
 def test_main_opens_window_even_when_hub_is_not_ready_in_time(tmp_path, monkeypatch) -> None:

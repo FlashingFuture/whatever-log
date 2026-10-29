@@ -22,9 +22,17 @@ stop_event로 신호를 보낸다.
 사용법:
     uv run python -m desktop            # 빌드된 apps/ui/dist 열기
     uv run python -m desktop --dev      # Vite dev server(기본 http://localhost:5173) 열기
+
+`--dev`는 desktop이 Vite dev server를 대신 띄워주는 게 아니라 그 주소를
+가리키기만 한다 — apps/ui에서 `pnpm run dev`를 먼저 실행해둬야 한다. 안
+그러면 webview가 연결 거부로 빈 화면(또는 알아보기 힘든 오류)만 보여준다.
+`--dev`일 때는 webview의 DevTools도 켜진다(`webview.start(debug=True)`) —
+이 앱은 pythonw.exe의 콘솔 없는 환경에서 돌아서 평소엔 브라우저 개발자
+도구로 디버깅할 방법이 없기 때문이다.
 """
 
 import argparse
+import html
 import logging
 import socket
 import sys
@@ -33,6 +41,7 @@ import time
 from functools import partial
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
+from urllib.parse import urlparse
 
 import webview
 from hub.__main__ import DEFAULT_PORT as HUB_PORT
@@ -80,6 +89,27 @@ def _resolve_url(use_dev_server: bool) -> str:
     return _serve_dist(_UI_DIST_DIR)
 
 
+def _dev_server_is_up(timeout: float) -> bool:
+    """Vite dev server(DEV_SERVER_URL)가 떠 있는지 확인한다.
+
+    --dev는 desktop이 그 서버를 대신 띄워주는 게 아니라 가리키기만 하므로,
+    apps/ui에서 `pnpm run dev`를 먼저 실행해놓지 않으면 webview가 연결
+    거부로 빈 화면만 보여준다 — 그 상태에서는 콘솔도 없어서 원인을 알기
+    어렵다. 미리 확인해서 바로 알려준다.
+    """
+    parsed = urlparse(DEV_SERVER_URL)
+    try:
+        with socket.create_connection((parsed.hostname, parsed.port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _message_page(message: str) -> str:
+    lines = "<br>".join(html.escape(line) for line in message.splitlines())
+    return f'<body style="font-family: system-ui, sans-serif; margin: 2rem;">{lines}</body>'
+
+
 def _classify_hub_exit(exit_code: int) -> str | None:
     """hub가 재시도해도 안 풀리는 종료 코드로 죽었으면 멈출 사유를, 크래시면
     None을 돌려준다(recorder.supervisor._classify_exit와 같은 패턴)."""
@@ -119,6 +149,19 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.dev and not _dev_server_is_up(timeout=1.0):
+        message = (
+            f"Vite dev server({DEV_SERVER_URL})가 떠 있지 않습니다.\n"
+            "apps/ui에서 `pnpm run dev`를 먼저 실행한 뒤 다시 시도하세요."
+        )
+        if sys.stderr is not None:
+            print(message, file=sys.stderr)
+        # pythonw.exe로 띄우면 sys.stderr가 None이라 위 출력이 어디에도 안
+        # 남고 창도 없이 종료돼버린다 — 창 안에도 같은 안내를 띄운다.
+        webview.create_window("whatever.log", html=_message_page(message))
+        webview.start()
+        sys.exit(1)
+
     configure_logging(hub_supervisor_logger, DEFAULT_HUB_SUPERVISOR_LOG_PATH)
 
     stop_event = threading.Event()
@@ -145,7 +188,9 @@ def main() -> None:
             # 실패를 감지해서 화면에 에러로 보여준다.
             hub_supervisor_logger.exception("hub 준비를 기다리지 못했지만 창은 엽니다.")
         webview.create_window("whatever.log", _resolve_url(args.dev))
-        webview.start()
+        # --dev일 때 DevTools를 켠다 — 이 앱은 콘솔 없는 환경(pythonw.exe)에서
+        # 돌아서 평소엔 네트워크 탭/콘솔로 디버깅할 방법이 없다.
+        webview.start(debug=args.dev)
     finally:
         stop_event.set()
         supervisor_thread.join(timeout=10)

@@ -116,8 +116,8 @@ recorder의 `supervisor.py`/`healthcheck.py`/`__main__.py`도 이 공통 모듈�
 
 ## 타입(인터페이스)을 패키지에서 관리하는 구조
 
-`aggregation`/`hub`는 같은 언어(Python)라 공유 타입을 안 쓸 이유가 없어서, `today_usage()`의
-반환 모양을 `TypedDict`(`ProcessUsage`, `TodayUsage`)로 `packages/aggregation`에 정의해뒀다.
+`aggregation`/`hub`는 같은 언어(Python)라 공유 타입을 안 쓸 이유가 없어서, 집계 함수의
+반환 모양을 `TypedDict`(`ProcessUsage`, `RangeUsage`)로 `packages/aggregation`에 정의해뒀다.
 `apps/ui`(TS)는 언어 경계를 넘어가므로 지금은 독립된 `interface`를 유지한다 — 엔드포인트가
 하나뿐인 지금 JSON Schema/codegen 같은 인프라를 들이는 건 과한 선투자라고 보고, 엔드포인트가
 늘어나거나 모양이 복잡해지면 그때 공유 스펙을 두는 걸 고려한다.
@@ -151,3 +151,58 @@ recorder의 `supervisor.py`/`healthcheck.py`/`__main__.py`도 이 공통 모듈�
   `[project]`가 없는 "virtual workspace root"라서 기본 동작으로 전체 멤버가 설치됐다
   (`uv run pytest`도 바로 통과). 리뷰가 가정한 문제는 루트에 `[project]`가 있는
   워크스페이스에서나 해당하는 것으로 보인다.
+
+## "오늘" 한 줄 요약에서 "최근 24시간" 막대 차트로
+
+`today_usage()`(로컬 오늘, foreground 시간만)를 `packages/aggregation/src/aggregation/range.py`의
+`usage_by_range(conn, start, end)`로 대체했다 — 임의의 `[start, end)` UTC 구간을 받는
+범용 함수로 일반화해서, 나중에 기간 선택 UI가 붙어도 그대로 재사용할 수 있게 했다.
+hub는 지금 `range=24h`(최근 24시간, rolling) 하나만 지원하고(`/api/usage?range=24h`),
+모르는 값은 400으로 거부한다 — 기간 선택 UI가 올 자리를 명시적으로 남겨둔 것이다.
+
+집계 결과도 필드 하나(`seconds`)에서 세 개로 늘었다 — 처음엔 active/total
+두 개였는데, idle 시간이 "total에서 active를 뺀 나머지"에 background 시간과
+뭉쳐 들어가서 화면에서 둘을 구분할 수 없었다. 틱마다 열려 있던 프로세스를
+겹치지 않는 세 버킷 중 정확히 하나로 분류하도록 다시 나눴다
+(`active_seconds + idle_seconds + background_seconds == total_seconds`):
+
+- `active_seconds`: foreground였고 동시에 idle(90초 이상 입력 없음, 자세한 건
+  `docs/2026-10-idle-threshold.md`)이 아니었던 시간.
+- `idle_seconds`: foreground였지만 idle이었던 시간.
+- `background_seconds`: foreground가 아니었지만 창이 떠 있던(background) 시간
+  (`tick_windowed_processes` 기반). 여러 프로세스가 동시에 떠 있으면 같은
+  구간이 각자에게 중복으로 더해진다(서로 다른 프로세스의 "열려 있던 시간"이라
+  겹치는 게 맞다 — 모든 프로세스의 `background_seconds`를 그냥 더하면 실제
+  경과 시간보다 커질 수 있다는 뜻이기도 하다).
+
+"UTC 오늘"과 "로컬 오늘" 중 하나를 고르는 대신 "최근 24시간"을 택한 이유: UTC
+오늘은 한국 시간(UTC+9) 기준 자정이 아니라 오전 9시에 날짜가 바뀌어서 사용자
+체감과 안 맞고, 로컬 오늘은 타임존/DST 경계 처리가 또 필요하다(이미 한 번 버그를
+냈던 부분). 최근 24시간은 그런 경계 계산이 전혀 필요 없다.
+
+## apps/ui를 컴포넌트로 구조화
+
+`apps/ui/src`를 한 파일(`main.ts`)에 다 때려넣는 대신 역할별로 나눴다:
+
+```
+apps/ui/src/
+├─ api.ts                  # hub fetch + 타입(ProcessUsage, RangeUsage)
+├─ theme.ts                # 색상 토큰
+├─ styles/injectStyle.ts   # <style> 태그 1회 주입 헬퍼
+├─ components/
+│  ├─ UsageChart.ts        # 범례 + 막대 목록
+│  ├─ BarRow.ts            # 프로세스 한 줄(라벨 + 3색 막대 + 값)
+│  └─ ErrorView.ts         # 에러 + 다시 시도 버튼
+└─ main.ts                 # 진입점: 주기적 fetch + 어느 컴포넌트를 그릴지 결정
+```
+
+CSS는 별도 `.css` 파일 대신, 각 컴포넌트 파일이 자기 스타일을 `injectStyle(id,
+css템플릿)`로 직접 들고 있다 — styled-components 같은 라이브러리(빌드 플러그인
+필요)는 안 들이고, "컴포넌트 파일 안에 그 컴포넌트의 스타일을 같이 둔다"는
+정도로 가볍게 흉내만 냈다. 모듈이 import될 때 한 번 `<style>` 태그를 넣고,
+이미 넣은 id면 다시 안 넣는다.
+
+색 테마는 연한 파란색(`active`) 하나만 포인트로 쓰고 나머지는 흑백/회색 — 막대는
+`bar-fill`(이 프로세스의 total_seconds만큼 폭) 안에 active/idle/background
+세 구간을 겹치지 않게 나란히 채운다(`display: flex`, 각 구간 폭은 그 버킷/total
+비율).

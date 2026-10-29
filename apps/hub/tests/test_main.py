@@ -41,34 +41,34 @@ def running_server(tmp_path):
         server.shutdown()
 
 
-def test_today_endpoint_reflects_allowed_localhost_origin(running_server) -> None:
+def test_usage_endpoint_reflects_allowed_localhost_origin(running_server) -> None:
     """apps/ui가 127.0.0.1의 다른 포트에서 fetch하므로, 그 origin은 허용해서
     돌려줘야 브라우저가 응답을 읽을 수 있다."""
     request = urllib.request.Request(
-        f"{running_server}/api/today", headers={"Origin": "http://127.0.0.1:5173"}
+        f"{running_server}/api/usage?range=24h", headers={"Origin": "http://127.0.0.1:5173"}
     )
     with urllib.request.urlopen(request, timeout=2) as response:
         assert response.headers["Access-Control-Allow-Origin"] == "http://127.0.0.1:5173"
         assert response.headers["Vary"] == "Origin"
         payload = json.loads(response.read())
 
-    assert "date" in payload
-    assert "total_seconds" in payload
+    assert "start" in payload
+    assert "end" in payload
     assert "by_process" in payload
 
 
-def test_today_endpoint_does_not_allow_arbitrary_origins(running_server) -> None:
+def test_usage_endpoint_does_not_allow_arbitrary_origins(running_server) -> None:
     """사용 기록(개인 활동 정보)이 들어 있는 응답을, 사용자가 띄워둔 아무
     웹사이트나 fetch해서 읽어가면 안 된다 — 허용되지 않은 origin에는 CORS
     헤더를 안 보내서 브라우저가 읽기를 막게 해야 한다."""
     request = urllib.request.Request(
-        f"{running_server}/api/today", headers={"Origin": "http://evil.example"}
+        f"{running_server}/api/usage?range=24h", headers={"Origin": "http://evil.example"}
     )
     with urllib.request.urlopen(request, timeout=2) as response:
         assert "Access-Control-Allow-Origin" not in response.headers
 
 
-def test_today_endpoint_returns_503_when_db_is_missing(tmp_path) -> None:
+def test_usage_endpoint_returns_503_when_db_is_missing(tmp_path) -> None:
     """DB 파일이 아직 없으면(recorder가 한 번도 안 돈 경우), 응답 없이 연결이
     끊기는 대신 503으로 알려야 한다."""
     _Handler.db_path = tmp_path / "missing.db"
@@ -77,10 +77,21 @@ def test_today_endpoint_returns_503_when_db_is_missing(tmp_path) -> None:
     thread.start()
     try:
         with pytest.raises(urllib.error.HTTPError) as exc_info:
-            urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/api/today", timeout=2)
+            urllib.request.urlopen(
+                f"http://127.0.0.1:{server.server_port}/api/usage?range=24h", timeout=2
+            )
         assert exc_info.value.code == 503
     finally:
         server.shutdown()
+
+
+def test_usage_endpoint_rejects_unknown_range(running_server) -> None:
+    """지원하지 않는 range 값은 조용히 무시하지 말고 400으로 알려야 한다 —
+    나중에 기간 선택 UI가 붙을 때 오타/오동작을 바로 알아챌 수 있어야 한다."""
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(f"{running_server}/api/usage?range=7d", timeout=2)
+
+    assert exc_info.value.code == 400
 
 
 def test_unknown_path_returns_404(running_server) -> None:

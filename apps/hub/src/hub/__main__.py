@@ -20,10 +20,12 @@ import logging
 import re
 import sqlite3
 import sys
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
-from aggregation.today import today_usage
+from aggregation.range import usage_by_range
 from recorder.__main__ import DEFAULT_DB_PATH
 from supervision.lock import AlreadyRunningError, acquire_lock
 from supervision.log_setup import configure_logging
@@ -64,6 +66,19 @@ def _lock_path_for_port(port: int) -> Path:
     return _APP_DIR / f"hub-{port}.lock"
 
 
+def _usage_range_bounds(range_param: str) -> tuple[datetime, datetime] | None:
+    """range 쿼리 파라미터를 (start, end) UTC 경계로 바꾼다.
+
+    지금은 "24h"(최근 24시간, rolling) 하나만 지원한다 — 나중에 기간 선택
+    UI가 붙으면 여기에 다른 값(예: 특정 날짜)을 추가하면 된다. 모르는
+    값이면 None을 돌려줘서 호출부가 400으로 응답하게 한다.
+    """
+    if range_param == "24h":
+        end = datetime.now(UTC)
+        return end - timedelta(hours=24), end
+    return None
+
+
 class _Handler(BaseHTTPRequestHandler):
     """/api/* 요청을 집계 함수로 넘기고 JSON으로 응답한다."""
 
@@ -82,21 +97,29 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
-        """지금은 /api/today 하나뿐이다 — 늘어나면 라우팅을 분리한다.
+        """지금은 /api/usage 하나뿐이다 — 늘어나면 라우팅을 분리한다.
 
         읽기 전용(mode=ro)으로 연다 — hub는 조회만 하는 쪽이라 쓰기 가능한
         연결을 열어둘 이유가 없고, recorder가 쓰는 도중에도 안전하게 읽을 수
         있다(WAL 모드). DB가 아직 없거나(recorder가 한 번도 안 돈 경우) 읽는
         중 문제가 생기면, 응답 없이 연결이 끊기는 대신 503으로 알린다.
         """
-        if self.path != "/api/today":
+        parsed = urlparse(self.path)
+        if parsed.path != "/api/usage":
             self._send_json(404, {"error": "not found"})
             return
+
+        range_param = parse_qs(parsed.query).get("range", ["24h"])[0]
+        bounds = _usage_range_bounds(range_param)
+        if bounds is None:
+            self._send_json(400, {"error": f"지원하지 않는 range입니다: {range_param}"})
+            return
+        start, end = bounds
 
         try:
             conn = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
             try:
-                payload = today_usage(conn)
+                payload = usage_by_range(conn, start, end)
             finally:
                 conn.close()
         except sqlite3.Error:
