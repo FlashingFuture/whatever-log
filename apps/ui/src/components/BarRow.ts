@@ -59,9 +59,25 @@ export function createBarRow(row: ProcessUsage, maxTotal: number): HTMLElement {
   // 프로세스 이름은 OS에서 온 값이라 innerHTML로 바로 꽂지 않고
   // textContent로 넣어 혹시 모를 마크업 삽입을 피한다.
   label.textContent = row.process;
+  // 9rem보다 긴 이름은 ellipsis로 잘리므로, title(마우스 호버 툴팁)로 전체
+  // 이름을 확인할 수 있게 한다.
+  label.title = row.process;
+
+  const breakdown =
+    `${row.process}: 활성 ${formatDuration(row.active_seconds)}, ` +
+    `유휴 ${formatDuration(row.idle_seconds)}, ` +
+    `백그라운드 ${formatDuration(row.background_seconds)}, ` +
+    `총 ${formatDuration(row.total_seconds)}`;
 
   const track = document.createElement("div");
   track.className = "bar-track";
+  // 막대의 세 구간(active/idle/background)은 색으로만 구분되어 있어서,
+  // 스크린 리더 사용자나 색을 구분하기 어려운 사용자는 값을 알 수 없다 —
+  // role="img" + aria-label로 전체 수치를 텍스트로도 제공한다. title을
+  // 같이 줘서 마우스 호버로도 같은 내용을 볼 수 있게 한다.
+  track.setAttribute("role", "img");
+  track.setAttribute("aria-label", breakdown);
+  track.title = breakdown;
 
   const fill = document.createElement("div");
   fill.className = "bar-fill";

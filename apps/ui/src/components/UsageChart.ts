@@ -57,8 +57,8 @@ export function renderUsageChart(app: Element, usage: RangeUsage): void {
   legend.className = "usage-chart-legend";
   legend.append(
     legendItem(theme.colors.active, "활성"),
-    legendItem(theme.colors.idle, "idle"),
-    legendItem(theme.colors.backgroundSegment, "background"),
+    legendItem(theme.colors.idle, "유휴"),
+    legendItem(theme.colors.backgroundSegment, "백그라운드"),
   );
 
   // 가장 오래 떠 있던(total) 프로세스를 기준으로 막대 폭을 정한다 — 범위
