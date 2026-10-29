@@ -1,14 +1,13 @@
-"""임의 구간(start~end, UTC)에 대해 프로세스별 사용 시간을 집계한다.
+"""임의 구간(start~end)에 대해 프로세스별 사용 시간을 집계한다.
 
 recorder.db는 특정 기간을 따로 저장하지 않고 모든 틱을 계속 쌓아두기만
 한다(apps/recorder/src/recorder/storage.py) — 여기서 조회 시점에 임의의
-구간으로 걸러서 집계한다. 구간을 호출부가 정하게 해서("오늘"을 여기서
-하드코딩하지 않음), 지금은 hub가 "최근 24시간"을 넘기지만 나중에 기간 선택
-UI가 붙어도 이 함수를 그대로 재사용할 수 있다.
+구간으로 걸러서 집계한다. "오늘/이번 주" 같은 경계는 호출부가 정한다(지금은
+apps/ui가 로컬 타임존 기준으로 계산해서 hub에 넘긴다).
 """
 
 import sqlite3
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TypedDict
 
 # 연속된 두 틱 사이의 시간을 그 구간의 길이로 본다. 이 값보다 긴 간격은 PC
@@ -67,7 +66,11 @@ def usage_by_range(
       구간이 각자에게 중복으로 더해진다(서로 다른 프로세스의 "열려 있던
       시간"이라 겹치는 게 맞다).
     """
-    start_iso, end_iso = start.isoformat(), end.isoformat()
+    # sampled_at은 UTC ISO 문자열로 저장돼 있고 문자열로 비교한다 — 경계도
+    # 같은 UTC 표기로 맞춰야 한다. +09:00 같은 오프셋이 붙은 채로 비교하면
+    # 같은 시각이어도 문자열 순서가 달라져 조용히 틀린 구간이 잡힌다.
+    start_iso = start.astimezone(UTC).isoformat()
+    end_iso = end.astimezone(UTC).isoformat()
 
     ticks = conn.execute(
         "SELECT ticks.id, ticks.sampled_at, processes.name, ticks.seconds_since_last_input "

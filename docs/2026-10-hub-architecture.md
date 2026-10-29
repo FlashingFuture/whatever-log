@@ -154,6 +154,9 @@ recorder의 `supervisor.py`/`healthcheck.py`/`__main__.py`도 이 공통 모듈�
 
 ## "오늘" 한 줄 요약에서 "최근 24시간" 막대 차트로
 
+> 이 절의 `range=24h`와 "최근 24시간" 결정은 아래 "일/주/월 단위 탐색으로"에서
+> 바뀌었다. 세 버킷(active/idle/background) 설명은 그대로 유효하다.
+
 `today_usage()`(로컬 오늘, foreground 시간만)를 `packages/aggregation/src/aggregation/range.py`의
 `usage_by_range(conn, start, end)`로 대체했다 — 임의의 `[start, end)` UTC 구간을 받는
 범용 함수로 일반화해서, 나중에 기간 선택 UI가 붙어도 그대로 재사용할 수 있게 했다.
@@ -186,15 +189,24 @@ hub는 지금 `range=24h`(최근 24시간, rolling) 하나만 지원하고(`/api
 
 ```
 apps/ui/src/
-├─ api.ts                  # hub fetch + 타입(ProcessUsage, RangeUsage)
-├─ theme.ts                # 색상 토큰
-├─ styles/injectStyle.ts   # <style> 태그 1회 주입 헬퍼
+├─ api.ts                     # hub fetch + 타입(ProcessUsage, RangeUsage)
+├─ period.ts                  # 일/주/월 구간 계산(순수 함수, DOM 없음)
+├─ theme.ts                   # 색상 토큰
+├─ styles/injectStyle.ts      # <style> 태그 1회 주입 헬퍼
 ├─ components/
-│  ├─ UsageChart.ts        # 범례 + 막대 목록
-│  ├─ BarRow.ts            # 프로세스 한 줄(라벨 + 3색 막대 + 값)
-│  └─ ErrorView.ts         # 에러 + 다시 시도 버튼
-└─ main.ts                 # 진입점: 주기적 fetch + 어느 컴포넌트를 그릴지 결정
+│  ├─ UsagePage.ts            # 화면 전체: 상태(보고 있는 구간) + 조합
+│  ├─ PeriodNavigator.ts      # "← 라벨 →" 구간 이동(단위와 무관)
+│  ├─ SegmentedControl.ts     # 여러 값 중 하나 고르기(값 종류와 무관)
+│  ├─ Button.ts               # 위 둘과 ErrorView가 같이 쓰는 버튼
+│  ├─ UsageChart.ts           # 범례 + 막대 목록
+│  ├─ BarRow.ts               # 프로세스 한 줄(라벨 + 3색 막대 + 값)
+│  └─ ErrorView.ts            # 에러 + 다시 시도 버튼
+└─ main.ts                    # 진입점: 전역 스타일 + UsagePage 마운트
+apps/ui/tests/period.test.ts  # Node 내장 테스트 러너(`pnpm --filter ui test`)
 ```
+
+`PeriodNavigator`/`SegmentedControl`/`Button`은 "사용 현황"이라는 걸 모른다 — 라벨과
+콜백만 받는다. 상태와 "무엇을 보여줄지"는 `UsagePage` 한 곳에만 있다.
 
 CSS는 별도 `.css` 파일 대신, 각 컴포넌트 파일이 자기 스타일을 `injectStyle(id,
 css템플릿)`로 직접 들고 있다 — styled-components 같은 라이브러리(빌드 플러그인
@@ -206,3 +218,38 @@ css템플릿)`로 직접 들고 있다 — styled-components 같은 라이브러
 `bar-fill`(이 프로세스의 total_seconds만큼 폭) 안에 active/idle/background
 세 구간을 겹치지 않게 나란히 채운다(`display: flex`, 각 구간 폭은 그 버킷/total
 비율).
+
+## "최근 24시간"에서 일/주/월 단위 탐색으로
+
+날짜 라벨을 띄우고 ←/→로 하루·한 주·한 달씩 넘기게 하면서, 위에서 택했던
+"최근 24시간(rolling)"은 버렸다 — "10월 28일"이라고 써놓고 그 범위가 어제 오후
+3시~오늘 오후 3시이면 라벨과 실제가 어긋난다. 구간은 사용자 달력 기준이어야
+한다(로컬 자정, 월요일 시작, 1일).
+
+예전에 로컬 경계를 피했던 건 Python에서 타임존/일광절약시간을 계산하다 버그를
+냈기 때문이다. 그래서 경계 계산 자체를 `apps/ui/src/period.ts`(브라우저)로 옮겼다 —
+`new Date(y, m, d)`가 로컬 자정을 만들고 일광절약시간 전환도 처리한다. hub는 계산된
+경계를 받기만 한다:
+
+- `/api/usage?start=...&end=...` — 타임존이 붙은 ISO 8601. ui는 `toISOString()`("Z"
+  표기)으로 보낸다. 오프셋의 `+`는 쿼리 문자열에서 공백으로 디코딩되기 때문이다.
+- 타임존 없는 값, `start >= end`, 31일(+일광절약시간 여유 1시간) 초과는 400.
+  `range=24h`는 없앴다(ui가 유일한 호출부였다).
+- `usage_by_range()`는 받은 경계를 UTC로 정규화한 뒤 비교한다 — `sampled_at`이 UTC
+  문자열이라 `+09:00` 경계를 그대로 비교하면 같은 시각이어도 조용히 틀린 구간이
+  잡힌다.
+
+화면 동작:
+
+- 기본은 오늘(일 단위). 지금이 들어 있는 구간이면 →(키보드 →도)를 막고 라벨 옆에
+  "오늘/이번 주/이번 달"을 붙인다.
+- 단위를 바꾸면, 현재 구간을 보고 있었으면 지금을, 과거를 보고 있었으면 그 구간의
+  시작을 기준으로 새 단위의 구간을 잡는다(이번 달 → 일이면 1일이 아니라 오늘).
+- 15초 주기 갱신은 현재 구간을 볼 때만 한다. 자정을 넘기면 보고 있던 "오늘"이
+  어제가 되므로, 주기마다 헤더를 다시 그려 →를 켜고 표시를 뗀다.
+- 구간을 빠르게 넘기면 이전 요청의 응답이 늦게 올 수 있어서, 마지막으로 보낸
+  요청의 응답만 그린다.
+
+남은 것: 월 단위는 15초 간격이면 틱이 약 18만 개라, 데이터가 한 달치 쌓이면 쿼리가
+지금(수십 ms)보다 훨씬 무거워질 수 있다. 실제로 느려지면 일 단위 사전 집계를
+고려한다.

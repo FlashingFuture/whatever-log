@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 from recorder.sampling import TickSample
 from recorder.storage import open_db, save_tick
@@ -112,6 +112,25 @@ def test_only_includes_ticks_within_the_requested_range(tmp_path) -> None:
     by_process = {row["process"]: row for row in result["by_process"]}
     assert "chrome.exe" not in by_process
     assert by_process["code.exe"]["active_seconds"] == 15.0
+
+
+def test_non_utc_bounds_select_the_same_ticks(tmp_path) -> None:
+    """sampled_at은 UTC 문자열로 비교된다 — +09:00 같은 오프셋이 붙은 경계를
+    넘겨도 같은 시각이면 같은 틱이 잡혀야 한다."""
+    conn = open_db(tmp_path / "recorder.db")
+    now = datetime.now(UTC)
+    save_tick(conn, _tick(now, "code.exe", {"code.exe"}))
+    save_tick(conn, _tick(now + timedelta(seconds=15), "code.exe", {"code.exe"}))
+    save_tick(conn, _tick(now + timedelta(seconds=30), "code.exe", {"code.exe"}))
+
+    kst = timezone(timedelta(hours=9))
+    start, end = now - timedelta(seconds=1), now + timedelta(seconds=31)
+
+    utc_result = usage_by_range(conn, start, end)
+    kst_result = usage_by_range(conn, start.astimezone(kst), end.astimezone(kst))
+
+    assert kst_result["by_process"] == utc_result["by_process"]
+    assert kst_result["by_process"][0]["active_seconds"] == 30.0
 
 
 def test_handles_no_ticks_in_range(tmp_path) -> None:

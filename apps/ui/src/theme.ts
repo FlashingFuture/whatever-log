@@ -7,6 +7,8 @@ export const theme = {
     background: "#ffffff",
     text: "#111111",
     textMuted: "#6b6b6b",
+    textDisabled: "#c4c4c4",
+    border: "#d4d4d4",
     track: "#f1f1f1",
     active: "#9ec5fb",
     idle: "#b5b5b5",
