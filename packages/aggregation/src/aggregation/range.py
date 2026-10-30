@@ -144,6 +144,10 @@ def usage_by_range(
                 "total_seconds": active + idle + background,
             }
         )
-    by_process.sort(key=lambda row: -row["total_seconds"])
+    # 전체 시간 내림차순, 같으면 집중(active) 시간 내림차순. 그래도 같으면 이름순으로
+    # 고정해서 새로고침마다 줄이 뒤바뀌지 않게 한다.
+    by_process.sort(
+        key=lambda row: (-row["total_seconds"], -row["active_seconds"], row["process"])
+    )
 
     return {"start": start_iso, "end": end_iso, "by_process": by_process}

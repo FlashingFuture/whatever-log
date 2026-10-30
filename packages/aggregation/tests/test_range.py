@@ -141,3 +141,24 @@ def test_handles_no_ticks_in_range(tmp_path) -> None:
     result = usage_by_range(conn, now, now + timedelta(hours=24))
 
     assert result["by_process"] == []
+
+
+def test_orders_by_total_then_active_descending(tmp_path) -> None:
+    """전체 시간이 같으면 집중(active) 시간이 많은 프로세스가 먼저 와야 한다."""
+    conn = open_db(tmp_path / "recorder.db")
+    now = datetime.now(UTC)
+    # a_idle: 15초 전부 idle, b_active: 15초 전부 active — 이름순이면 a_idle이 앞선다.
+    save_tick(conn, _tick(now, "a_idle.exe", {"a_idle.exe"}, idle_seconds=100.0))
+    save_tick(conn, _tick(now + timedelta(seconds=15), "b_active.exe", {"b_active.exe"}))
+    save_tick(conn, _tick(now + timedelta(seconds=30), None, set()))
+    # c_long: 더 오래 쓴 프로세스는 active가 0이어도 맨 앞.
+    save_tick(conn, _tick(now + timedelta(seconds=40), "c_long.exe", {"c_long.exe"}, idle_seconds=100.0))
+    save_tick(conn, _tick(now + timedelta(seconds=70), None, set()))
+
+    result = usage_by_range(conn, now, now + timedelta(seconds=71))
+
+    assert [row["process"] for row in result["by_process"]] == [
+        "c_long.exe",
+        "b_active.exe",
+        "a_idle.exe",
+    ]
