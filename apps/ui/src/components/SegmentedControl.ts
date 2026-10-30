@@ -1,15 +1,4 @@
-import { injectStyle } from "../styles/injectStyle";
-import { createButton } from "./Button";
-
-injectStyle(
-  "segmented-control",
-  `
-  .segmented-control {
-    display: inline-flex;
-    gap: 0.25rem;
-  }
-`,
-);
+import { createButton, createButtonGroup } from "./Button";
 
 export interface SegmentedOption<T extends string> {
   value: T;
@@ -28,23 +17,16 @@ export interface SegmentedControlProps<T extends string> {
 export function createSegmentedControl<T extends string>(
   props: SegmentedControlProps<T>,
 ): HTMLElement {
-  const group = document.createElement("div");
-  group.className = "segmented-control";
-  group.setAttribute("role", "group");
-  group.setAttribute("aria-label", props.ariaLabel);
-
-  for (const option of props.options) {
-    group.append(
-      createButton({
-        label: option.label,
-        pressed: option.value === props.selected,
-        onClick: () => {
-          if (option.value !== props.selected) {
-            props.onChange(option.value);
-          }
-        },
-      }),
-    );
-  }
-  return group;
+  const buttons = props.options.map((option) =>
+    createButton({
+      label: option.label,
+      pressed: option.value === props.selected,
+      onClick: () => {
+        if (option.value !== props.selected) {
+          props.onChange(option.value);
+        }
+      },
+    }),
+  );
+  return createButtonGroup(buttons, props.ariaLabel);
 }

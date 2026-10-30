@@ -70,6 +70,53 @@ export function anchorForUnitChange(period: Period, now: Date): Date {
   return isCurrentPeriod(period, now) ? now : period.start;
 }
 
+/** 아직 시작하지 않은(미래) 구간은 고를 수 없다 — → 버튼을 막는 것과 같은 규칙. */
+export function isSelectablePeriod(period: Period, now: Date): boolean {
+  return period.start <= now;
+}
+
+export function isSamePeriod(a: Period, b: Period): boolean {
+  return a.unit === b.unit && a.start.getTime() === b.start.getTime();
+}
+
+/**
+ * year에 걸친 모든 구간(주/월)을 순서대로 돌려준다. 주 단위는 1월 1일이 들어
+ * 있는 주부터 시작하므로, 1월 1일이 월요일이 아니면 첫 주는 전년도 12월에
+ * 시작한다(같은 이유로 마지막 주는 다음 해 1월로 넘어갈 수 있다).
+ */
+export function periodsInYear(unit: "week" | "month", year: number): Period[] {
+  const nextYearStart = new Date(year + 1, 0, 1);
+  const periods: Period[] = [];
+  let period = periodContaining(unit, new Date(year, 0, 1));
+  while (period.start < nextYearStart) {
+    periods.push(period);
+    period = shiftPeriod(period, 1);
+  }
+  return periods;
+}
+
+/**
+ * 달력 한 장(monthStart가 속한 달)을 주 단위 행으로 돌려준다. 각 행은 월요일부터
+ * 일요일까지 7일이고, 첫 행·마지막 행에는 앞뒤 달의 날짜가 섞인다.
+ */
+export function calendarWeeks(monthStart: Date): Date[][] {
+  const month = periodContaining("month", monthStart);
+  const weeks: Date[][] = [];
+  let week = periodContaining("week", month.start);
+  while (week.start < month.end) {
+    const days: Date[] = [];
+    for (let i = 0; i < 7; i++) {
+      days.push(addUnits("day", week.start, i));
+    }
+    weeks.push(days);
+    week = shiftPeriod(week, 1);
+  }
+  return weeks;
+}
+
+/** 월요일 시작 순서의 요일 이름(달력 머리글용). */
+export const WEEKDAYS_FROM_MONDAY = ["월", "화", "수", "목", "금", "토", "일"];
+
 function pad(n: number): string {
   return String(n).padStart(2, "0");
 }
@@ -88,6 +135,34 @@ export function formatPeriod(period: Period): string {
     return `${start.getFullYear()}.${pad(start.getMonth() + 1)}.${pad(start.getDate())} – ${lastYear}${pad(last.getMonth() + 1)}.${pad(last.getDate())}`;
   }
   return `${start.getFullYear()}년 ${start.getMonth() + 1}월`;
+}
+
+/**
+ * 연도(달력이면 연·월)가 이미 머리글에 있는 목록에서 쓰는 짧은 라벨.
+ * 일: "29", 주: "12.29 – 01.04", 월: "1월".
+ */
+export function formatPeriodShort(period: Period): string {
+  const { start } = period;
+  if (period.unit === "day") {
+    return String(start.getDate());
+  }
+  if (period.unit === "week") {
+    const last = addUnits("day", period.end, -1);
+    return `${pad(start.getMonth() + 1)}.${pad(start.getDate())} – ${pad(last.getMonth() + 1)}.${pad(last.getDate())}`;
+  }
+  return `${start.getMonth() + 1}월`;
+}
+
+/**
+ * 목록 팝업을 열 때 어느 해의 목록을 보여줄지. 연말·연초에 걸친 주는 두 해의
+ * 목록에 다 들어 있는데(periodsInYear 참고), "1월 1일이 든 주는 새해 목록의 첫
+ * 줄"이라는 규칙에 맞춰 주의 마지막 날이 속한 해로 정한다.
+ */
+export function listYearOf(period: Period): number {
+  if (period.unit !== "week") {
+    return period.start.getFullYear();
+  }
+  return addUnits("day", period.end, -1).getFullYear();
 }
 
 export const CURRENT_PERIOD_HINT: Record<PeriodUnit, string> = {

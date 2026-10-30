@@ -195,9 +195,12 @@ apps/ui/src/
 ├─ styles/injectStyle.ts      # <style> 태그 1회 주입 헬퍼
 ├─ components/
 │  ├─ UsagePage.ts            # 화면 전체: 상태(보고 있는 구간) + 조합
-│  ├─ PeriodNavigator.ts      # "← 라벨 →" 구간 이동(단위와 무관)
+│  ├─ Stepper.ts              # "← 라벨 →" 붙은 버튼 묶음(라벨을 누르면 팝업)
 │  ├─ SegmentedControl.ts     # 여러 값 중 하나 고르기(값 종류와 무관)
-│  ├─ Button.ts               # 위 둘과 ErrorView가 같이 쓰는 버튼
+│  ├─ Button.ts               # 버튼 + 붙은 버튼 묶음(createButtonGroup)
+│  ├─ Popover.ts              # 버튼 아래 팝업(바깥 클릭/Esc 닫기, 포커스 복귀)
+│  ├─ CalendarPicker.ts       # 일 단위: 월 달력
+│  ├─ PeriodListPicker.ts     # 주/월 단위: 한 해의 목록 + ‹ 연도 ›
 │  ├─ UsageChart.ts           # 범례 + 막대 목록
 │  ├─ BarRow.ts               # 프로세스 한 줄(라벨 + 3색 막대 + 값)
 │  └─ ErrorView.ts            # 에러 + 다시 시도 버튼
@@ -205,7 +208,7 @@ apps/ui/src/
 apps/ui/tests/period.test.ts  # Node 내장 테스트 러너(`pnpm --filter ui test`)
 ```
 
-`PeriodNavigator`/`SegmentedControl`/`Button`은 "사용 현황"이라는 걸 모른다 — 라벨과
+`Stepper`/`SegmentedControl`/`Button`/`Popover`는 "사용 현황"이라는 걸 모른다 — 라벨과
 콜백만 받는다. 상태와 "무엇을 보여줄지"는 `UsagePage` 한 곳에만 있다.
 
 CSS는 별도 `.css` 파일 대신, 각 컴포넌트 파일이 자기 스타일을 `injectStyle(id,
@@ -253,3 +256,18 @@ css템플릿)`로 직접 들고 있다 — styled-components 같은 라이브러
 남은 것: 월 단위는 15초 간격이면 틱이 약 18만 개라, 데이터가 한 달치 쌓이면 쿼리가
 지금(수십 ms)보다 훨씬 무거워질 수 있다. 실제로 느려지면 일 단위 사전 집계를
 고려한다.
+
+## 구간 선택 팝업
+
+라벨을 누르면 단위에 맞는 선택 팝업이 열린다. 라이브러리(날짜 선택기 등)는 쓰지
+않고 직접 만들었다 — 필요한 건 월요일 시작 달력과 목록뿐이고, 경계 계산은 이미
+`period.ts`에 있어서 라이브러리를 들이면 두 군데에서 같은 계산을 하게 된다.
+
+- 일: 월 달력(월요일 시작). 미래 날짜와 미래 달은 고를 수 없다.
+- 주: 1월 1일이 든 주부터 아래로 나열한다. 그 주가 전년 12월에 시작해도 첫 줄로
+  넣는다(예: 2026년은 12.29 – 01.04). 연말·연초에 걸친 주는 새해 목록에서 연다.
+- 월: 1월~12월 목록.
+- 주/월 팝업 위쪽 ‹ 연도 › 로 해를 넘긴다(올해보다 뒤로는 못 감). 미래 구간은 비활성.
+- 팝업 안의 ←/→/↑/↓는 팝업 안에서만 쓰이고 구간 이동으로 새지 않는다.
+- 열 때 `scrollIntoView` 대신 목록 안의 스크롤만 조정한다 — 창이 작으면 페이지
+  전체가 튀어 팝업 머리글이 밀려났다.
