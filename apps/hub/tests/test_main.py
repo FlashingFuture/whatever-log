@@ -13,7 +13,8 @@ from recorder.storage import open_db, save_tick
 from supervision.lock import acquire_lock
 
 import hub.__main__ as hub_main
-from hub.__main__ import EXIT_ALREADY_RUNNING, _Handler, _lock_path_for_port, main
+from common.exit_codes import EXIT_ALREADY_RUNNING
+from hub.__main__ import _Handler, _lock_path_for_port, main
 
 # fixture가 넣는 틱 시각. 두 틱이 15초 간격이라 chrome.exe가 active 15초가 된다.
 _TICK_AT = datetime(2026, 10, 28, 3, 0, tzinfo=UTC)
@@ -98,6 +99,7 @@ def test_usage_endpoint_returns_503_when_db_is_missing(tmp_path) -> None:
                 timeout=2,
             )
         assert exc_info.value.code == 503
+        assert json.loads(exc_info.value.read())["error"]["code"] == "unavailable"
     finally:
         server.shutdown()
 
@@ -146,6 +148,9 @@ def test_usage_endpoint_rejects_invalid_bounds(running_server, query) -> None:
         urllib.request.urlopen(f"{running_server}/api/usage?{query}", timeout=2)
 
     assert exc_info.value.code == 400
+    error = json.loads(exc_info.value.read())["error"]
+    assert error["code"] == "invalid_request"
+    assert error["message"]  # 이유가 비어 있으면 클라이언트가 보여줄 게 없다
 
 
 def test_unknown_path_returns_404(running_server) -> None:
@@ -154,6 +159,7 @@ def test_unknown_path_returns_404(running_server) -> None:
         urllib.request.urlopen(f"{running_server}/unknown", timeout=2)
 
     assert exc_info.value.code == 404
+    assert json.loads(exc_info.value.read())["error"]["code"] == "not_found"
 
 
 def test_main_exits_with_already_running_code_when_lock_is_held(tmp_path, monkeypatch) -> None:

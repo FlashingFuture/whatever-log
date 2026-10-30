@@ -5,6 +5,7 @@ requires-python = ">=3.14"
 [manifest]
 members = [
     "aggregation",
+    "common",
     "desktop",
     "hub",
     "recorder",
@@ -89,10 +90,26 @@ wheels = [
 ]
 
 [[package]]
+name = "common"
+version = "0.1.0"
+source = { editable = "packages/common" }
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=9.1.1" }]
+
+[[package]]
 name = "desktop"
 version = "0.1.0"
 source = { editable = "apps/desktop" }
 dependencies = [
+    { name = "common" },
     { name = "hub" },
     { name = "pywebview" },
     { name = "supervision" },
@@ -105,6 +122,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "common", editable = "packages/common" },
     { name = "hub", editable = "apps/hub" },
     { name = "pywebview", specifier = ">=5.4" },
     { name = "supervision", editable = "packages/supervision" },
@@ -128,6 +146,7 @@ version = "0.1.0"
 source = { editable = "apps/hub" }
 dependencies = [
     { name = "aggregation" },
+    { name = "common" },
     { name = "recorder" },
     { name = "supervision" },
 ]
@@ -140,6 +159,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aggregation", editable = "packages/aggregation" },
+    { name = "common", editable = "packages/common" },
     { name = "recorder", editable = "apps/recorder" },
     { name = "supervision", editable = "packages/supervision" },
 ]
@@ -375,6 +395,7 @@ name = "recorder"
 version = "0.1.0"
 source = { editable = "apps/recorder" }
 dependencies = [
+    { name = "common" },
     { name = "psutil" },
     { name = "supervision" },
 ]
@@ -386,6 +407,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "common", editable = "packages/common" },
     { name = "psutil", specifier = ">=6.1.0" },
     { name = "supervision", editable = "packages/supervision" },
 ]

@@ -30,9 +30,11 @@ whatever.log는 Python(recorder, hub, desktop)과 TypeScript(apps/ui)로 나뉘�
 잡으면 `NotImplementedError` 같은 전혀 다른 원인까지 "이미 실행 중"으로 오인한다.
 **규칙: 의미가 있는 실패는 전용 예외 타입 + 전용 종료 코드로 구분한다.**
 
-종료 코드는 지금 앱마다 따로 상수로 정의돼 있다(recorder, hub 각각
-`EXIT_ARGUMENT_ERROR=2`, `EXIT_ALREADY_RUNNING=3`). 값이 같은 건 우연이 아니라
-관례인데 코드에서 강제되지는 않는다 → 공통화 후보 (4절).
+종료 코드는 `packages/common/exit_codes.py`에 한 번만 정의하고 recorder, hub,
+desktop이 import한다(`EXIT_ARGUMENT_ERROR=2`, `EXIT_ALREADY_RUNNING=3`). 예전엔
+앱마다 상수를 따로 두고 값이 같기를 관례로만 맞췄고, desktop은 hub 모듈에서
+가져왔다. 특정 앱에서만 의미 있는 종료 코드는 `common`에 넣지 않고 그 앱
+디렉터리에서 정의한다(4 이상을 써서 겹치지 않게).
 
 ### 2.2 재시작 정책 (supervisor)
 
@@ -58,10 +60,20 @@ whatever.log는 Python(recorder, hub, desktop)과 TypeScript(apps/ui)로 나뉘�
 
 | 상황 | 응답 | 비고 |
 | --- | --- | --- |
-| 모르는 경로 | 404 `{"error": ...}` | |
-| `start`/`end` 누락·형식·타임존·순서·길이(31일+2시간) 오류 | 400 + 사유 메시지 | `_usage_bounds`가 `ValueError`로 통일. UTC 변환의 `OverflowError`도 `ValueError`로 감싼다 |
-| DB 없음/읽기 실패 (`sqlite3.Error`) | 503 + `database unavailable` | 서버 로그에는 `logger.exception`, 응답에는 내부 경로를 안 싣는다 |
+| 모르는 경로 | 404 `not_found` | |
+| `start`/`end` 누락·형식·타임존·순서·길이(31일+2시간) 오류 | 400 `invalid_request` + 사유 메시지 | `_usage_bounds`가 `ValueError`로 통일. UTC 변환의 `OverflowError`도 `ValueError`로 감싼다 |
+| DB 없음/읽기 실패 (`sqlite3.Error`) | 503 `unavailable` | 서버 로그에는 `logger.exception`, 응답에는 내부 경로를 안 싣는다 |
 | 그 외 | (처리 없음) | 아래 한계 참고 |
+
+모든 에러 응답 본문은 `packages/common/api_error.py`의 형식이다:
+
+```json
+{"error": {"code": "invalid_request", "message": "start와 end가 모두 필요합니다."}}
+```
+
+`code`는 클라이언트가 분기·번역에 쓰는 안정적인 식별자(`invalid_request`,
+`not_found`, `unavailable`, `internal`), `message`는 사람이 읽는 설명이다. 특정
+엔드포인트에서만 쓰는 코드는 `common`에 넣지 않고 그 앱에서 정의한다.
 
 원칙: **입력 오류는 4xx에 이유를 적어주고, 환경 문제는 5xx에 일반 메시지만** 준다.
 검증은 `ValueError`를 던지는 함수 하나로 모으고 핸들러에서 한 번만 변환한다.
@@ -77,8 +89,10 @@ whatever.log는 Python(recorder, hub, desktop)과 TypeScript(apps/ui)로 나뉘�
 
 ### 2.6 apps/ui
 
-- `fetchUsage`: `!response.ok`이면 `Error("HTTP <status>")`를 던진다. 서버가 400에
-  준 사유 메시지(`error` 필드)는 **아직 화면에 안 쓴다** (4절).
+- `fetchUsage`: `!response.ok`이면 응답 본문의 `error.code/message`를 읽어
+  `ApiError`(status, code, message)로 던진다. 본문이 JSON이 아니면 `HTTP <status>`.
+  `ErrorView`에는 이 메시지가 그대로 나온다. 형식 선언은 `api.ts`에 따로 있다
+  (TypeScript라 Python 정의를 import할 수 없다 — 형식을 바꾸면 양쪽을 같이 고친다).
 - `UsagePage.load`:
   - 사용자가 일으킨 로드(구간 이동 등) 실패 → `ErrorView`(메시지 + 다시 시도 버튼).
   - **백그라운드 15초 갱신 실패 → 화면을 건드리지 않는다.** 이미 잘 보여주던 데이터를
@@ -103,17 +117,16 @@ whatever.log는 Python(recorder, hub, desktop)과 TypeScript(apps/ui)로 나뉘�
 
 ## 4. 한계와 공통화 후보 (나중에 손볼 곳)
 
-- **종료 코드 상수 중복**: recorder/hub가 각자 정의하고 desktop이 hub 것을 import한다.
-  `supervision`에 `ExitCode`(예: `ARGUMENT_ERROR=2`, `ALREADY_RUNNING=3`)를 두고 공유하면
-  "관례"가 코드로 강제된다. `classify_exit`의 공통 기본 구현도 같이 둘 수 있다.
+- **`classify_exit` 공통 기본 구현**: recorder와 desktop이 거의 같은 함수를 따로
+  갖고 있다. 종료 코드는 이제 `common`에 있으니 기본 구현도 `common`(또는
+  `supervision`)으로 뺄 수 있다.
 - **hub의 처리되지 않는 예외**: `do_GET`에서 `ValueError`/`sqlite3.Error` 외의 예외는
   `BaseHTTPRequestHandler`가 연결을 끊어버려 UI에는 연결 오류로 보인다. 최상위에서
   `logger.exception` + 500을 주는 안전망이 필요하다.
-- **API 에러 응답 규격**: 지금은 `{"error": "문자열"}`뿐이다. 코드(`code`)를 넣으면
-  UI가 메시지 문자열 대신 코드로 분기·번역할 수 있다. 언어가 늘어나면(다른 클라이언트)
-  특히 필요하다.
-- **UI가 서버 사유를 못 보여줌**: `fetchUsage`가 응답 본문의 `error`를 읽어
-  `Error` 메시지에 싣게 하면 400의 이유가 화면에 나온다.
+- **UI가 `code`로 분기하지는 않음**: 지금은 `message`만 보여준다. 코드별 안내문구나
+  번역이 필요해지면 `ApiError.code`로 분기한다.
+- **형식 선언이 언어별로 두 벌**: Python(`common/api_error.py`)과 TS(`api.ts`). 클라이언트가
+  늘면 JSON Schema 같은 언어 중립 정의에서 생성하는 쪽을 검토한다.
 - **fetch 타임아웃 없음**: 응답이 영영 안 오면 `inFlight`가 줄지 않아 백그라운드 갱신이
   멈춘다. `AbortSignal.timeout`을 걸면 해결된다.
 - **로깅 설정은 Python 전용**: UI의 에러는 화면에만 있고 어디에도 안 남는다

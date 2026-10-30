@@ -26,6 +26,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from aggregation.range import usage_by_range
+from common import api_error
+from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
 from recorder.__main__ import DEFAULT_DB_PATH
 from supervision.lock import AlreadyRunningError, acquire_lock
 from supervision.log_setup import configure_logging
@@ -34,13 +36,6 @@ DEFAULT_PORT = 8787
 
 _APP_DIR = Path(__file__).resolve().parent.parent.parent
 DEFAULT_LOG_PATH = _APP_DIR / "hub.log"
-
-# argparse가 인자 오류에 쓰는 종료 코드와 맞춘다(recorder와 같은 관례) —
-# apps/desktop의 supervisor가 이 코드를 받으면 재시작하지 않아야 한다.
-EXIT_ARGUMENT_ERROR = 2
-# acquire_lock()의 AlreadyRunningError를 구분하기 위한 전용 종료 코드.
-# argparse가 이미 2를 쓰므로 겹치지 않게 3을 쓴다(recorder와 동일한 관례).
-EXIT_ALREADY_RUNNING = 3
 
 logger = logging.getLogger("hub")
 
@@ -135,13 +130,15 @@ class _Handler(BaseHTTPRequestHandler):
         """
         parsed = urlparse(self.path)
         if parsed.path != "/api/usage":
-            self._send_json(404, {"error": "not found"})
+            self._send_json(404, api_error.error_body(api_error.NOT_FOUND, "not found"))
             return
 
         try:
             start, end = _usage_bounds(parse_qs(parsed.query))
         except ValueError as exc:
-            self._send_json(400, {"error": str(exc)})
+            self._send_json(
+                400, api_error.error_body(api_error.INVALID_REQUEST, str(exc))
+            )
             return
 
         try:
@@ -152,7 +149,10 @@ class _Handler(BaseHTTPRequestHandler):
                 conn.close()
         except sqlite3.Error:
             logger.exception("집계 DB를 읽지 못했습니다: %s", self.db_path)
-            self._send_json(503, {"error": "database unavailable"})
+            self._send_json(
+                503,
+                api_error.error_body(api_error.UNAVAILABLE, "database unavailable"),
+            )
             return
 
         self._send_json(200, payload)

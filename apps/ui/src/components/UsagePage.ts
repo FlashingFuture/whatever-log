@@ -167,7 +167,9 @@ export function mountUsagePage(root: Element): void {
         // 이미 잘 보여주고 있던 화면을 에러 화면으로 덮어쓰지 않는다 — 다음
         // 주기에 다시 시도된다.
         if (requestId === latestRequestId && !isBackgroundRefresh) {
-          content.replaceChildren(createErrorView(String(error), () => load()));
+          content.replaceChildren(
+            createErrorView(errorMessage(error), () => load()),
+          );
         }
       })
       .finally(() => {
@@ -238,4 +240,8 @@ function restoreFocus(root: HTMLElement, key: string | null): void {
     buttons.find((button) => focusKey(button) === key && !button.disabled) ??
     buttons.find((button) => focusKey(button) === "이전")
   )?.focus();
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

@@ -14,6 +14,7 @@ import sys
 import time
 from pathlib import Path
 
+from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
 from supervision.log_setup import configure_logging
 from recorder.sampling import sample_tick
 from recorder.storage import open_db, save_tick
@@ -28,16 +29,6 @@ MIN_INTERVAL_SECONDS = 1.0
 _APP_DIR = Path(__file__).resolve().parent.parent.parent
 DEFAULT_DB_PATH = _APP_DIR / "recorder.db"
 DEFAULT_LOG_PATH = _APP_DIR / "recorder.log"
-
-# argparse가 인자 오류(예: --interval 0)에 쓰는 종료 코드. 같은 인자로 재시도해도
-# 똑같이 실패하니 supervisor는 이 코드를 받으면 재시작하지 않는다.
-EXIT_ARGUMENT_ERROR = 2
-
-# acquire_lock()의 AlreadyRunningError를 구분하기 위한 전용 종료 코드. supervisor는
-# 이 코드를 받으면 재시작을 멈춘다 — 다른 recorder가 이미 돌고 있는 상황은 "크래시"가
-# 아니라서 재시도해도 해결되지 않고, 계속 재시도하면 로그만 계속 쌓인다.
-# argparse가 이미 2를 쓰므로 겹치지 않게 3을 쓴다.
-EXIT_ALREADY_RUNNING = 3
 
 logger = logging.getLogger("recorder")
 
