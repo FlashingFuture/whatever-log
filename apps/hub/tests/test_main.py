@@ -116,6 +116,15 @@ def test_usage_endpoint_accepts_offset_bounds(running_server) -> None:
     assert payload["by_process"][0]["active_seconds"] == 15.0
 
 
+def test_usage_endpoint_accepts_two_hour_dst_month(running_server) -> None:
+    """시계가 2시간 되돌아가는 지역(Antarctica/Troll)의 10월은 31일 2시간이다."""
+    start = _TICK_AT - timedelta(minutes=1)
+    end = start + timedelta(days=31, hours=2)
+
+    with urllib.request.urlopen(_usage_url(running_server, start, end), timeout=2) as response:
+        assert response.status == 200
+
+
 @pytest.mark.parametrize(
     "query",
     [
@@ -125,6 +134,8 @@ def test_usage_endpoint_accepts_offset_bounds(running_server) -> None:
         "start=2026-10-28T00:00:00&end=2026-10-29T00:00:00",  # 타임존 없음
         "start=2026-10-29T00:00:00Z&end=2026-10-28T00:00:00Z",  # start >= end
         "start=2026-01-01T00:00:00Z&end=2026-03-01T00:00:00Z",  # 31일 초과
+        # UTC로 바꾸면 표현 범위를 벗어나는 값(OverflowError)도 400이어야 한다.
+        "start=0001-01-01T00:00:00%2B01:00&end=0001-01-02T00:00:00%2B01:00",
         # 인코딩 안 된 "+"는 공백으로 디코딩돼 ISO 8601이 깨진다.
         "start=2026-10-28T00:00:00+09:00&end=2026-10-29T00:00:00+09:00",
     ],

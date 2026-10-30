@@ -106,12 +106,13 @@ export function createPeriodListPicker(
 
     root.replaceChildren(header, list);
     // 해를 넘기면 헤더가 새로 그려져 포커스가 사라지므로, 누른 화살표로 돌려놓는다.
+    // 최신 해에 닿아 "다음"이 꺼졌다면 항상 켜져 있는 "이전"으로 돌린다.
     if (focusArrow) {
-      header
-        .querySelector<HTMLElement>(
+      (
+        header.querySelector<HTMLElement>(
           `[aria-label="${focusArrow}"]:not(:disabled)`,
-        )
-        ?.focus();
+        ) ?? header.querySelector<HTMLElement>('[aria-label="이전"]')
+      )?.focus();
     }
   }
 

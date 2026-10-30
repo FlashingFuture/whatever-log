@@ -66,9 +66,11 @@ def _lock_path_for_port(port: int) -> Path:
     return _APP_DIR / f"hub-{port}.lock"
 
 
-# 월 단위(최대 31일) 조회까지 허용한다. 1시간은 일광절약시간 전환이 낀 달의
-# 여유분이다. 이보다 긴 구간은 틱 수가 많아 쿼리가 무거워지므로 막는다.
-_MAX_USAGE_SPAN = timedelta(days=31, hours=1)
+# 월 단위(최대 31일) 조회까지 허용한다. 2시간은 전환이 낀 달의 여유분이다 —
+# 시계가 1시간 되돌아가는 보통의 일광절약시간뿐 아니라 2시간 되돌아가는 곳
+# (예: Antarctica/Troll)의 10월(31일 2시간)도 통과해야 한다. 이보다 긴 구간은
+# 틱 수가 많아 쿼리가 무거워지므로 막는다.
+_MAX_USAGE_SPAN = timedelta(days=31, hours=2)
 
 
 def _usage_bounds(query: dict[str, list[str]]) -> tuple[datetime, datetime]:
@@ -99,7 +101,11 @@ def _usage_bounds(query: dict[str, list[str]]) -> tuple[datetime, datetime]:
     if end - start > _MAX_USAGE_SPAN:
         raise ValueError("조회 구간은 최대 31일입니다.")
 
-    return start.astimezone(UTC), end.astimezone(UTC)
+    try:
+        return start.astimezone(UTC), end.astimezone(UTC)
+    except OverflowError as exc:
+        # 0001-01-01T00:00:00+01:00처럼 UTC로 바꾸면 표현 범위를 벗어나는 값.
+        raise ValueError("start/end가 표현할 수 있는 날짜 범위를 벗어났습니다.") from exc
 
 
 class _Handler(BaseHTTPRequestHandler):

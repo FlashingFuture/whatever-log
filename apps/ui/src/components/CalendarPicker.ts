@@ -142,9 +142,13 @@ export function createCalendarPicker(props: CalendarPickerProps): HTMLElement {
     month = next;
     render();
     // 달을 넘기면 헤더가 새로 그려져 포커스가 사라지므로, 누른 화살표로 돌려놓는다.
-    root
-      .querySelector<HTMLElement>(`[aria-label="${focusArrow}"]:not(:disabled)`)
-      ?.focus();
+    // 현재 달에 닿아 "다음"이 꺼졌다면 항상 켜져 있는 "이전"으로 돌린다 — 포커스가
+    // body로 빠지면 팝업 안의 키보드 이동이 멈춘다.
+    const target =
+      root.querySelector<HTMLElement>(
+        `[aria-label="${focusArrow}"]:not(:disabled)`,
+      ) ?? root.querySelector<HTMLElement>('[aria-label="이전"]');
+    target?.focus();
   }
 
   function focusDay(day: Period): void {

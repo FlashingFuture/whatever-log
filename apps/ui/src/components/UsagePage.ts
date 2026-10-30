@@ -54,6 +54,10 @@ export function mountUsagePage(root: Element): void {
   // 구간을 빠르게 넘기면 이전 요청의 응답이 나중에 도착할 수 있다 — 가장
   // 최근에 보낸 요청의 응답만 그린다.
   let latestRequestId = 0;
+  // 진행 중인 요청 수. 응답이 15초보다 늦어질 때 주기 갱신이 계속 요청을
+  // 쌓으면서 latestRequestId를 올려, 정상 응답까지 낡은 것으로 버려지는 걸
+  // 막는다 — 백그라운드 갱신은 진행 중인 요청이 없을 때만 시작한다.
+  let inFlight = 0;
 
   const title = document.createElement("h1");
   title.textContent = "사용 현황";
@@ -107,9 +111,15 @@ export function mountUsagePage(root: Element): void {
   // 헤더를 다시 그린다(열려 있는 팝업의 기준 버튼이 갈아치워지지 않게).
   let headerShowsCurrent = false;
 
+  // 마지막으로 헤더를 그린 날짜. 과거 구간을 보는 중에도 자정이 지나면 팝업의
+  // "미래" 판정(열 때 찍은 now 기준)이 틀려지므로, 날짜가 바뀌었는지도 본다.
+  let headerDay = new Date().toDateString();
+
   function renderHeader(): void {
     const isCurrent = isCurrentPeriod(period, new Date());
     headerShowsCurrent = isCurrent;
+    headerDay = new Date().toDateString();
+    const focusKey = focusKeyWithin(header);
     header.replaceChildren(
       createSegmentedControl({
         options: UNIT_OPTIONS,
@@ -128,10 +138,17 @@ export function mountUsagePage(root: Element): void {
         onLabelClick: openPicker,
       }),
     );
+    // 헤더를 통째로 다시 그리면 눌렀던 버튼이 사라져 포커스가 body로 빠진다 —
+    // 키보드로 같은 버튼을 이어서 누를 수 있게 같은 버튼으로 돌려놓는다.
+    restoreFocus(header, focusKey);
   }
 
   function load({ isBackgroundRefresh = false } = {}): void {
+    if (isBackgroundRefresh && inFlight > 0) {
+      return;
+    }
     const requestId = ++latestRequestId;
+    inFlight += 1;
     if (!isBackgroundRefresh) {
       const loading = document.createElement("p");
       loading.className = "usage-page-loading";
@@ -152,6 +169,9 @@ export function mountUsagePage(root: Element): void {
         if (requestId === latestRequestId && !isBackgroundRefresh) {
           content.replaceChildren(createErrorView(String(error), () => load()));
         }
+      })
+      .finally(() => {
+        inFlight -= 1;
       });
   }
 
@@ -175,7 +195,10 @@ export function mountUsagePage(root: Element): void {
     // 자정(혹은 월요일·1일)을 넘기면 보고 있던 구간이 더 이상 "현재"가 아니게
     // 된다 — 헤더를 다시 그려서 → 버튼을 켜고 "오늘" 표시를 뗀다. 열려 있던
     // 팝업은 미래/현재 표시가 틀려지므로 닫는다.
-    if (isCurrent !== headerShowsCurrent) {
+    if (
+      isCurrent !== headerShowsCurrent ||
+      new Date().toDateString() !== headerDay
+    ) {
       closePopover();
       renderHeader();
     }
@@ -186,4 +209,33 @@ export function mountUsagePage(root: Element): void {
 
   renderHeader();
   load();
+}
+
+/** root 안에서 포커스를 가진 버튼을 다시 찾을 수 있게 하는 키(없으면 null). */
+function focusKeyWithin(root: HTMLElement): string | null {
+  const focused = document.activeElement;
+  if (!(focused instanceof HTMLElement) || !root.contains(focused)) {
+    return null;
+  }
+  return focusKey(focused);
+}
+
+function focusKey(element: HTMLElement): string {
+  // 구간 라벨은 글자가 계속 바뀌니 팝업 표시(aria-haspopup)로 알아본다.
+  if (element.hasAttribute("aria-haspopup")) {
+    return "label";
+  }
+  return element.getAttribute("aria-label") ?? element.textContent ?? "";
+}
+
+function restoreFocus(root: HTMLElement, key: string | null): void {
+  if (key === null) {
+    return;
+  }
+  const buttons = [...root.querySelectorAll<HTMLButtonElement>("button")];
+  // 방금 → 로 현재 구간에 닿아 "다음"이 꺼졌다면 "이전"으로 돌린다.
+  (
+    buttons.find((button) => focusKey(button) === key && !button.disabled) ??
+    buttons.find((button) => focusKey(button) === "이전")
+  )?.focus();
 }
