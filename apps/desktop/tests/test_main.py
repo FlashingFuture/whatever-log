@@ -8,8 +8,8 @@ import pytest
 
 from desktop.__main__ import (
     DEV_SERVER_URL,
-    HUB_EXIT_ALREADY_RUNNING,
-    HUB_EXIT_ARGUMENT_ERROR,
+    EXIT_ALREADY_RUNNING,
+    EXIT_ARGUMENT_ERROR,
     _classify_hub_exit,
     _dev_server_is_up,
     _resolve_url,
@@ -78,8 +78,8 @@ def test_wait_for_hub_port_times_out_when_port_never_opens() -> None:
     ("exit_code", "expected_fragment"),
     [
         (0, "정상 종료"),
-        (HUB_EXIT_ARGUMENT_ERROR, "인자가 잘못되었습니다"),
-        (HUB_EXIT_ALREADY_RUNNING, "이미 실행 중"),
+        (EXIT_ARGUMENT_ERROR, "인자가 잘못되었습니다"),
+        (EXIT_ALREADY_RUNNING, "이미 실행 중"),
     ],
 )
 def test_classify_hub_exit_recognizes_known_codes(exit_code, expected_fragment) -> None:

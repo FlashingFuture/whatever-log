@@ -29,6 +29,8 @@ apps/
                  닫히면 같이 종료시킨다
 packages/
 ├─ aggregation/ # 신규: 집계 쿼리(순수 함수). recorder의 open_db()/스키마를 그대로 재사용
+├─ common/      # 신규: 앱이 공유하는 범용 계약만 — 종료 코드, API 에러 응답 형식
+                  (앱 특화 코드는 각 앱 디렉터리에 둔다, docs/2026-10-error-handling.md)
 ├─ summary/     # 신규: AI 요약 — 폴더 구조만 (Phase 3, 구현 없음)
 └─ supervision/ # 신규: 중복 실행을 막는 lock + 자식 프로세스를 감시/재시작하는 supervisor
 ```

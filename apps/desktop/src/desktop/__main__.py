@@ -45,8 +45,7 @@ from urllib.parse import urlparse
 
 import webview
 from hub.__main__ import DEFAULT_PORT as HUB_PORT
-from hub.__main__ import EXIT_ALREADY_RUNNING as HUB_EXIT_ALREADY_RUNNING
-from hub.__main__ import EXIT_ARGUMENT_ERROR as HUB_EXIT_ARGUMENT_ERROR
+from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
 from supervision.log_setup import configure_logging
 from supervision.supervisor import supervise
 
@@ -115,9 +114,9 @@ def _classify_hub_exit(exit_code: int) -> str | None:
     None을 돌려준다(recorder.supervisor._classify_exit와 같은 패턴)."""
     if exit_code == 0:
         return "hub가 정상 종료했습니다"
-    if exit_code == HUB_EXIT_ARGUMENT_ERROR:
+    if exit_code == EXIT_ARGUMENT_ERROR:
         return "hub 인자가 잘못되었습니다"
-    if exit_code == HUB_EXIT_ALREADY_RUNNING:
+    if exit_code == EXIT_ALREADY_RUNNING:
         return "다른 hub가 이미 실행 중입니다"
     return None
 
