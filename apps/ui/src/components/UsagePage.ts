@@ -11,9 +11,12 @@ import {
 } from "../period";
 import { injectStyle } from "../styles/injectStyle";
 import { theme } from "../theme";
+import { createCalendarPicker } from "./CalendarPicker";
 import { createErrorView } from "./ErrorView";
-import { createPeriodNavigator } from "./PeriodNavigator";
+import { createPeriodListPicker } from "./PeriodListPicker";
+import { closePopover, isPopoverOpen, togglePopover } from "./Popover";
 import { createSegmentedControl } from "./SegmentedControl";
+import { createStepper } from "./Stepper";
 import { createUsageChart } from "./UsageChart";
 
 injectStyle(
@@ -75,8 +78,38 @@ export function mountUsagePage(root: Element): void {
     }
   }
 
+  /** 팝업에서 고른 구간으로 이동하고, 다시 그려진 라벨 버튼으로 포커스를 돌린다. */
+  function selectFromPicker(next: Period): void {
+    closePopover();
+    goTo(next);
+    header.querySelector<HTMLElement>('[aria-haspopup="dialog"]')?.focus();
+  }
+
+  function openPicker(anchor: HTMLButtonElement): void {
+    const now = new Date();
+    const picker =
+      period.unit === "day"
+        ? createCalendarPicker({
+            selected: period,
+            now,
+            onSelect: selectFromPicker,
+          })
+        : createPeriodListPicker({
+            unit: period.unit,
+            selected: period,
+            now,
+            onSelect: selectFromPicker,
+          });
+    togglePopover(anchor, picker, "구간 선택");
+  }
+
+  // 마지막으로 그린 헤더가 "현재 구간" 상태였는지 — 주기 갱신 때 바뀐 경우에만
+  // 헤더를 다시 그린다(열려 있는 팝업의 기준 버튼이 갈아치워지지 않게).
+  let headerShowsCurrent = false;
+
   function renderHeader(): void {
     const isCurrent = isCurrentPeriod(period, new Date());
+    headerShowsCurrent = isCurrent;
     header.replaceChildren(
       createSegmentedControl({
         options: UNIT_OPTIONS,
@@ -85,13 +118,14 @@ export function mountUsagePage(root: Element): void {
         onChange: (unit) =>
           goTo(periodContaining(unit, anchorForUnitChange(period, new Date()))),
       }),
-      createPeriodNavigator({
+      createStepper({
         label: formatPeriod(period),
         hint: isCurrent ? CURRENT_PERIOD_HINT[period.unit] : undefined,
         canGoPrev: true,
         canGoNext: !isCurrent,
         onPrev: goPrev,
         onNext: goNext,
+        onLabelClick: openPicker,
       }),
     );
   }
@@ -125,6 +159,10 @@ export function mountUsagePage(root: Element): void {
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
       return;
     }
+    // 팝업(달력·목록)은 방향키를 자기 안에서 쓴다 — 뒤의 구간이 같이 넘어가면 안 된다.
+    if (isPopoverOpen() || event.defaultPrevented) {
+      return;
+    }
     if (event.key === "ArrowLeft") {
       goPrev();
     } else if (event.key === "ArrowRight") {
@@ -133,10 +171,15 @@ export function mountUsagePage(root: Element): void {
   });
 
   setInterval(() => {
+    const isCurrent = isCurrentPeriod(period, new Date());
     // 자정(혹은 월요일·1일)을 넘기면 보고 있던 구간이 더 이상 "현재"가 아니게
-    // 된다 — 헤더를 다시 그려서 → 버튼을 켜고 "오늘" 표시를 뗀다.
-    renderHeader();
-    if (isCurrentPeriod(period, new Date())) {
+    // 된다 — 헤더를 다시 그려서 → 버튼을 켜고 "오늘" 표시를 뗀다. 열려 있던
+    // 팝업은 미래/현재 표시가 틀려지므로 닫는다.
+    if (isCurrent !== headerShowsCurrent) {
+      closePopover();
+      renderHeader();
+    }
+    if (isCurrent) {
       load({ isBackgroundRefresh: true });
     }
   }, REFRESH_INTERVAL_MS);

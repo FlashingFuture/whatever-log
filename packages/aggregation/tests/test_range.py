@@ -141,3 +141,44 @@ def test_handles_no_ticks_in_range(tmp_path) -> None:
     result = usage_by_range(conn, now, now + timedelta(hours=24))
 
     assert result["by_process"] == []
+
+
+def test_orders_by_total_then_active_descending(tmp_path) -> None:
+    """전체 시간이 같으면 집중(active) 시간이 많은 프로세스가 먼저 와야 한다."""
+    conn = open_db(tmp_path / "recorder.db")
+    now = datetime.now(UTC)
+    # a_idle: 15초 전부 idle, b_active: 15초 전부 active — 이름순이면 a_idle이 앞선다.
+    save_tick(conn, _tick(now, "a_idle.exe", {"a_idle.exe"}, idle_seconds=100.0))
+    save_tick(conn, _tick(now + timedelta(seconds=15), "b_active.exe", {"b_active.exe"}))
+    save_tick(conn, _tick(now + timedelta(seconds=30), None, set()))
+    # c_long: 더 오래 쓴 프로세스는 active가 0이어도 맨 앞.
+    save_tick(conn, _tick(now + timedelta(seconds=40), "c_long.exe", {"c_long.exe"}, idle_seconds=100.0))
+    save_tick(conn, _tick(now + timedelta(seconds=70), None, set()))
+
+    result = usage_by_range(conn, now, now + timedelta(seconds=71))
+
+    assert [row["process"] for row in result["by_process"]] == [
+        "c_long.exe",
+        "b_active.exe",
+        "a_idle.exe",
+    ]
+
+
+def test_float_noise_does_not_break_total_ties(tmp_path) -> None:
+    """항상 같이 떠 있는 프로세스들은 전체 시간이 같다. 더하는 순서 때문에 생기는
+    1e-13 단위 오차가 집중 시간 기준 정렬을 가리면 안 된다."""
+    conn = open_db(tmp_path / "recorder.db")
+    now = datetime.now(UTC)
+    # 불규칙한 간격(0.1초 단위)이라 float 합이 순서에 따라 어긋난다.
+    gaps = [0.1, 0.7, 0.3, 0.9, 0.2, 0.6, 0.4, 0.8, 0.5, 1.1]
+    t = now
+    for i, gap in enumerate(gaps * 3):
+        # z_busy는 가끔만 foreground → 항상 떠 있는 a_bg와 전체 시간은 같고 active만 많다.
+        fg = "z_busy.exe" if i % 3 == 0 else "m_other.exe"
+        save_tick(conn, _tick(t, fg, {"a_bg.exe", "z_busy.exe", "m_other.exe"}))
+        t += timedelta(seconds=gap)
+    save_tick(conn, _tick(t, None, set()))
+
+    result = usage_by_range(conn, now, t + timedelta(seconds=1))
+
+    assert result["by_process"][-1]["process"] == "a_bg.exe"

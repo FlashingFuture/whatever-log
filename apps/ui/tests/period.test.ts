@@ -6,9 +6,14 @@ import { afterEach, test } from "node:test";
 
 import {
   anchorForUnitChange,
+  calendarWeeks,
   formatPeriod,
+  formatPeriodShort,
   isCurrentPeriod,
+  isSelectablePeriod,
+  listYearOf,
   periodContaining,
+  periodsInYear,
   shiftPeriod,
 } from "../src/period.ts";
 
@@ -127,5 +132,92 @@ test("라벨 형식", () => {
   assert.equal(
     formatPeriod(periodContaining("week", new Date(2026, 11, 30))),
     "2026.12.28 – 2027.01.03",
+  );
+});
+
+test("주 목록: 1월 1일이 든 주부터 시작하고, 12월에 시작하는 주까지 포함한다", () => {
+  useTimezone("Asia/Seoul");
+  // 2026-01-01은 목요일, 2026-12-31도 목요일이다.
+  const weeks = periodsInYear("week", 2026);
+
+  assert.deepEqual(weeks[0].start, new Date(2025, 11, 29));
+  assert.deepEqual(weeks.at(-1)?.start, new Date(2026, 11, 28));
+  assert.deepEqual(weeks.at(-1)?.end, new Date(2027, 0, 4));
+  assert.equal(weeks.length, 53);
+});
+
+test("월 목록: 그 해 1월부터 12월까지 12개", () => {
+  useTimezone("Asia/Seoul");
+  const months = periodsInYear("month", 2026);
+
+  assert.equal(months.length, 12);
+  assert.deepEqual(months[0].start, new Date(2026, 0, 1));
+  assert.deepEqual(months[11].start, new Date(2026, 11, 1));
+});
+
+test("달력: 월요일 시작 7칸 행, 앞뒤 달 날짜로 채운다", () => {
+  useTimezone("Asia/Seoul");
+  // 2026-10-01은 목요일, 10-31은 토요일 → 9/28부터 11/1까지 5행.
+  const weeks = calendarWeeks(new Date(2026, 9, 15));
+
+  assert.equal(weeks.length, 5);
+  assert.ok(weeks.every((days) => days.length === 7));
+  assert.deepEqual(weeks[0][0], new Date(2026, 8, 28));
+  assert.deepEqual(weeks.at(-1)?.at(-1), new Date(2026, 10, 1));
+});
+
+test("달력: 1일이 월요일이고 28일까지인 달은 딱 4행이다", () => {
+  useTimezone("Asia/Seoul");
+  // 2027-02-01은 월요일, 2월은 28일까지.
+  const weeks = calendarWeeks(new Date(2027, 1, 1));
+
+  assert.equal(weeks.length, 4);
+  assert.deepEqual(weeks[0][0], new Date(2027, 1, 1));
+  assert.deepEqual(weeks[3][6], new Date(2027, 1, 28));
+});
+
+test("미래 구간은 고를 수 없다", () => {
+  useTimezone("Asia/Seoul");
+  const now = new Date(2026, 9, 29, 14);
+  const today = periodContaining("day", now);
+
+  assert.equal(isSelectablePeriod(today, now), true);
+  assert.equal(isSelectablePeriod(shiftPeriod(today, 1), now), false);
+  assert.equal(isSelectablePeriod(periodContaining("month", now), now), true);
+  assert.equal(
+    isSelectablePeriod(shiftPeriod(periodContaining("month", now), 1), now),
+    false,
+  );
+});
+
+test("연말·연초에 걸친 주는 새해 목록으로 연다", () => {
+  useTimezone("Asia/Seoul");
+  // 2027-01-01은 금요일 → 그 주는 2026-12-28(월)에 시작한다.
+  const straddling = periodContaining("week", new Date(2027, 0, 1));
+  const normal = periodContaining("week", new Date(2026, 9, 29));
+
+  assert.deepEqual(straddling.start, new Date(2026, 11, 28));
+  assert.equal(listYearOf(straddling), 2027);
+  assert.deepEqual(periodsInYear("week", 2027)[0].start, straddling.start);
+  assert.equal(listYearOf(normal), 2026);
+  assert.equal(
+    listYearOf(periodContaining("month", new Date(2026, 11, 31))),
+    2026,
+  );
+});
+
+test("짧은 라벨 형식", () => {
+  useTimezone("Asia/Seoul");
+  assert.equal(
+    formatPeriodShort(periodContaining("day", new Date(2026, 9, 9))),
+    "9",
+  );
+  assert.equal(
+    formatPeriodShort(periodContaining("week", new Date(2026, 0, 1))),
+    "12.29 – 01.04",
+  );
+  assert.equal(
+    formatPeriodShort(periodContaining("month", new Date(2026, 0, 15))),
+    "1월",
   );
 });

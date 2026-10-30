@@ -144,6 +144,16 @@ def usage_by_range(
                 "total_seconds": active + idle + background,
             }
         )
-    by_process.sort(key=lambda row: -row["total_seconds"])
+    # 전체 시간 내림차순, 같으면 집중(active) 시간 내림차순. 그래도 같으면 이름순으로
+    # 고정해서 새로고침마다 줄이 뒤바뀌지 않게 한다.
+    # float 합은 더하는 순서에 따라 1e-13 단위로 어긋난다(항상 떠 있는 프로세스들은
+    # 전체 시간이 이론상 같은데도 달라져 동률 판정이 깨진다) — 밀리초로 반올림해 비교한다.
+    by_process.sort(
+        key=lambda row: (
+            -round(row["total_seconds"], 3),
+            -round(row["active_seconds"], 3),
+            row["process"],
+        )
+    )
 
     return {"start": start_iso, "end": end_iso, "by_process": by_process}
