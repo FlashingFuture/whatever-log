@@ -6,7 +6,9 @@ import { afterEach, test } from "node:test";
 
 import {
   anchorForUnitChange,
+  bucketsOf,
   calendarWeeks,
+  formatBucketLabel,
   formatPeriod,
   formatPeriodShort,
   isCurrentPeriod,
@@ -220,4 +222,49 @@ test("짧은 라벨 형식", () => {
     formatPeriodShort(periodContaining("month", new Date(2026, 0, 15))),
     "1월",
   );
+});
+
+test("칸: 일은 시간별 24칸, 주는 7칸, 월은 그 달 일수만큼", () => {
+  useTimezone("Asia/Seoul");
+  const day = bucketsOf(periodContaining("day", new Date(2026, 9, 29)));
+  const week = bucketsOf(periodContaining("week", new Date(2026, 9, 29)));
+  const february = bucketsOf(periodContaining("month", new Date(2027, 1, 10)));
+  const october = bucketsOf(periodContaining("month", new Date(2026, 9, 10)));
+
+  assert.equal(day.length, 24);
+  assert.deepEqual(day[13].start, new Date(2026, 9, 29, 13));
+  assert.deepEqual(day.at(-1)?.end, new Date(2026, 9, 30));
+  assert.equal(week.length, 7);
+  assert.deepEqual(week[0].start, new Date(2026, 9, 26));
+  assert.equal(february.length, 28);
+  assert.equal(october.length, 31);
+});
+
+test("칸: 일광절약시간 전환일은 23/25칸이고, 칸들이 빈틈없이 이어진다", () => {
+  useTimezone("America/New_York");
+  const springForward = bucketsOf(
+    periodContaining("day", new Date(2026, 2, 8, 12)),
+  );
+  const fallBack = bucketsOf(
+    periodContaining("day", new Date(2026, 10, 1, 12)),
+  );
+
+  assert.equal(springForward.length, 23);
+  assert.equal(fallBack.length, 25);
+  for (const buckets of [springForward, fallBack]) {
+    buckets.slice(1).forEach((bucket, i) => {
+      assert.equal(bucket.start.getTime(), buckets[i].end.getTime());
+    });
+  }
+});
+
+test("칸 라벨", () => {
+  useTimezone("Asia/Seoul");
+  const [hour] = bucketsOf(periodContaining("day", new Date(2026, 9, 29, 13)));
+  const [dayBucket] = bucketsOf(
+    periodContaining("week", new Date(2026, 9, 29)),
+  );
+
+  assert.equal(formatBucketLabel("day", hour), "0시");
+  assert.equal(formatBucketLabel("week", dayBucket), "10/26 (월)");
 });

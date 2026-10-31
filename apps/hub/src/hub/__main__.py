@@ -25,7 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from aggregation.range import usage_by_range
+from aggregation.range import process_usage_by_bucket, usage_by_range
 from common import api_error
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
 from hub.icons import IconStore
@@ -105,6 +105,42 @@ def _usage_bounds(query: dict[str, list[str]]) -> tuple[datetime, datetime]:
         raise ValueError("start/end가 표현할 수 있는 날짜 범위를 벗어났습니다.") from exc
 
 
+# 칸 수 상한. 하루의 시간별(DST 25시간)과 한 달의 날짜별(31일)이 들어가야 한다.
+_MAX_BUCKETS = 32
+
+
+def _usage_edges(query: dict[str, list[str]]) -> list[datetime]:
+    """edges 쿼리 파라미터(쉼표로 구분한 ISO 8601 경계 목록)를 검증해 UTC로 돌려준다.
+
+    칸 경계는 start/end와 같은 이유로 apps/ui가 로컬 타임존으로 계산해 넘긴다.
+    잘못된 값이면 ValueError를 던진다(호출부가 400으로 응답).
+    """
+    raw = query.get("edges", [""])[0]
+    if not raw:
+        raise ValueError("edges가 필요합니다.")
+    parts = raw.split(",")
+    if len(parts) < 2 or len(parts) > _MAX_BUCKETS + 1:
+        raise ValueError(f"edges는 2개 이상 {_MAX_BUCKETS + 1}개 이하여야 합니다.")
+
+    try:
+        edges = [datetime.fromisoformat(part) for part in parts]
+    except ValueError as exc:
+        raise ValueError("edges는 ISO 8601 형식이어야 합니다.") from exc
+    if any(edge.tzinfo is None for edge in edges):
+        raise ValueError("edges에는 타임존(예: Z, +09:00)이 있어야 합니다.")
+    if any(later <= earlier for earlier, later in zip(edges, edges[1:])):
+        raise ValueError("edges는 오름차순이어야 합니다.")
+    if edges[-1] - edges[0] > _MAX_USAGE_SPAN:
+        raise ValueError("조회 구간은 최대 31일입니다.")
+
+    try:
+        return [edge.astimezone(UTC) for edge in edges]
+    except OverflowError as exc:
+        raise ValueError("edges가 표현할 수 있는 날짜 범위를 벗어났습니다.") from exc
+
+
+_PROCESS_PATH_PREFIX = "/api/processes/"
+_PROCESS_USAGE_SUFFIX = "/usage"
 _ICON_PATH_PREFIX = "/api/icons/"
 # 아이콘은 키(경로+수정시각)가 바뀌어야 내용이 바뀐다 — 캐시 키가 ETag라 오래
 # 캐시해도 안전하고, 만료돼도 If-None-Match로 304만 받으면 된다.
@@ -138,11 +174,17 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         """경로별로 처리 함수에 나눠 준다.
 
-        /api/usage는 집계 결과, /api/icons/<프로세스 이름>은 아이콘 PNG다.
+        /api/usage는 전체 집계, /api/processes/<이름>/usage는 한 프로세스의 칸별
+        집계, /api/icons/<이름>은 아이콘 PNG다.
         """
         parsed = urlparse(self.path)
         if parsed.path == "/api/usage":
             self._get_usage(parsed.query)
+        elif parsed.path.startswith(_PROCESS_PATH_PREFIX) and parsed.path.endswith(
+            _PROCESS_USAGE_SUFFIX
+        ):
+            name = parsed.path[len(_PROCESS_PATH_PREFIX) : -len(_PROCESS_USAGE_SUFFIX)]
+            self._get_process_usage(unquote(name), parsed.query)
         elif parsed.path.startswith(_ICON_PATH_PREFIX):
             self._get_icon(unquote(parsed.path[len(_ICON_PATH_PREFIX) :]))
         else:
@@ -176,6 +218,42 @@ class _Handler(BaseHTTPRequestHandler):
             )
             return
 
+        self._send_json(200, payload)
+
+    def _get_process_usage(self, process_name: str, raw_query: str) -> None:
+        """한 프로세스의 사용 시간을 edges가 나누는 칸별로 돌려준다(상세 화면용)."""
+        try:
+            edges = _usage_edges(parse_qs(raw_query))
+        except ValueError as exc:
+            self._send_json(
+                400, api_error.error_body(api_error.INVALID_REQUEST, str(exc))
+            )
+            return
+
+        try:
+            conn = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
+            try:
+                known = conn.execute(
+                    "SELECT 1 FROM processes WHERE name = ?", (process_name,)
+                ).fetchone()
+                payload = (
+                    process_usage_by_bucket(conn, process_name, edges) if known else None
+                )
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            logger.exception("집계 DB를 읽지 못했습니다: %s", self.db_path)
+            self._send_json(
+                503,
+                api_error.error_body(api_error.UNAVAILABLE, "database unavailable"),
+            )
+            return
+
+        if payload is None:
+            self._send_json(
+                404, api_error.error_body(api_error.NOT_FOUND, "process not found")
+            )
+            return
         self._send_json(200, payload)
 
     def _get_icon(self, process_name: str) -> None:

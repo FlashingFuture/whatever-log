@@ -220,3 +220,54 @@ def test_icon_endpoint_404_for_unknown_process_and_never_opens_arbitrary_paths(
     assert exc_info.value.code == 404
     assert json.loads(exc_info.value.read())["error"]["code"] == "not_found"
     assert "max-age" in exc_info.value.headers["Cache-Control"]  # 없음도 잠시 캐시
+
+
+def _process_url(base: str, name: str, edges: list[datetime]) -> str:
+    query = urllib.parse.urlencode({"edges": ",".join(e.isoformat() for e in edges)})
+    return f"{base}/api/processes/{urllib.parse.quote(name)}/usage?{query}"
+
+
+def test_process_usage_endpoint_returns_one_row_per_bucket(running_server) -> None:
+    edges = [_TICK_AT - timedelta(minutes=1), _TICK_AT + timedelta(minutes=1), _TICK_AT + timedelta(hours=1)]
+
+    with urllib.request.urlopen(_process_url(running_server, "chrome.exe", edges), timeout=2) as response:
+        payload = json.loads(response.read())
+
+    assert payload["process"] == "chrome.exe"
+    assert len(payload["buckets"]) == 2
+    assert payload["buckets"][0]["active_seconds"] == 15.0
+    assert payload["buckets"][1]["total_seconds"] == 0.0
+
+
+def test_process_usage_endpoint_404_for_unknown_process(running_server) -> None:
+    edges = [_TICK_AT, _TICK_AT + timedelta(hours=1)]
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(_process_url(running_server, "nope.exe", edges), timeout=2)
+
+    assert exc_info.value.code == 404
+    assert json.loads(exc_info.value.read())["error"]["code"] == "not_found"
+
+
+@pytest.mark.parametrize(
+    "edges",
+    [
+        "",  # 없음
+        "2026-10-28T00:00:00Z",  # 1개
+        "2026-10-28T01:00:00Z,2026-10-28T00:00:00Z",  # 내림차순
+        "2026-10-28T00:00:00,2026-10-28T01:00:00",  # 타임존 없음
+        "yesterday,today",  # ISO 아님
+        "2026-01-01T00:00:00Z,2026-03-01T00:00:00Z",  # 31일 초과
+        ",".join(f"2026-10-28T{h:02d}:00:00Z" for h in range(24))
+        + ",2026-10-29T00:00:00Z,2026-10-29T01:00:00Z,"
+        + ",".join(f"2026-10-29T{h:02d}:00:00Z" for h in range(2, 12)),  # 칸 수 초과
+    ],
+)
+def test_process_usage_endpoint_rejects_invalid_edges(running_server, edges) -> None:
+    query = urllib.parse.urlencode({"edges": edges})
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(f"{running_server}/api/processes/chrome.exe/usage?{query}", timeout=2)
+
+    assert exc_info.value.code == 400
+    assert json.loads(exc_info.value.read())["error"]["code"] == "invalid_request"
