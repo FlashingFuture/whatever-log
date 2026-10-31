@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from hub.icons import IconStore, encode_png, extract_icon_png
+from hub.icons import IconStore, _monochrome_to_rgba, encode_png, extract_icon_png
 
 
 def _decode_png(png: bytes) -> tuple[int, int, bytes]:
@@ -58,6 +58,24 @@ def test_returns_none_for_a_file_without_an_icon(tmp_path) -> None:
     plain.write_bytes(b"not an executable")
 
     assert extract_icon_png(str(plain)) is None
+
+
+def test_monochrome_icon_mask_becomes_black_white_and_transparent() -> None:
+    """모노크롬 아이콘: 위 절반=AND, 아래 절반=XOR. (AND,XOR) → 검정/흰색/투명."""
+    size = 2
+
+    def plane(bits: list[int]) -> bytes:
+        return b"".join(bytes((255 if bit else 0,) * 3 + (0,)) for bit in bits)
+
+    and_plane = plane([0, 0, 1, 1])
+    xor_plane = plane([0, 1, 0, 1])
+
+    rgba = _monochrome_to_rgba(and_plane + xor_plane, size)
+
+    assert rgba[0:4] == bytes((0, 0, 0, 255))  # AND=0,XOR=0 검정
+    assert rgba[4:8] == bytes((255, 255, 255, 255))  # AND=0,XOR=1 흰색
+    assert rgba[8:12] == bytes(4)  # AND=1,XOR=0 투명
+    assert rgba[12:16] == bytes(4)  # AND=1,XOR=1 반전 → 투명
 
 
 def _exe(tmp_path: Path, content: bytes = b"v1") -> str:

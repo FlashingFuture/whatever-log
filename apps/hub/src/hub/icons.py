@@ -138,14 +138,20 @@ def _icon_pixels(exe_path: str, size: int) -> bytes | None:
     info = _IconInfo()
     color_bits: bytes | None = None
     mask_bits: bytes | None = None
+    mono_bits: bytes | None = None
     try:
         if not user32.GetIconInfo(icon, ctypes.byref(info)):
             return None
         try:
             hdc = user32.GetDC(None)
             try:
-                color_bits = _dib_bits(gdi32, hdc, info.hbmColor, size)
-                mask_bits = _dib_bits(gdi32, hdc, info.hbmMask, size)
+                if info.hbmColor:
+                    color_bits = _dib_bits(gdi32, hdc, info.hbmColor, size, size)
+                    mask_bits = _dib_bits(gdi32, hdc, info.hbmMask, size, size)
+                else:
+                    # 모노크롬 아이콘은 색 비트맵이 없고, 마스크 하나가 두 배 높이다
+                    # (위 절반 = AND 마스크, 아래 절반 = XOR 마스크).
+                    mono_bits = _dib_bits(gdi32, hdc, info.hbmMask, size, size * 2)
             finally:
                 user32.ReleaseDC(None, hdc)
         finally:
@@ -155,24 +161,26 @@ def _icon_pixels(exe_path: str, size: int) -> bytes | None:
     finally:
         user32.DestroyIcon(icon)
 
-    if color_bits is None:
-        return None
-    return _to_rgba(color_bits, mask_bits)
+    if color_bits is not None:
+        return _to_rgba(color_bits, mask_bits)
+    if mono_bits is not None:
+        return _monochrome_to_rgba(mono_bits, size)
+    return None
 
 
-def _dib_bits(gdi32, hdc, bitmap, size: int) -> bytes | None:
+def _dib_bits(gdi32, hdc, bitmap, width: int, height: int) -> bytes | None:
     """비트맵을 위에서 아래 순서의 32비트 BGRA 픽셀로 읽는다."""
     if not bitmap:
         return None
     header = _BitmapInfoHeader()
     header.biSize = ctypes.sizeof(_BitmapInfoHeader)
-    header.biWidth = size
-    header.biHeight = -size  # 음수 = 위에서 아래
+    header.biWidth = width
+    header.biHeight = -height  # 음수 = 위에서 아래
     header.biPlanes = 1
     header.biBitCount = 32
-    buffer = ctypes.create_string_buffer(size * size * 4)
+    buffer = ctypes.create_string_buffer(width * height * 4)
     # 비트맵 크기가 요청과 다르면 이 아이콘은 포기한다(GetDIBits가 0을 돌려준다).
-    if gdi32.GetDIBits(hdc, bitmap, 0, size, buffer, ctypes.byref(header), 0) == 0:
+    if gdi32.GetDIBits(hdc, bitmap, 0, height, buffer, ctypes.byref(header), 0) == 0:
         return None
     return buffer.raw
 
@@ -186,6 +194,24 @@ def _to_rgba(color_bgra: bytes, mask_bgra: bytes | None) -> bytes:
             pixels[i + 3] = 255 if opaque else 0
     # B와 R을 맞바꾼다.
     pixels[0::4], pixels[2::4] = pixels[2::4], pixels[0::4]
+    return bytes(pixels)
+
+
+def _monochrome_to_rgba(mask_bgra: bytes, size: int) -> bytes:
+    """모노크롬 아이콘(두 배 높이 마스크: 위 AND, 아래 XOR)을 RGBA로 바꾼다.
+
+    AND=0,XOR=0 → 검정, AND=0,XOR=1 → 흰색, AND=1,XOR=0 → 투명. AND=1,XOR=1은 배경을
+    뒤집는 "반전"이라 화면 위가 아니면 뜻이 없어서 투명으로 둔다.
+    """
+    pixels = bytearray(size * size * 4)
+    xor_offset = size * size * 4
+    for i in range(0, size * size * 4, 4):
+        and_bit = mask_bgra[i] != 0
+        xor_bit = mask_bgra[xor_offset + i] != 0
+        if and_bit:
+            continue  # 투명(0,0,0,0)
+        value = 255 if xor_bit else 0
+        pixels[i : i + 4] = bytes((value, value, value, 255))
     return bytes(pixels)
 
 
