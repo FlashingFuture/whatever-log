@@ -5,7 +5,7 @@
  * 새로고침과 뒤로 가기가 된다. 라이브러리 없이 history API만 쓴다.
  *
  * 앱 안에서 몇 번 이동했는지를 history.state.depth에 적어 둔다 — "돌아가기"가
- * 앱 밖(처음 열린 페이지 이전)으로 나가 버리지 않게, depth가 0이면 막는다.
+ * 앱 밖(처음 열린 페이지 이전)으로 나가 버리지 않게, depth가 0이면 홈으로 보낸다.
  * 파싱·주소 만들기는 순수 함수라 DOM 없이 테스트한다.
  */
 
@@ -48,11 +48,6 @@ function currentDepth(): number {
   return state?.depth ?? 0;
 }
 
-/** 앱 안에서 돌아갈 곳이 있는지. */
-export function canGoBack(): boolean {
-  return currentDepth() > 0;
-}
-
 type Listener = () => void;
 const listeners = new Set<Listener>();
 let listening = false;
@@ -84,9 +79,15 @@ export function navigate(route: Route): void {
   notify();
 }
 
+/**
+ * 앱 안에서 온 길이 있으면 한 단계 뒤로, 없으면(상세 주소를 바로 열었거나 새로
+ * 고침한 경우) 홈으로 간다 — 앱 밖으로 나가 버리지 않게.
+ */
 export function goBack(): void {
-  if (canGoBack()) {
+  if (currentDepth() > 0) {
     window.history.back();
+  } else {
+    navigate(HOME);
   }
 }
 

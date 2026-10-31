@@ -196,9 +196,10 @@ apps/ui/src/
 ├─ theme.ts                   # 색상 토큰
 ├─ styles/injectStyle.ts      # <style> 태그 1회 주입 헬퍼
 ├─ router.ts                  # 해시 라우터(#/ , #/process/<이름>) + 앱 안 이동 깊이
+├─ routes.ts                  # 라우트 → 레이아웃(plain/back) 대응(순수 데이터)
 ├─ components/
-│  ├─ AppLayout.ts            # 모든 화면의 틀: 왼쪽 위 NavBar + 화면 자리
-│  ├─ NavBar.ts               # 홈 / 돌아가기 버튼(화면을 모름, 콜백·활성 상태만 받음)
+│  ├─ Layouts.ts              # 레이아웃 이름 → 틀(plain / back) + 화면 자리
+│  ├─ BackBar.ts              # 돌아가기 버튼(어디로 가는지 모름, 콜백만 받음)
 │  ├─ UsagePage.ts            # 홈 화면: 프로세스별 합계(PeriodView + UsageChart)
 │  ├─ ProcessPage.ts          # 상세 화면: 아이콘+이름 + 칸별 사용량(PeriodView + BucketChart)
 │  ├─ PeriodView.ts           # 단위 선택 + 구간 이동 + 내용(상태·갱신·키보드). 홈/상세 공용
@@ -215,11 +216,11 @@ apps/ui/src/
 │  ├─ BucketChart.ts          # 상세 차트: 합계 + 범례 + 칸(시간/날짜) 줄 목록
 │  ├─ ProcessIcon.ts          # 프로세스 아이콘(없으면 이름 첫 글자)
 │  └─ ErrorView.ts            # 에러 + 다시 시도 버튼
-└─ main.ts                    # 진입점: 전역 스타일 + AppLayout + 라우트별 화면 마운트
+└─ main.ts                    # 진입점: 전역 스타일 + 라우트별 레이아웃·화면 마운트
 apps/ui/tests/               # period/router 테스트(Node 내장 러너, `pnpm --filter ui test`)
 ```
 
-`Stepper`/`SegmentedControl`/`Button`/`Popover`/`NavBar`/`UsageRow`는 "사용 현황"이라는 걸 모른다 — 라벨과
+`Stepper`/`SegmentedControl`/`Button`/`Popover`/`BackBar`/`UsageRow`는 "사용 현황"이라는 걸 모른다 — 라벨과
 콜백만 받는다. "무엇을 보여줄지"는 화면(`UsagePage`/`ProcessPage`)이, 구간 상태는 `PeriodView`가 갖는다.
 
 CSS는 별도 `.css` 파일 대신, 각 컴포넌트 파일이 자기 스타일을 `injectStyle(id,
@@ -343,12 +344,18 @@ ui: 아이콘이 없거나(404) 실패하면 이름 첫 글자 칸으로 대신�
 - **해시 라우터를 직접 둔다.** 화면이 둘뿐이라 라이브러리(react-router 등)를 안 들이고
   `history.pushState`로 `#/…` 주소만 쓴다 — 서버 설정이 필요 없어 pywebview가 어떤 주소로
   띄워도 새로고침·뒤로 가기가 된다. 앱 안에서 몇 번 이동했는지를 `history.state.depth`에
-  적어, 처음 화면에서는 "돌아가기"를 꺼서 앱 밖으로 나가지 않게 한다.
+  적어, 처음 화면에서 "돌아가기"가 앱 밖으로 나가지 않게 홈으로 보낸다.
 - **이름만 주소에 싣는다.** 상세로 갈 때 구간은 싣지 않고, `PeriodView`가 마지막으로 본 구간을
   메모리에 기억한다(홈 → 상세 → 홈에서 보던 단위·날짜가 이어진다). 새로 띄우면 오늘.
-- **레이아웃은 틀, 화면은 알맹이.** `AppLayout`(`NavBar` + 자리)이 틀이고, 화면은 자리 안에만
-  그린다. 화면을 바꿀 때는 이전 화면의 `destroy()`를 불러 타이머·키보드 리스너를 해제한다
-  (안 하면 홈의 ←/→ 리스너가 상세에서도 살아남아 구간이 두 번 넘어간다).
+- **레이아웃은 라우트마다 정한다(`routes.ts`).** 홈은 `plain`(틀 없음 — 돌아갈 곳이 없다),
+  프로세스 상세는 `back`(왼쪽 위에 "← 뒤로" 버튼). 홈 버튼은 뒀다가 뺐다 — 앱이 홈 한 곳에서
+  갈라지는 구조라 "뒤로"로 충분하고, 둘이 같은 곳으로 가서 헷갈렸다. 화면은 틀을 모르고
+  `Layouts.ts`가 준 자리(content) 안에만 그린다. 라우트 종류를 늘리면 `LAYOUT_OF`에 레이아웃을
+  빠뜨릴 수 없다(`Record`라 타입 오류). 레이아웃은 바뀔 때만 다시 그린다.
+- **"뒤로"는 앱 안에서 온 길이 있으면 `history.back()`, 없으면 홈으로 간다.** 상세 주소를 바로
+  열었거나 새로고침한 경우 앱 밖으로 나가 버리지 않게 한다. 화면을 바꿀 때는 이전 화면의
+  `destroy()`를 불러 타이머·키보드 리스너를 해제한다(안 하면 홈의 ←/→ 리스너가 상세에서도
+  살아남아 구간이 두 번 넘어간다).
 - **구간 이동은 `PeriodView` 하나로.** 원래 `UsagePage`가 갖던 단위 선택·이동·팝업·15초
   갱신·키보드를 뽑아내고, 홈과 상세는 "구간 → 내용"(`loadContent`)만 다르게 준다.
 
