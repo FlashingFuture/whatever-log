@@ -61,6 +61,11 @@ async function toApiError(response: Response): Promise<ApiError> {
 // apps/hub가 고정 포트로 뜬다(apps/desktop이 자식 프로세스로 띄움).
 const HUB_URL = "http://127.0.0.1:8787";
 
+// hub가 연결만 열어 두고 응답을 끝내지 않아도 요청이 영원히 매달려 있지 않게 한다 —
+// PeriodView의 15초 갱신은 최신 요청이 끝나야 다시 시작되므로, 안 끝나는 요청 하나가
+// 화면 갱신을 멈춰 세운다. 정상 응답(월 단위 집계 포함)보다 충분히 긴 값.
+const REQUEST_TIMEOUT_MS = 10_000;
+
 /**
  * 프로세스 아이콘 URL. 이름만 넘기고 경로는 hub가 DB에서 찾는다. 브라우저가
  * hub의 Cache-Control/ETag로 캐싱하므로 같은 URL은 다시 받지 않는다.
@@ -70,14 +75,28 @@ export function iconUrl(processName: string): string {
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${HUB_URL}${path}`);
-  // fetch()는 HTTP 상태와 무관하게 resolve된다 — hub가 DB를 못 읽어 503을
-  // 주면 { "error": ... } 모양이라, 체크 없이 바로 결과로 취급하면 렌더링이
-  // undefined 필드에서 깨진다. 서버가 준 사유는 화면에 보이게 싣는다.
-  if (!response.ok) {
-    throw await toApiError(response);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${HUB_URL}${path}`, {
+      signal: controller.signal,
+    });
+    // fetch()는 HTTP 상태와 무관하게 resolve된다 — hub가 DB를 못 읽어 503을
+    // 주면 { "error": ... } 모양이라, 체크 없이 바로 결과로 취급하면 렌더링이
+    // undefined 필드에서 깨진다. 서버가 준 사유는 화면에 보이게 싣는다.
+    if (!response.ok) {
+      throw await toApiError(response);
+    }
+    // 본문을 읽는 동안에도 제한 시간이 적용되도록 같은 try 안에서 읽는다.
+    return (await response.json()) as T;
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("hub 응답 시간이 초과되었습니다.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
-  return (await response.json()) as T;
 }
 
 export function fetchUsage(start: Date, end: Date): Promise<RangeUsage> {

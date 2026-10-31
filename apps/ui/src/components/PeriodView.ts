@@ -8,31 +8,13 @@ import {
   periodContaining,
   shiftPeriod,
 } from "../period";
-import { injectStyle } from "../styles/injectStyle";
-import { theme } from "../theme";
 import { createCalendarPicker } from "./CalendarPicker";
 import { createErrorView } from "./ErrorView";
 import { createPeriodListPicker } from "./PeriodListPicker";
+import styles from "./PeriodView.module.css";
 import { closePopover, isPopoverOpen, togglePopover } from "./Popover";
 import { createSegmentedControl } from "./SegmentedControl";
 import { createStepper } from "./Stepper";
-
-injectStyle(
-  "period-view",
-  `
-  .period-view-header {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
-    margin-bottom: 1.25rem;
-  }
-  .period-view-loading {
-    color: ${theme.colors.textMuted};
-  }
-`,
-);
 
 // recorder의 기본 샘플링 간격(15초, apps/recorder/__main__.py의
 // DEFAULT_INTERVAL_SECONDS)과 맞춰서, 현재 구간을 보고 있으면 "실시간으로
@@ -80,7 +62,7 @@ export function createPeriodView(props: PeriodViewProps): PeriodView {
 
   const element = document.createElement("div");
   const header = document.createElement("div");
-  header.className = "period-view-header";
+  header.className = styles.header;
   const content = document.createElement("div");
   element.append(header, content);
 
@@ -169,7 +151,7 @@ export function createPeriodView(props: PeriodViewProps): PeriodView {
     latestPending = true;
     if (!isBackgroundRefresh) {
       const loading = document.createElement("p");
-      loading.className = "period-view-loading";
+      loading.className = styles.loading;
       loading.textContent = "불러오는 중…";
       content.replaceChildren(loading);
     }

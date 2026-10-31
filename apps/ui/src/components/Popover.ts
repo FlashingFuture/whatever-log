@@ -1,20 +1,4 @@
-import { injectStyle } from "../styles/injectStyle";
-import { theme } from "../theme";
-
-injectStyle(
-  "popover",
-  `
-  .popover {
-    position: absolute;
-    z-index: 10;
-    padding: 0.75rem;
-    background: ${theme.colors.background};
-    border: 1px solid ${theme.colors.border};
-    border-radius: 8px;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
-  }
-`,
-);
+import styles from "./Popover.module.css";
 
 interface ActivePopover {
   anchor: HTMLElement;
@@ -58,7 +42,7 @@ export function togglePopover(
   closePopover();
 
   const popover = document.createElement("div");
-  popover.className = "popover";
+  popover.className = styles.popover;
   popover.setAttribute("role", "dialog");
   popover.setAttribute("aria-label", ariaLabel);
   popover.append(content);

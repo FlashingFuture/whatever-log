@@ -1,0 +1,53 @@
+.button {
+  font: inherit;
+  font-size: var(--text-md);
+  padding: 0.3rem var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  color: var(--color-text);
+  cursor: pointer;
+}
+/* <button>에만 반응한다 — 같은 모양을 composes로 빌려 쓰는 정적 칸(Stepper)은 호버되지 않는다. */
+button.button:hover:not(:disabled) {
+  background: var(--color-track);
+}
+.button:disabled {
+  color: var(--color-text-disabled);
+  cursor: default;
+}
+.button[aria-pressed="true"] {
+  background: var(--color-active);
+  border-color: var(--color-active);
+}
+.button:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* 버튼 여러 개를 테두리를 공유하는 한 덩어리로 붙인다. */
+.group {
+  display: inline-flex;
+}
+.group > * {
+  border-radius: 0;
+}
+.group > * + * {
+  margin-left: -1px;
+}
+.group > :first-child {
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+}
+.group > :last-child {
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+}
+.group > :only-child {
+  border-radius: var(--radius-md);
+}
+/* 겹친 테두리 중 강조된 쪽(hover/선택/포커스)이 이웃에 가려지지 않게 위로 올린다. */
+.group > button:hover:not(:disabled),
+.group > .button:focus-visible,
+.group > .button[aria-pressed="true"] {
+  position: relative;
+  z-index: 1;
+}

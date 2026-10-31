@@ -48,13 +48,16 @@ function currentDepth(): number {
   return state?.depth ?? 0;
 }
 
-type Listener = () => void;
+/** push: 새 화면으로 이동. pop: 뒤로/앞으로 가기(이전에 있던 기록으로 돌아감). */
+export type NavigationKind = "push" | "pop";
+
+type Listener = (kind: NavigationKind) => void;
 const listeners = new Set<Listener>();
 let listening = false;
 
-function notify(): void {
+function notify(kind: NavigationKind): void {
   for (const listener of [...listeners]) {
-    listener();
+    listener(kind);
   }
 }
 
@@ -63,7 +66,7 @@ export function onRouteChange(listener: Listener): () => void {
   if (!listening) {
     listening = true;
     // 해시만 바뀌는 이동도, history.back()도 popstate로 온다.
-    window.addEventListener("popstate", notify);
+    window.addEventListener("popstate", () => notify("pop"));
   }
   listeners.add(listener);
   return () => {
@@ -75,8 +78,19 @@ export function navigate(route: Route): void {
   if (isSameRoute(route, currentRoute())) {
     return;
   }
+  // 떠나는 기록에 스크롤 위치를 적어 둔다 — 뒤로 돌아왔을 때 복원한다.
+  window.history.replaceState(
+    { ...(window.history.state as object | null), scrollY: window.scrollY },
+    "",
+  );
   window.history.pushState({ depth: currentDepth() + 1 }, "", routeHref(route));
-  notify();
+  notify("push");
+}
+
+/** 지금 기록에 저장돼 있는 스크롤 위치(없으면 맨 위). */
+export function savedScroll(): number {
+  const state = window.history.state as { scrollY?: number } | null;
+  return state?.scrollY ?? 0;
 }
 
 /**
