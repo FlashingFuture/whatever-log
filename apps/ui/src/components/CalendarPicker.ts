@@ -9,62 +9,8 @@ import {
   shiftPeriod,
   WEEKDAYS_FROM_MONDAY,
 } from "../period";
-import { injectStyle } from "../styles/injectStyle";
-import { theme } from "../theme";
+import styles from "./CalendarPicker.module.css";
 import { createStepper } from "./Stepper";
-
-injectStyle(
-  "calendar-picker",
-  `
-  .calendar-picker {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.6rem;
-  }
-  .calendar-grid {
-    display: grid;
-    grid-template-columns: repeat(7, 2.2rem);
-    gap: 0.15rem;
-  }
-  .calendar-weekday {
-    text-align: center;
-    font-size: 0.75rem;
-    color: ${theme.colors.textMuted};
-    padding-bottom: 0.2rem;
-  }
-  .calendar-day {
-    font: inherit;
-    font-size: 0.85rem;
-    height: 2.2rem;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    background: none;
-    color: ${theme.colors.text};
-    cursor: pointer;
-  }
-  .calendar-day:hover:not(:disabled) {
-    background: ${theme.colors.track};
-  }
-  .calendar-day:focus-visible {
-    outline: 2px solid ${theme.colors.active};
-    outline-offset: -2px;
-  }
-  .calendar-day.is-outside {
-    color: ${theme.colors.textMuted};
-  }
-  .calendar-day:disabled {
-    color: ${theme.colors.textDisabled};
-    cursor: default;
-  }
-  .calendar-day[aria-current="date"] {
-    border-color: ${theme.colors.border};
-  }
-  .calendar-day[aria-pressed="true"] {
-    background: ${theme.colors.active};
-  }
-`,
-);
 
 export interface CalendarPickerProps {
   /** 지금 보고 있는 날(unit이 "day"인 구간). */
@@ -83,7 +29,7 @@ const ARROW_DAY_STEPS: Record<string, number> = {
 /** 날짜를 고르는 달력. 위쪽 ‹ 연·월 ›로 달을 넘긴다(이번 달보다 뒤로는 못 간다). */
 export function createCalendarPicker(props: CalendarPickerProps): HTMLElement {
   const root = document.createElement("div");
-  root.className = "calendar-picker";
+  root.className = styles.picker;
   let month = periodContaining("month", props.selected.start);
 
   function render(): void {
@@ -98,10 +44,10 @@ export function createCalendarPicker(props: CalendarPickerProps): HTMLElement {
     });
 
     const grid = document.createElement("div");
-    grid.className = "calendar-grid";
+    grid.className = styles.grid;
     for (const name of WEEKDAYS_FROM_MONDAY) {
       const weekday = document.createElement("span");
-      weekday.className = "calendar-weekday";
+      weekday.className = styles.weekday;
       weekday.textContent = name;
       grid.append(weekday);
     }
@@ -118,14 +64,14 @@ export function createCalendarPicker(props: CalendarPickerProps): HTMLElement {
   function createDay(day: Period): HTMLButtonElement {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "calendar-day";
+    button.className = styles.day;
     button.textContent = String(day.start.getDate());
     // 칸에는 숫자만 보이니, 스크린 리더에는 날짜 전체를 읽어준다.
     button.setAttribute("aria-label", formatPeriod(day));
     button.dataset.time = String(day.start.getTime());
     button.disabled = !isSelectablePeriod(day, props.now);
     if (day.start.getMonth() !== month.start.getMonth()) {
-      button.classList.add("is-outside");
+      button.classList.add(styles.outside);
     }
     if (isCurrentPeriod(day, props.now)) {
       button.setAttribute("aria-current", "date");

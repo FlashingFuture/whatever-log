@@ -1,0 +1,4 @@
+/* 여러 컴포넌트가 `composes: muted from "..."`로 가져다 쓰는 공통 스타일. */
+.muted {
+  color: var(--color-text-muted);
+}

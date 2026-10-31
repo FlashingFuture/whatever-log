@@ -1,22 +1,7 @@
 import type { RangeUsage } from "../api";
-import { injectStyle } from "../styles/injectStyle";
-import { theme } from "../theme";
 import { createProcessRow } from "./ProcessRow";
+import styles from "./UsageChart.module.css";
 import { createUsageLegend } from "./UsageLegend";
-
-injectStyle(
-  "usage-chart",
-  `
-  .usage-chart {
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-  }
-  .usage-chart-empty {
-    color: ${theme.colors.textMuted};
-  }
-`,
-);
 
 /** 구간의 프로세스별 사용 시간 막대 차트. 어떤 구간인지(제목/라벨)는 호출부가 그린다. */
 export function createUsageChart(usage: RangeUsage): HTMLElement {
@@ -24,7 +9,7 @@ export function createUsageChart(usage: RangeUsage): HTMLElement {
 
   if (usage.by_process.length === 0) {
     const empty = document.createElement("p");
-    empty.className = "usage-chart-empty";
+    empty.className = styles.empty;
     empty.textContent = "기록된 사용 내역이 없습니다.";
     container.append(empty);
     return container;
@@ -38,7 +23,7 @@ export function createUsageChart(usage: RangeUsage): HTMLElement {
   );
 
   const chart = document.createElement("div");
-  chart.className = "usage-chart";
+  chart.className = styles.chart;
   for (const row of usage.by_process) {
     chart.append(createProcessRow(row, maxTotal));
   }

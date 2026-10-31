@@ -258,6 +258,23 @@ test("칸: 일광절약시간 전환일은 23/25칸이고, 칸들이 빈틈없�
   }
 });
 
+test("칸 라벨: 일광절약시간이 끝나는 날의 반복된 1시는 UTC 오프셋으로 구분한다", () => {
+  useTimezone("America/New_York");
+  const buckets = bucketsOf(periodContaining("day", new Date(2026, 10, 1, 12)));
+  const labels = buckets.map((bucket) => formatBucketLabel("day", bucket));
+
+  assert.equal(new Set(labels).size, labels.length); // 25칸이 모두 다른 라벨
+  assert.deepEqual(labels.slice(0, 4), [
+    "0시",
+    "1시 (UTC-04:00)",
+    "1시 (UTC-05:00)",
+    "2시",
+  ]);
+  // 보통 날에는 오프셋이 붙지 않는다.
+  const normal = bucketsOf(periodContaining("day", new Date(2026, 9, 29)));
+  assert.equal(formatBucketLabel("day", normal[13]), "13시");
+});
+
 test("칸 라벨", () => {
   useTimezone("Asia/Seoul");
   const [hour] = bucketsOf(periodContaining("day", new Date(2026, 9, 29, 13)));

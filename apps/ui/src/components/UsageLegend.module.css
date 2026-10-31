@@ -1,0 +1,26 @@
+.legend {
+  composes: muted from "../styles/shared.module.css";
+  display: flex;
+  gap: var(--space-4);
+  font-size: 0.8rem;
+  margin-bottom: var(--space-2);
+}
+.dot {
+  display: inline-block;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  margin-right: 0.3rem;
+}
+.dotActive {
+  composes: dot;
+  background: var(--color-active);
+}
+.dotIdle {
+  composes: dot;
+  background: var(--color-idle);
+}
+.dotBackground {
+  composes: dot;
+  background: var(--color-background-segment);
+}

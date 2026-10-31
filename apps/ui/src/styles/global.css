@@ -1,0 +1,12 @@
+@import "./tokens.css";
+
+body {
+  font:
+    16px / 1.5 system-ui,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+  margin: var(--space-8);
+  background: var(--color-bg);
+  color: var(--color-text);
+}

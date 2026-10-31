@@ -1,55 +1,6 @@
+import { formatDuration } from "../format";
 import { createRouteLink, type Route } from "../router";
-import { injectStyle } from "../styles/injectStyle";
-import { theme } from "../theme";
-
-injectStyle(
-  "usage-row",
-  `
-  .usage-row {
-    display: grid;
-    grid-template-columns: 9rem 1fr 10rem;
-    align-items: center;
-    gap: 0.75rem;
-    color: inherit;
-    text-decoration: none;
-  }
-  /* 누를 수 있는 줄(링크)만 반응한다. 옆 줄과 겹치지 않게 살짝 안쪽 여백을 둔다. */
-  a.usage-row {
-    margin: 0 -0.5rem;
-    padding: 0.15rem 0.5rem;
-    border-radius: 6px;
-  }
-  a.usage-row:hover {
-    background: ${theme.colors.track};
-  }
-  a.usage-row:focus-visible {
-    outline: 2px solid ${theme.colors.active};
-    outline-offset: -2px;
-  }
-  .usage-row-track {
-    height: 1rem;
-    background: ${theme.colors.track};
-    border-radius: 4px;
-    overflow: hidden;
-  }
-  a.usage-row:hover .usage-row-track {
-    background: ${theme.colors.background};
-  }
-  .usage-row-fill {
-    height: 100%;
-    display: flex;
-  }
-  .usage-row-value {
-    font-size: 0.85rem;
-    color: ${theme.colors.textMuted};
-    text-align: right;
-  }
-  /* 칸이 좁으면 "활성 / 총" 사이에서만 줄을 바꾸고, "12시간 12분" 안에서는 안 끊는다. */
-  .usage-row-value-part {
-    white-space: nowrap;
-  }
-`,
-);
+import styles from "./UsageRow.module.css";
 
 /** 활성/유휴/백그라운드 세 구간(서로 겹치지 않고 합이 total). */
 export interface UsageNumbers {
@@ -59,25 +10,17 @@ export interface UsageNumbers {
   total_seconds: number;
 }
 
-export function formatDuration(seconds: number): string {
-  const totalMinutes = Math.round(seconds / 60);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return hours === 0 ? `${minutes}분` : `${hours}시간 ${minutes}분`;
-}
-
 function valuePart(text: string): HTMLSpanElement {
   const part = document.createElement("span");
-  part.className = "usage-row-value-part";
+  part.className = styles.valuePart;
   part.textContent = text;
   return part;
 }
 
-function segment(widthPct: number, color: string): HTMLDivElement {
+function segment(widthPct: number, className: string): HTMLDivElement {
   const div = document.createElement("div");
+  div.className = className;
   div.style.width = `${widthPct}%`;
-  div.style.height = "100%";
-  div.style.background = color;
   return div;
 }
 
@@ -102,7 +45,7 @@ export function createUsageRow(props: UsageRowProps): HTMLElement {
   const row = props.route
     ? createRouteLink(props.route)
     : document.createElement("div");
-  row.classList.add("usage-row");
+  row.classList.add(styles.row);
 
   const breakdown =
     `${props.description}: 활성 ${formatDuration(usage.active_seconds)}, ` +
@@ -111,7 +54,7 @@ export function createUsageRow(props: UsageRowProps): HTMLElement {
     `총 ${formatDuration(usage.total_seconds)}`;
 
   const track = document.createElement("div");
-  track.className = "usage-row-track";
+  track.className = styles.track;
   // 막대의 세 구간은 색으로만 구분되어 있어서, 스크린 리더 사용자나 색을 구분하기
   // 어려운 사용자는 값을 알 수 없다 — role="img" + aria-label로 전체 수치를
   // 텍스트로도 제공한다. title을 같이 줘서 마우스 호버로도 같은 내용을 볼 수 있다.
@@ -120,7 +63,7 @@ export function createUsageRow(props: UsageRowProps): HTMLElement {
   track.title = breakdown;
 
   const fill = document.createElement("div");
-  fill.className = "usage-row-fill";
+  fill.className = styles.fill;
   fill.style.width =
     props.maxTotal > 0
       ? `${(usage.total_seconds / props.maxTotal) * 100}%`
@@ -128,25 +71,18 @@ export function createUsageRow(props: UsageRowProps): HTMLElement {
 
   // fill의 폭 자체가 total_seconds를 나타내고, 그 안을 세 구간으로 나란히 채운다.
   if (usage.total_seconds > 0) {
+    const pct = (seconds: number): number =>
+      (seconds / usage.total_seconds) * 100;
     fill.append(
-      segment(
-        (usage.active_seconds / usage.total_seconds) * 100,
-        theme.colors.active,
-      ),
-      segment(
-        (usage.idle_seconds / usage.total_seconds) * 100,
-        theme.colors.idle,
-      ),
-      segment(
-        (usage.background_seconds / usage.total_seconds) * 100,
-        theme.colors.backgroundSegment,
-      ),
+      segment(pct(usage.active_seconds), styles.segActive),
+      segment(pct(usage.idle_seconds), styles.segIdle),
+      segment(pct(usage.background_seconds), styles.segBackground),
     );
   }
   track.append(fill);
 
   const value = document.createElement("span");
-  value.className = "usage-row-value";
+  value.className = styles.value;
   value.append(
     valuePart(formatDuration(usage.active_seconds)),
     " / ",

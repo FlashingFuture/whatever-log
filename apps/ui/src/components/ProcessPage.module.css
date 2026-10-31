@@ -1,0 +1,10 @@
+.title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-5);
+  font-size: 1.5rem;
+}
+.name {
+  overflow-wrap: anywhere;
+}

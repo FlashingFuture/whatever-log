@@ -1,0 +1,24 @@
+.icon {
+  flex: none;
+  width: var(--space-5);
+  height: var(--space-5);
+  border-radius: var(--radius-sm);
+  object-fit: contain;
+}
+.large {
+  width: var(--space-8);
+  height: var(--space-8);
+  border-radius: var(--radius-md);
+}
+.fallback {
+  composes: muted from "../styles/shared.module.css";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-track);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+}
+.fallback.large {
+  font-size: var(--text-md);
+}

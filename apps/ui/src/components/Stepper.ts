@@ -1,28 +1,5 @@
-import { injectStyle } from "../styles/injectStyle";
-import { theme } from "../theme";
 import { createButton, createButtonGroup } from "./Button";
-
-injectStyle(
-  "stepper",
-  `
-  .stepper-label {
-    text-align: center;
-    font-weight: 600;
-  }
-  /* 누를 수 없는 라벨: 테두리는 그룹과 이어지되 버튼처럼 반응하지 않는다. */
-  .button.stepper-label-static,
-  .button.stepper-label-static:hover {
-    background: ${theme.colors.background};
-    cursor: default;
-  }
-  .stepper-hint {
-    margin-left: 0.4rem;
-    font-weight: 400;
-    font-size: 0.85rem;
-    color: ${theme.colors.textMuted};
-  }
-`,
-);
+import styles from "./Stepper.module.css";
 
 export interface StepperProps {
   label: string;
@@ -52,15 +29,15 @@ export function createStepper(props: StepperProps): HTMLElement {
     label = button;
   } else {
     label = document.createElement("span");
-    label.className = "button stepper-label-static";
+    label.className = styles.labelStatic;
     label.textContent = props.label;
   }
-  label.classList.add("stepper-label");
+  label.classList.add(styles.label);
   label.style.minWidth = props.labelMinWidth ?? "14rem";
 
   if (props.hint) {
     const hint = document.createElement("span");
-    hint.className = "stepper-hint";
+    hint.className = styles.hint;
     hint.textContent = props.hint;
     label.append(hint);
   }
