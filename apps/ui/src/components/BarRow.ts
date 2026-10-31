@@ -7,7 +7,7 @@ injectStyle(
   `
   .bar-row {
     display: grid;
-    grid-template-columns: 9rem 1fr 7rem;
+    grid-template-columns: 9rem 1fr 10rem;
     align-items: center;
     gap: 0.75rem;
   }
@@ -32,6 +32,10 @@ injectStyle(
     color: ${theme.colors.textMuted};
     text-align: right;
   }
+  /* 칸이 좁으면 "활성 / 총" 사이에서만 줄을 바꾸고, "12시간 12분" 안에서는 안 끊는다. */
+  .bar-value-part {
+    white-space: nowrap;
+  }
 `,
 );
 
@@ -40,6 +44,13 @@ function formatDuration(seconds: number): string {
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
   return hours === 0 ? `${minutes}분` : `${hours}시간 ${minutes}분`;
+}
+
+function valuePart(text: string): HTMLSpanElement {
+  const part = document.createElement("span");
+  part.className = "bar-value-part";
+  part.textContent = text;
+  return part;
 }
 
 function segment(widthPct: number, color: string): HTMLDivElement {
@@ -104,7 +115,11 @@ export function createBarRow(row: ProcessUsage, maxTotal: number): HTMLElement {
 
   const value = document.createElement("span");
   value.className = "bar-value";
-  value.textContent = `${formatDuration(row.active_seconds)} / ${formatDuration(row.total_seconds)}`;
+  value.append(
+    valuePart(formatDuration(row.active_seconds)),
+    " / ",
+    valuePart(formatDuration(row.total_seconds)),
+  );
 
   item.append(label, track, value);
   return item;

@@ -42,15 +42,16 @@ function legendItem(color: string, label: string): HTMLSpanElement {
   return item;
 }
 
-export function renderUsageChart(app: Element, usage: RangeUsage): void {
-  app.innerHTML = "<h1>최근 24시간 사용 현황</h1>";
+/** 구간의 프로세스별 사용 시간 막대 차트. 어떤 구간인지(제목/라벨)는 호출부가 그린다. */
+export function createUsageChart(usage: RangeUsage): HTMLElement {
+  const container = document.createElement("div");
 
   if (usage.by_process.length === 0) {
     const empty = document.createElement("p");
     empty.className = "usage-chart-empty";
     empty.textContent = "기록된 사용 내역이 없습니다.";
-    app.append(empty);
-    return;
+    container.append(empty);
+    return container;
   }
 
   const legend = document.createElement("div");
@@ -61,9 +62,9 @@ export function renderUsageChart(app: Element, usage: RangeUsage): void {
     legendItem(theme.colors.backgroundSegment, "백그라운드"),
   );
 
-  // 가장 오래 떠 있던(total) 프로세스를 기준으로 막대 폭을 정한다 — 범위
-  // 전체 길이(24시간)를 기준으로 하면 거의 모든 막대가 짤막해져서 비교가
-  // 어렵다.
+  // 가장 오래 떠 있던(total) 프로세스를 기준으로 막대 폭을 정한다 — 구간
+  // 전체 길이(하루/한 주/한 달)를 기준으로 하면 거의 모든 막대가 짤막해져서
+  // 비교가 어렵다.
   const maxTotal = Math.max(
     ...usage.by_process.map((row) => row.total_seconds),
   );
@@ -74,5 +75,6 @@ export function renderUsageChart(app: Element, usage: RangeUsage): void {
     chart.append(createBarRow(row, maxTotal));
   }
 
-  app.append(legend, chart);
+  container.append(legend, chart);
+  return container;
 }

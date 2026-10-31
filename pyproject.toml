@@ -4,6 +4,7 @@ members = [
     "apps/desktop",
     "apps/hub",
     "packages/aggregation",
+    "packages/common",
     "packages/summary",
     "packages/supervision",
 ]
@@ -20,5 +21,6 @@ testpaths = [
     "apps/desktop/tests",
     "apps/hub/tests",
     "packages/aggregation/tests",
+    "packages/common/tests",
     "packages/supervision/tests",
 ]

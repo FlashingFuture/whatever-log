@@ -66,6 +66,10 @@ API로 서빙만 합니다 — `apps/desktop`이 창을 열 때 hub를 자식 �
 필요해져서 공통 모듈로 뺐습니다 — recorder/hub 둘 다 이 모듈을 씁니다
 (`docs/2026-10-hub-architecture.md` 참고).
 
+프로세스 종료 코드와 HTTP API 에러 응답 형식처럼 앱들이 같은 뜻으로 공유해야 하는 범용
+계약은 `packages/common`에만 둡니다. 특정 앱에서만 쓰는 것은 그 앱 디렉터리에서
+관리합니다(`docs/2026-10-error-handling.md` 참고).
+
 Python 쪽도 pnpm workspace와 같은 방식으로 uv workspace(루트 `pyproject.toml`의
 `[tool.uv.workspace]`)로 묶여 있습니다 — 여러 앱이 서로를 import하면서 앱별 독립
 `.venv`로는 부족해졌기 때문입니다. `uv sync`/`uv run`은 루트에서 한 번만 하면 되고,

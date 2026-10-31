@@ -26,6 +26,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from aggregation.range import usage_by_range
+from common import api_error
+from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
 from recorder.__main__ import DEFAULT_DB_PATH
 from supervision.lock import AlreadyRunningError, acquire_lock
 from supervision.log_setup import configure_logging
@@ -34,13 +36,6 @@ DEFAULT_PORT = 8787
 
 _APP_DIR = Path(__file__).resolve().parent.parent.parent
 DEFAULT_LOG_PATH = _APP_DIR / "hub.log"
-
-# argparse가 인자 오류에 쓰는 종료 코드와 맞춘다(recorder와 같은 관례) —
-# apps/desktop의 supervisor가 이 코드를 받으면 재시작하지 않아야 한다.
-EXIT_ARGUMENT_ERROR = 2
-# acquire_lock()의 AlreadyRunningError를 구분하기 위한 전용 종료 코드.
-# argparse가 이미 2를 쓰므로 겹치지 않게 3을 쓴다(recorder와 동일한 관례).
-EXIT_ALREADY_RUNNING = 3
 
 logger = logging.getLogger("hub")
 
@@ -66,17 +61,46 @@ def _lock_path_for_port(port: int) -> Path:
     return _APP_DIR / f"hub-{port}.lock"
 
 
-def _usage_range_bounds(range_param: str) -> tuple[datetime, datetime] | None:
-    """range 쿼리 파라미터를 (start, end) UTC 경계로 바꾼다.
+# 월 단위(최대 31일) 조회까지 허용한다. 2시간은 전환이 낀 달의 여유분이다 —
+# 시계가 1시간 되돌아가는 보통의 일광절약시간뿐 아니라 2시간 되돌아가는 곳
+# (예: Antarctica/Troll)의 10월(31일 2시간)도 통과해야 한다. 이보다 긴 구간은
+# 틱 수가 많아 쿼리가 무거워지므로 막는다.
+_MAX_USAGE_SPAN = timedelta(days=31, hours=2)
 
-    지금은 "24h"(최근 24시간, rolling) 하나만 지원한다 — 나중에 기간 선택
-    UI가 붙으면 여기에 다른 값(예: 특정 날짜)을 추가하면 된다. 모르는
-    값이면 None을 돌려줘서 호출부가 400으로 응답하게 한다.
+
+def _usage_bounds(query: dict[str, list[str]]) -> tuple[datetime, datetime]:
+    """start/end 쿼리 파라미터(타임존이 붙은 ISO 8601)를 검증해 UTC 경계로 돌려준다.
+
+    "오늘/이번 주/이번 달" 경계는 로컬 타임존을 아는 apps/ui가 계산해서 넘긴다
+    — hub에서 타임존/일광절약시간을 다시 계산하지 않기 위해서다. 잘못된 값이면
+    ValueError를 던지고, 호출부가 그 메시지로 400을 응답한다.
+
+    오프셋의 "+"는 쿼리 문자열에서 공백으로 디코딩되므로, 호출부는 "Z" 표기를
+    쓰거나 퍼센트 인코딩해야 한다.
     """
-    if range_param == "24h":
-        end = datetime.now(UTC)
-        return end - timedelta(hours=24), end
-    return None
+    start_raw = query.get("start", [""])[0]
+    end_raw = query.get("end", [""])[0]
+    if not start_raw or not end_raw:
+        raise ValueError("start와 end가 모두 필요합니다.")
+
+    try:
+        start = datetime.fromisoformat(start_raw)
+        end = datetime.fromisoformat(end_raw)
+    except ValueError as exc:
+        raise ValueError("start/end는 ISO 8601 형식이어야 합니다.") from exc
+
+    if start.tzinfo is None or end.tzinfo is None:
+        raise ValueError("start/end에는 타임존(예: Z, +09:00)이 있어야 합니다.")
+    if start >= end:
+        raise ValueError("start는 end보다 앞이어야 합니다.")
+    if end - start > _MAX_USAGE_SPAN:
+        raise ValueError("조회 구간은 최대 31일입니다.")
+
+    try:
+        return start.astimezone(UTC), end.astimezone(UTC)
+    except OverflowError as exc:
+        # 0001-01-01T00:00:00+01:00처럼 UTC로 바꾸면 표현 범위를 벗어나는 값.
+        raise ValueError("start/end가 표현할 수 있는 날짜 범위를 벗어났습니다.") from exc
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -106,15 +130,16 @@ class _Handler(BaseHTTPRequestHandler):
         """
         parsed = urlparse(self.path)
         if parsed.path != "/api/usage":
-            self._send_json(404, {"error": "not found"})
+            self._send_json(404, api_error.error_body(api_error.NOT_FOUND, "not found"))
             return
 
-        range_param = parse_qs(parsed.query).get("range", ["24h"])[0]
-        bounds = _usage_range_bounds(range_param)
-        if bounds is None:
-            self._send_json(400, {"error": f"지원하지 않는 range입니다: {range_param}"})
+        try:
+            start, end = _usage_bounds(parse_qs(parsed.query))
+        except ValueError as exc:
+            self._send_json(
+                400, api_error.error_body(api_error.INVALID_REQUEST, str(exc))
+            )
             return
-        start, end = bounds
 
         try:
             conn = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
@@ -124,7 +149,10 @@ class _Handler(BaseHTTPRequestHandler):
                 conn.close()
         except sqlite3.Error:
             logger.exception("집계 DB를 읽지 못했습니다: %s", self.db_path)
-            self._send_json(503, {"error": "database unavailable"})
+            self._send_json(
+                503,
+                api_error.error_body(api_error.UNAVAILABLE, "database unavailable"),
+            )
             return
 
         self._send_json(200, payload)

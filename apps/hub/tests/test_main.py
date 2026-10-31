@@ -2,8 +2,9 @@ import json
 import sys
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 
 import pytest
@@ -12,7 +13,16 @@ from recorder.storage import open_db, save_tick
 from supervision.lock import acquire_lock
 
 import hub.__main__ as hub_main
-from hub.__main__ import EXIT_ALREADY_RUNNING, _Handler, _lock_path_for_port, main
+from common.exit_codes import EXIT_ALREADY_RUNNING
+from hub.__main__ import _Handler, _lock_path_for_port, main
+
+# fixture가 넣는 틱 시각. 두 틱이 15초 간격이라 chrome.exe가 active 15초가 된다.
+_TICK_AT = datetime(2026, 10, 28, 3, 0, tzinfo=UTC)
+
+
+def _usage_url(base: str, start: datetime, end: datetime) -> str:
+    query = urllib.parse.urlencode({"start": start.isoformat(), "end": end.isoformat()})
+    return f"{base}/api/usage?{query}"
 
 
 @pytest.fixture
@@ -20,15 +30,16 @@ def running_server(tmp_path):
     """임시 DB를 가리키는 실제 HTTP 서버를 띄우고, 끝나면 정리한다."""
     db_path = tmp_path / "recorder.db"
     conn = open_db(db_path)
-    save_tick(
-        conn,
-        TickSample(
-            sampled_at=datetime.now(UTC),
-            foreground_process="chrome.exe",
-            windowed_processes=frozenset({"chrome.exe"}),
-            seconds_since_last_input=0.0,
-        ),
-    )
+    for offset in (0, 15):
+        save_tick(
+            conn,
+            TickSample(
+                sampled_at=_TICK_AT + timedelta(seconds=offset),
+                foreground_process="chrome.exe",
+                windowed_processes=frozenset({"chrome.exe"}),
+                seconds_since_last_input=0.0,
+            ),
+        )
     conn.close()
 
     _Handler.db_path = db_path
@@ -45,7 +56,8 @@ def test_usage_endpoint_reflects_allowed_localhost_origin(running_server) -> Non
     """apps/ui가 127.0.0.1의 다른 포트에서 fetch하므로, 그 origin은 허용해서
     돌려줘야 브라우저가 응답을 읽을 수 있다."""
     request = urllib.request.Request(
-        f"{running_server}/api/usage?range=24h", headers={"Origin": "http://127.0.0.1:5173"}
+        _usage_url(running_server, _TICK_AT, _TICK_AT + timedelta(hours=1)),
+        headers={"Origin": "http://127.0.0.1:5173"},
     )
     with urllib.request.urlopen(request, timeout=2) as response:
         assert response.headers["Access-Control-Allow-Origin"] == "http://127.0.0.1:5173"
@@ -62,7 +74,8 @@ def test_usage_endpoint_does_not_allow_arbitrary_origins(running_server) -> None
     웹사이트나 fetch해서 읽어가면 안 된다 — 허용되지 않은 origin에는 CORS
     헤더를 안 보내서 브라우저가 읽기를 막게 해야 한다."""
     request = urllib.request.Request(
-        f"{running_server}/api/usage?range=24h", headers={"Origin": "http://evil.example"}
+        _usage_url(running_server, _TICK_AT, _TICK_AT + timedelta(hours=1)),
+        headers={"Origin": "http://evil.example"},
     )
     with urllib.request.urlopen(request, timeout=2) as response:
         assert "Access-Control-Allow-Origin" not in response.headers
@@ -78,20 +91,66 @@ def test_usage_endpoint_returns_503_when_db_is_missing(tmp_path) -> None:
     try:
         with pytest.raises(urllib.error.HTTPError) as exc_info:
             urllib.request.urlopen(
-                f"http://127.0.0.1:{server.server_port}/api/usage?range=24h", timeout=2
+                _usage_url(
+                    f"http://127.0.0.1:{server.server_port}",
+                    _TICK_AT,
+                    _TICK_AT + timedelta(hours=1),
+                ),
+                timeout=2,
             )
         assert exc_info.value.code == 503
+        assert json.loads(exc_info.value.read())["error"]["code"] == "unavailable"
     finally:
         server.shutdown()
 
 
-def test_usage_endpoint_rejects_unknown_range(running_server) -> None:
-    """지원하지 않는 range 값은 조용히 무시하지 말고 400으로 알려야 한다 —
-    나중에 기간 선택 UI가 붙을 때 오타/오동작을 바로 알아챌 수 있어야 한다."""
+def test_usage_endpoint_accepts_offset_bounds(running_server) -> None:
+    """apps/ui가 로컬 타임존 경계를 넘기므로, +09:00 같은 오프셋(퍼센트
+    인코딩)을 받아도 같은 시각의 틱이 잡혀야 한다."""
+    kst = timezone(timedelta(hours=9))
+    start = (_TICK_AT - timedelta(minutes=1)).astimezone(kst)
+    end = (_TICK_AT + timedelta(minutes=1)).astimezone(kst)
+
+    with urllib.request.urlopen(_usage_url(running_server, start, end), timeout=2) as response:
+        payload = json.loads(response.read())
+
+    assert payload["by_process"][0]["process"] == "chrome.exe"
+    assert payload["by_process"][0]["active_seconds"] == 15.0
+
+
+def test_usage_endpoint_accepts_two_hour_dst_month(running_server) -> None:
+    """시계가 2시간 되돌아가는 지역(Antarctica/Troll)의 10월은 31일 2시간이다."""
+    start = _TICK_AT - timedelta(minutes=1)
+    end = start + timedelta(days=31, hours=2)
+
+    with urllib.request.urlopen(_usage_url(running_server, start, end), timeout=2) as response:
+        assert response.status == 200
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "",  # start/end 둘 다 없음
+        "start=2026-10-28T00:00:00Z",  # end 없음
+        "start=yesterday&end=today",  # ISO 8601 아님
+        "start=2026-10-28T00:00:00&end=2026-10-29T00:00:00",  # 타임존 없음
+        "start=2026-10-29T00:00:00Z&end=2026-10-28T00:00:00Z",  # start >= end
+        "start=2026-01-01T00:00:00Z&end=2026-03-01T00:00:00Z",  # 31일 초과
+        # UTC로 바꾸면 표현 범위를 벗어나는 값(OverflowError)도 400이어야 한다.
+        "start=0001-01-01T00:00:00%2B01:00&end=0001-01-02T00:00:00%2B01:00",
+        # 인코딩 안 된 "+"는 공백으로 디코딩돼 ISO 8601이 깨진다.
+        "start=2026-10-28T00:00:00+09:00&end=2026-10-29T00:00:00+09:00",
+    ],
+)
+def test_usage_endpoint_rejects_invalid_bounds(running_server, query) -> None:
+    """잘못된 start/end는 조용히 넘어가지 말고 400으로 알려야 한다."""
     with pytest.raises(urllib.error.HTTPError) as exc_info:
-        urllib.request.urlopen(f"{running_server}/api/usage?range=7d", timeout=2)
+        urllib.request.urlopen(f"{running_server}/api/usage?{query}", timeout=2)
 
     assert exc_info.value.code == 400
+    error = json.loads(exc_info.value.read())["error"]
+    assert error["code"] == "invalid_request"
+    assert error["message"]  # 이유가 비어 있으면 클라이언트가 보여줄 게 없다
 
 
 def test_unknown_path_returns_404(running_server) -> None:
@@ -100,6 +159,7 @@ def test_unknown_path_returns_404(running_server) -> None:
         urllib.request.urlopen(f"{running_server}/unknown", timeout=2)
 
     assert exc_info.value.code == 404
+    assert json.loads(exc_info.value.read())["error"]["code"] == "not_found"
 
 
 def test_main_exits_with_already_running_code_when_lock_is_held(tmp_path, monkeypatch) -> None:

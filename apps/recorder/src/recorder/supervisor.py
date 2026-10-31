@@ -23,7 +23,7 @@ import logging
 import sys
 from pathlib import Path
 
-from recorder.__main__ import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
+from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
 from supervision.log_setup import configure_logging
 from supervision.supervisor import supervise
 

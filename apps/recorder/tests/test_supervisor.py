@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from recorder import supervisor
-from recorder.__main__ import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
+from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
 
 
 @pytest.fixture(autouse=True)
