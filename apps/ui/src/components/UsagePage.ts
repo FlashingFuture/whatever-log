@@ -54,10 +54,11 @@ export function mountUsagePage(root: Element): void {
   // 구간을 빠르게 넘기면 이전 요청의 응답이 나중에 도착할 수 있다 — 가장
   // 최근에 보낸 요청의 응답만 그린다.
   let latestRequestId = 0;
-  // 진행 중인 요청 수. 응답이 15초보다 늦어질 때 주기 갱신이 계속 요청을
-  // 쌓으면서 latestRequestId를 올려, 정상 응답까지 낡은 것으로 버려지는 걸
-  // 막는다 — 백그라운드 갱신은 진행 중인 요청이 없을 때만 시작한다.
-  let inFlight = 0;
+  // 가장 최근 요청이 아직 끝나지 않았는지. 응답이 15초보다 늦어질 때 주기
+  // 갱신이 계속 요청을 쌓으면서 latestRequestId를 올려, 정상 응답까지 낡은 것으로
+  // 버려지는 걸 막는다 — 백그라운드 갱신은 최신 요청이 끝났을 때만 시작한다.
+  // 이전 구간의 낡은 요청이 멈춰 있어도 갱신을 막지 않도록 최신 요청만 본다.
+  let latestPending = false;
 
   const title = document.createElement("h1");
   title.textContent = "사용 현황";
@@ -144,11 +145,11 @@ export function mountUsagePage(root: Element): void {
   }
 
   function load({ isBackgroundRefresh = false } = {}): void {
-    if (isBackgroundRefresh && inFlight > 0) {
+    if (isBackgroundRefresh && latestPending) {
       return;
     }
     const requestId = ++latestRequestId;
-    inFlight += 1;
+    latestPending = true;
     if (!isBackgroundRefresh) {
       const loading = document.createElement("p");
       loading.className = "usage-page-loading";
@@ -173,7 +174,9 @@ export function mountUsagePage(root: Element): void {
         }
       })
       .finally(() => {
-        inFlight -= 1;
+        if (requestId === latestRequestId) {
+          latestPending = false;
+        }
       });
   }
 
