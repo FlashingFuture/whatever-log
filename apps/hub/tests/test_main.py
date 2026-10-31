@@ -9,12 +9,13 @@ from http.server import ThreadingHTTPServer
 
 import pytest
 from recorder.sampling import TickSample
-from recorder.storage import open_db, save_tick
+from recorder.storage import open_db, save_process_paths, save_tick
 from supervision.lock import acquire_lock
 
 import hub.__main__ as hub_main
 from common.exit_codes import EXIT_ALREADY_RUNNING
 from hub.__main__ import _Handler, _lock_path_for_port, main
+from hub.icons import IconStore
 
 # fixture가 넣는 틱 시각. 두 틱이 15초 간격이라 chrome.exe가 active 15초가 된다.
 _TICK_AT = datetime(2026, 10, 28, 3, 0, tzinfo=UTC)
@@ -40,9 +41,14 @@ def running_server(tmp_path):
                 seconds_since_last_input=0.0,
             ),
         )
+    exe = tmp_path / "chrome.exe"
+    exe.write_bytes(b"fake exe")
+    save_process_paths(conn, {"chrome.exe": str(exe)})
     conn.close()
 
     _Handler.db_path = db_path
+    # 실제 Win32 추출 대신 가짜 추출기를 써서 플랫폼과 무관하게 응답 규약만 본다.
+    _Handler.icon_store = IconStore(tmp_path / "icons", lambda path: b"PNG-fake")
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -178,3 +184,90 @@ def test_main_exits_with_already_running_code_when_lock_is_held(tmp_path, monkey
         hub_main.logger.handlers.clear()
 
     assert exc_info.value.code == EXIT_ALREADY_RUNNING
+
+
+def test_icon_endpoint_serves_png_with_cache_headers(running_server) -> None:
+    with urllib.request.urlopen(f"{running_server}/api/icons/chrome.exe", timeout=2) as response:
+        body = response.read()
+        headers = response.headers
+
+    assert body == b"PNG-fake"
+    assert headers["Content-Type"] == "image/png"
+    assert "max-age" in headers["Cache-Control"]
+    assert headers["ETag"]
+
+
+def test_icon_endpoint_returns_304_for_matching_etag(running_server) -> None:
+    url = f"{running_server}/api/icons/chrome.exe"
+    with urllib.request.urlopen(url, timeout=2) as response:
+        etag = response.headers["ETag"]
+
+    request = urllib.request.Request(url, headers={"If-None-Match": etag})
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(request, timeout=2)
+
+    assert exc_info.value.code == 304
+
+
+@pytest.mark.parametrize("name", ["unknown.exe", "..%2F..%2Fwindows%2Fsystem32%2Fnotepad.exe"])
+def test_icon_endpoint_404_for_unknown_process_and_never_opens_arbitrary_paths(
+    running_server, name
+) -> None:
+    """이름은 DB에 기록된 프로세스만 허용한다 — 경로처럼 생긴 값으로 파일을 읽을 수 없다."""
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(f"{running_server}/api/icons/{name}", timeout=2)
+
+    assert exc_info.value.code == 404
+    assert json.loads(exc_info.value.read())["error"]["code"] == "not_found"
+    assert "max-age" in exc_info.value.headers["Cache-Control"]  # 없음도 잠시 캐시
+
+
+def _process_url(base: str, name: str, edges: list[datetime]) -> str:
+    query = urllib.parse.urlencode({"edges": ",".join(e.isoformat() for e in edges)})
+    return f"{base}/api/processes/{urllib.parse.quote(name)}/usage?{query}"
+
+
+def test_process_usage_endpoint_returns_one_row_per_bucket(running_server) -> None:
+    edges = [_TICK_AT - timedelta(minutes=1), _TICK_AT + timedelta(minutes=1), _TICK_AT + timedelta(hours=1)]
+
+    with urllib.request.urlopen(_process_url(running_server, "chrome.exe", edges), timeout=2) as response:
+        payload = json.loads(response.read())
+
+    assert payload["process"] == "chrome.exe"
+    assert len(payload["buckets"]) == 2
+    assert payload["buckets"][0]["active_seconds"] == 15.0
+    assert payload["buckets"][1]["total_seconds"] == 0.0
+
+
+def test_process_usage_endpoint_404_for_unknown_process(running_server) -> None:
+    edges = [_TICK_AT, _TICK_AT + timedelta(hours=1)]
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(_process_url(running_server, "nope.exe", edges), timeout=2)
+
+    assert exc_info.value.code == 404
+    assert json.loads(exc_info.value.read())["error"]["code"] == "not_found"
+
+
+@pytest.mark.parametrize(
+    "edges",
+    [
+        "",  # 없음
+        "2026-10-28T00:00:00Z",  # 1개
+        "2026-10-28T01:00:00Z,2026-10-28T00:00:00Z",  # 내림차순
+        "2026-10-28T00:00:00,2026-10-28T01:00:00",  # 타임존 없음
+        "yesterday,today",  # ISO 아님
+        "2026-01-01T00:00:00Z,2026-03-01T00:00:00Z",  # 31일 초과
+        ",".join(f"2026-10-28T{h:02d}:00:00Z" for h in range(24))
+        + ",2026-10-29T00:00:00Z,2026-10-29T01:00:00Z,"
+        + ",".join(f"2026-10-29T{h:02d}:00:00Z" for h in range(2, 12)),  # 칸 수 초과
+    ],
+)
+def test_process_usage_endpoint_rejects_invalid_edges(running_server, edges) -> None:
+    query = urllib.parse.urlencode({"edges": edges})
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(f"{running_server}/api/processes/chrome.exe/usage?{query}", timeout=2)
+
+    assert exc_info.value.code == 400
+    assert json.loads(exc_info.value.read())["error"]["code"] == "invalid_request"

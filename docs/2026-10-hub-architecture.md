@@ -191,27 +191,37 @@ hub는 지금 `range=24h`(최근 24시간, rolling) 하나만 지원하고(`/api
 
 ```
 apps/ui/src/
-├─ api.ts                     # hub fetch + 타입(ProcessUsage, RangeUsage)
+├─ api.ts                     # hub fetch + 타입(RangeUsage, ProcessSeries, ApiError)
 ├─ period.ts                  # 일/주/월 구간 계산(순수 함수, DOM 없음)
 ├─ theme.ts                   # 색상 토큰
 ├─ styles/injectStyle.ts      # <style> 태그 1회 주입 헬퍼
+├─ router.ts                  # 해시 라우터(#/ , #/process/<이름>) + 앱 안 이동 깊이
+├─ routes.ts                  # 라우트 → 레이아웃(plain/back) 대응(순수 데이터)
 ├─ components/
-│  ├─ UsagePage.ts            # 화면 전체: 상태(보고 있는 구간) + 조합
+│  ├─ Layouts.ts              # 레이아웃 이름 → 틀(plain / back) + 화면 자리
+│  ├─ BackBar.ts              # 돌아가기 버튼(어디로 가는지 모름, 콜백만 받음)
+│  ├─ UsagePage.ts            # 홈 화면: 프로세스별 합계(PeriodView + UsageChart)
+│  ├─ ProcessPage.ts          # 상세 화면: 아이콘+이름 + 칸별 사용량(PeriodView + BucketChart)
+│  ├─ PeriodView.ts           # 단위 선택 + 구간 이동 + 내용(상태·갱신·키보드). 홈/상세 공용
 │  ├─ Stepper.ts              # "← 라벨 →" 붙은 버튼 묶음(라벨을 누르면 팝업)
 │  ├─ SegmentedControl.ts     # 여러 값 중 하나 고르기(값 종류와 무관)
 │  ├─ Button.ts               # 버튼 + 붙은 버튼 묶음(createButtonGroup)
 │  ├─ Popover.ts              # 버튼 아래 팝업(바깥 클릭/Esc 닫기, 포커스 복귀)
 │  ├─ CalendarPicker.ts       # 일 단위: 월 달력
 │  ├─ PeriodListPicker.ts     # 주/월 단위: 한 해의 목록 + ‹ 연도 ›
-│  ├─ UsageChart.ts           # 범례 + 막대 목록
-│  ├─ BarRow.ts               # 프로세스 한 줄(라벨 + 3색 막대 + 값)
+│  ├─ UsageRow.ts             # "라벨 | 3색 막대 | 활성 / 총" 한 줄(홈·상세 공용)
+│  ├─ UsageLegend.ts          # 막대 색 범례
+│  ├─ UsageChart.ts           # 홈 차트: 범례 + 프로세스 줄 목록
+│  ├─ ProcessRow.ts           # 홈의 프로세스 한 줄(아이콘 + 이름, 누르면 상세로)
+│  ├─ BucketChart.ts          # 상세 차트: 합계 + 범례 + 칸(시간/날짜) 줄 목록
+│  ├─ ProcessIcon.ts          # 프로세스 아이콘(없으면 이름 첫 글자)
 │  └─ ErrorView.ts            # 에러 + 다시 시도 버튼
-└─ main.ts                    # 진입점: 전역 스타일 + UsagePage 마운트
-apps/ui/tests/period.test.ts  # Node 내장 테스트 러너(`pnpm --filter ui test`)
+└─ main.ts                    # 진입점: 전역 스타일 + 라우트별 레이아웃·화면 마운트
+apps/ui/tests/               # period/router 테스트(Node 내장 러너, `pnpm --filter ui test`)
 ```
 
-`Stepper`/`SegmentedControl`/`Button`/`Popover`는 "사용 현황"이라는 걸 모른다 — 라벨과
-콜백만 받는다. 상태와 "무엇을 보여줄지"는 `UsagePage` 한 곳에만 있다.
+`Stepper`/`SegmentedControl`/`Button`/`Popover`/`BackBar`/`UsageRow`는 "사용 현황"이라는 걸 모른다 — 라벨과
+콜백만 받는다. "무엇을 보여줄지"는 화면(`UsagePage`/`ProcessPage`)이, 구간 상태는 `PeriodView`가 갖는다.
 
 CSS는 별도 `.css` 파일 대신, 각 컴포넌트 파일이 자기 스타일을 `injectStyle(id,
 css템플릿)`로 직접 들고 있다 — styled-components 같은 라이브러리(빌드 플러그인
@@ -273,3 +283,96 @@ css템플릿)`로 직접 들고 있다 — styled-components 같은 라이브러
 - 팝업 안의 ←/→/↑/↓는 팝업 안에서만 쓰이고 구간 이동으로 새지 않는다.
 - 열 때 `scrollIntoView` 대신 목록 안의 스크롤만 조정한다 — 창이 작으면 페이지
   전체가 튀어 팝업 머리글이 밀려났다.
+
+## 프로세스 아이콘
+
+차트의 프로세스 줄에 exe 아이콘을 붙인다(다음 단계인 "프로세스를 눌러 그 프로세스의
+일/주/월 사용량 보기"의 밑작업). 이름만 저장하던 `processes` 테이블로는 exe를 찾을
+수 없어서 경로부터 기록한다.
+
+흐름: recorder가 `processes.exe_path`를 채운다 → hub가 `GET /api/icons/<프로세스 이름>`
+에서 DB의 경로로 exe 아이콘을 PNG로 만들어 돌려준다 → ui가 `<img>`로 보여준다.
+
+결정:
+
+- **경로는 recorder가 기록한다(hub가 실행 중인 프로세스를 뒤지지 않는다).** hub가 요청
+  시점에 이름으로 `psutil`을 훑으면 이미 닫힌 프로세스(과거 날짜의 차트)는 아이콘을 못
+  만든다. recorder는 이미 프로세스를 보고 있으니 거기서 한 번 적어 둔다.
+- **틱마다 조회하지 않는다.** 경로 조회(`process_paths.resolve_exe_paths`)는 "이번 실행에서
+  처음 본 이름"만 모아서 `process_iter`를 한 번 돈다. 못 구한 이름(관리자 권한 프로세스
+  등)도 다시 시도하지 않는다. 경로가 바뀌면(앱 업데이트) 다음 실행 때 덮어쓴다. 기존
+  DB에는 `ALTER TABLE`로 컬럼을 더한다(`open_db`의 `_migrate`).
+- **클라이언트는 경로를 주지 않고 이름만 준다.** 경로를 받으면 임의 파일을 여는 API가
+  되므로, DB에 기록된 이름의 경로만 쓴다.
+- **추출은 ctypes로**(`PrivateExtractIconsW` → `GetDIBits` → PNG). Pillow 같은 의존성을
+  안 들였다. 파일 안의 여러 크기 중 64px에 가까운 것을 골라 오고, 알파가 없는 옛
+  아이콘은 마스크로 알파를 만든다.
+
+캐싱(바깥 → 안쪽):
+
+1. **브라우저**: `ETag`(= 아래 키) + `Cache-Control: private, max-age=86400`. 같은 URL은
+   다시 받지 않고, 만료돼도 `If-None-Match`로 304만 받는다. 아이콘이 없는 경우도
+   `max-age=300`으로 잠시 캐시한다.
+2. **hub 메모리**: LRU 256개. 동시에 같은 아이콘을 요청해도 키별 잠금으로 추출은 한 번.
+3. **hub 디스크**(`apps/hub/icon-cache/<키>.png`, git 제외): hub를 다시 띄워도 추출을
+   반복하지 않는다. 임시 파일에 쓰고 교체해서 쓰다 만 파일이 읽히지 않게 한다.
+
+캐시 키는 `sha256(경로 | 수정시각 | 크기)`. exe가 바뀌면 키가 바뀌어 새 아이콘이 만들어진다
+(옛 파일은 쓰이지 않을 뿐 지우지 않는다 — 파일당 몇 KB). 추출 실패는 5분 동안 메모리에
+"없음"으로 기억해 같은 요청마다 Win32를 부르지 않는다.
+
+ui: 아이콘이 없거나(404) 실패하면 이름 첫 글자 칸으로 대신한다. 한 번 실패한 이름은 같은
+세션에서 다시 요청하지 않는다(15초마다 차트를 다시 그려도 요청이 늘지 않게).
+
+한계:
+
+- 이 기능 이전에 기록된 프로세스는 경로가 비어 있다. 지금 떠 있는 프로세스는 recorder가
+  다시 뜰 때 채워지고, 닫혀 있는 앱은 다음에 실행될 때 채워진다 → 오래된 날짜의 닫힌 앱은
+  대체 표시가 나온다.
+- UWP/스토어 앱(예: TextInputHost)은 exe에 아이콘이 없거나 경로를 못 구해 대체 표시가 나온다.
+- 디스크 캐시는 정리하지 않는다. 쌓이는 게 문제가 되면 오래된 파일을 지우는 정리를 둔다.
+
+## 프로세스 상세 화면
+
+홈에서 프로세스 줄을 누르면 그 프로세스만의 일/주/월 사용량을 본다(주소 `#/process/<이름>`).
+일은 시간별(24칸), 주/월은 날짜별(7칸 / 그 달 일수) 줄을 위에서 아래로 늘어놓는다. 줄 모양은
+홈과 같고(`UsageRow`), 막대 폭은 그 화면에서 가장 많이 쓴 칸을 기준으로 한다. 기록이 없는
+칸도 빈 막대로 남겨서 시간의 흐름이 끊기지 않게 한다.
+
+결정:
+
+- **해시 라우터를 직접 둔다.** 화면이 둘뿐이라 라이브러리(react-router 등)를 안 들이고
+  `history.pushState`로 `#/…` 주소만 쓴다 — 서버 설정이 필요 없어 pywebview가 어떤 주소로
+  띄워도 새로고침·뒤로 가기가 된다. 앱 안에서 몇 번 이동했는지를 `history.state.depth`에
+  적어, 처음 화면에서 "돌아가기"가 앱 밖으로 나가지 않게 홈으로 보낸다.
+- **이름만 주소에 싣는다.** 상세로 갈 때 구간은 싣지 않고, `PeriodView`가 마지막으로 본 구간을
+  메모리에 기억한다(홈 → 상세 → 홈에서 보던 단위·날짜가 이어진다). 새로 띄우면 오늘.
+- **레이아웃은 라우트마다 정한다(`routes.ts`).** 홈은 `plain`(틀 없음 — 돌아갈 곳이 없다),
+  프로세스 상세는 `back`(왼쪽 위에 "← 뒤로" 버튼). 홈 버튼은 뒀다가 뺐다 — 앱이 홈 한 곳에서
+  갈라지는 구조라 "뒤로"로 충분하고, 둘이 같은 곳으로 가서 헷갈렸다. 화면은 틀을 모르고
+  `Layouts.ts`가 준 자리(content) 안에만 그린다. 라우트 종류를 늘리면 `LAYOUT_OF`에 레이아웃을
+  빠뜨릴 수 없다(`Record`라 타입 오류). 레이아웃은 바뀔 때만 다시 그린다.
+- **"뒤로"는 앱 안에서 온 길이 있으면 `history.back()`, 없으면 홈으로 간다.** 상세 주소를 바로
+  열었거나 새로고침한 경우 앱 밖으로 나가 버리지 않게 한다. 화면을 바꿀 때는 이전 화면의
+  `destroy()`를 불러 타이머·키보드 리스너를 해제한다(안 하면 홈의 ←/→ 리스너가 상세에서도
+  살아남아 구간이 두 번 넘어간다).
+- **구간 이동은 `PeriodView` 하나로.** 원래 `UsagePage`가 갖던 단위 선택·이동·팝업·15초
+  갱신·키보드를 뽑아내고, 홈과 상세는 "구간 → 내용"(`loadContent`)만 다르게 준다.
+
+API: `GET /api/processes/<이름>/usage?edges=<ISO 경계,…>` — 경계 목록이 나누는 칸([e0,e1),
+[e1,e2) …)별로 active/idle/background/total을 돌려준다(`aggregation.process_usage_by_bucket`).
+
+- **칸 경계는 ui가 로컬 타임존으로 계산해서 넘긴다.** hub는 달력을 모른다(`start/end`와 같은
+  이유). 일광절약시간 전환일은 하루가 23/25칸이 된다(`bucketsOf`가 자정에서 실제 1시간씩 더해
+  간다).
+- **분류 규칙은 `usage_by_range`와 같은 코드를 쓴다**(`_intervals`로 뽑아 공유). 칸을 모두
+  더하면 같은 구간의 전체 집계와 같다는 걸 테스트로 고정했다.
+- **한 프로세스만 읽는다.** 틱은 간격 계산에 모두 필요하지만, 창 목록(`tick_windowed_processes`)
+  조회는 그 프로세스 행만 읽는다.
+- 한 틱이 대표하는 구간은 그 틱의 시각이 속한 칸에 통째로 넣는다(경계에 걸친 한 틱은 쪼개지
+  않는다 — 틱 간격이 최대 2분이라 오차가 그 안이다).
+- 칸은 최대 32개(하루 시간별 25 + 한 달 31일이 들어가는 크기), 전체 길이는 31일+2시간 상한.
+  알 수 없는 프로세스는 404, 잘못된 `edges`는 400.
+
+한계: 월 단위 상세는 한 달치 틱을 한 번 훑는다(홈의 월 조회와 같은 비용이라 같은 한계를
+공유한다). 실제로 느려지면 일 단위 사전 집계를 둔다.

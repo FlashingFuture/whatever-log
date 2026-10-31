@@ -13,6 +13,7 @@ recorder.db-shm
 recorder.db.lock
 recorder.lock
 hub-*.lock
+icon-cache/
 
 .env
 .env.*
