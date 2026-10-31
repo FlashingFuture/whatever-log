@@ -170,3 +170,49 @@ export const CURRENT_PERIOD_HINT: Record<PeriodUnit, string> = {
   week: "이번 주",
   month: "이번 달",
 };
+
+/** 구간을 잘게 나눈 한 칸(시간 하나, 날짜 하나). */
+export interface Bucket {
+  start: Date;
+  end: Date;
+}
+
+const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * 상세 화면이 막대를 한 줄씩 그릴 칸들. 일 → 시간별, 주/월 → 날짜별.
+ *
+ * 하루는 일광절약시간 전환일에 23/25시간이라 "0~23시"를 가정하지 않고, 시작에서
+ * 실제 1시간씩 더해 구간 끝까지 간다. 날짜별은 로컬 달력으로 하루씩 넘긴다.
+ */
+export function bucketsOf(period: Period): Bucket[] {
+  const buckets: Bucket[] = [];
+  if (period.unit === "day") {
+    for (
+      let start = period.start.getTime();
+      start < period.end.getTime();
+      start += HOUR_MS
+    ) {
+      const end = Math.min(start + HOUR_MS, period.end.getTime());
+      buckets.push({ start: new Date(start), end: new Date(end) });
+    }
+    return buckets;
+  }
+  for (
+    let day = periodContaining("day", period.start);
+    day.start < period.end;
+    day = shiftPeriod(day, 1)
+  ) {
+    buckets.push({ start: day.start, end: day.end });
+  }
+  return buckets;
+}
+
+/** 칸 하나의 라벨. 일: "13시", 주/월: "10/29 (목)". */
+export function formatBucketLabel(unit: PeriodUnit, bucket: Bucket): string {
+  const { start } = bucket;
+  if (unit === "day") {
+    return `${start.getHours()}시`;
+  }
+  return `${start.getMonth() + 1}/${start.getDate()} (${WEEKDAYS[start.getDay()]})`;
+}

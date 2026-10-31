@@ -12,6 +12,11 @@ injectStyle(
     border-radius: 4px;
     object-fit: contain;
   }
+  .process-icon-large {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 6px;
+  }
   .process-icon-fallback {
     display: inline-flex;
     align-items: center;
@@ -30,9 +35,9 @@ injectStyle(
 // 영구히 기억하지는 않는다.
 const missing = new Set<string>();
 
-function createFallback(name: string): HTMLSpanElement {
+function createFallback(name: string, sizeClass: string): HTMLSpanElement {
   const fallback = document.createElement("span");
-  fallback.className = "process-icon process-icon-fallback";
+  fallback.className = `process-icon process-icon-fallback${sizeClass}`;
   fallback.textContent = name.charAt(0);
   fallback.setAttribute("aria-hidden", "true");
   return fallback;
@@ -42,12 +47,16 @@ function createFallback(name: string): HTMLSpanElement {
  * 프로세스 아이콘. hub에서 받아 보여주고, 없거나 실패하면 이름 첫 글자 칸으로
  * 대신한다. 이름은 이미 옆에 글자로 나오니 이미지는 장식이다(alt="").
  */
-export function createProcessIcon(name: string): HTMLElement {
+export function createProcessIcon(
+  name: string,
+  { large = false }: { large?: boolean } = {},
+): HTMLElement {
+  const sizeClass = large ? " process-icon-large" : "";
   if (missing.has(name)) {
-    return createFallback(name);
+    return createFallback(name, sizeClass);
   }
   const image = document.createElement("img");
-  image.className = "process-icon";
+  image.className = `process-icon${sizeClass}`;
   image.alt = "";
   image.decoding = "async";
   image.src = iconUrl(name);
@@ -55,7 +64,7 @@ export function createProcessIcon(name: string): HTMLElement {
     "error",
     () => {
       missing.add(name);
-      image.replaceWith(createFallback(name));
+      image.replaceWith(createFallback(name, sizeClass));
     },
     { once: true },
   );
