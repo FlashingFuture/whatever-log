@@ -46,6 +46,14 @@ async function toApiError(response: Response): Promise<ApiError> {
 // apps/hub가 고정 포트로 뜬다(apps/desktop이 자식 프로세스로 띄움).
 const HUB_URL = "http://127.0.0.1:8787";
 
+/**
+ * 프로세스 아이콘 URL. 이름만 넘기고 경로는 hub가 DB에서 찾는다. 브라우저가
+ * hub의 Cache-Control/ETag로 캐싱하므로 같은 URL은 다시 받지 않는다.
+ */
+export function iconUrl(processName: string): string {
+  return `${HUB_URL}/api/icons/${encodeURIComponent(processName)}`;
+}
+
 export function fetchUsage(start: Date, end: Date): Promise<RangeUsage> {
   // toISOString()은 항상 UTC("...Z")라 오프셋의 "+"가 쿼리 문자열에서 공백으로
   // 깨질 일이 없다. URLSearchParams가 나머지 인코딩을 맡는다.

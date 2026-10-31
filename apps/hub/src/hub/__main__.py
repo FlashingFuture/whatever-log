@@ -23,11 +23,12 @@ import sys
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from aggregation.range import usage_by_range
 from common import api_error
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
+from hub.icons import IconStore
 from recorder.__main__ import DEFAULT_DB_PATH
 from supervision.lock import AlreadyRunningError, acquire_lock
 from supervision.log_setup import configure_logging
@@ -36,6 +37,7 @@ DEFAULT_PORT = 8787
 
 _APP_DIR = Path(__file__).resolve().parent.parent.parent
 DEFAULT_LOG_PATH = _APP_DIR / "hub.log"
+DEFAULT_ICON_CACHE_DIR = _APP_DIR / "icon-cache"
 
 logger = logging.getLogger("hub")
 
@@ -103,15 +105,28 @@ def _usage_bounds(query: dict[str, list[str]]) -> tuple[datetime, datetime]:
         raise ValueError("start/end가 표현할 수 있는 날짜 범위를 벗어났습니다.") from exc
 
 
+_ICON_PATH_PREFIX = "/api/icons/"
+# 아이콘은 키(경로+수정시각)가 바뀌어야 내용이 바뀐다 — 캐시 키가 ETag라 오래
+# 캐시해도 안전하고, 만료돼도 If-None-Match로 304만 받으면 된다.
+_ICON_MAX_AGE_SECONDS = 24 * 60 * 60
+# 없음은 recorder가 나중에 경로를 채울 수도 있으니 짧게만 기억한다.
+_ICON_MISSING_MAX_AGE_SECONDS = 5 * 60
+
+
 class _Handler(BaseHTTPRequestHandler):
     """/api/* 요청을 집계 함수로 넘기고 JSON으로 응답한다."""
 
     db_path: Path = DEFAULT_DB_PATH
+    icon_store: IconStore = IconStore(DEFAULT_ICON_CACHE_DIR)
 
-    def _send_json(self, status: int, payload: dict) -> None:
+    def _send_json(
+        self, status: int, payload: dict, extra_headers: dict[str, str] | None = None
+    ) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
         origin = self.headers.get("Origin", "")
         if _ALLOWED_ORIGIN.fullmatch(origin):
             self.send_header("Access-Control-Allow-Origin", origin)
@@ -121,20 +136,26 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
-        """지금은 /api/usage 하나뿐이다 — 늘어나면 라우팅을 분리한다.
+        """경로별로 처리 함수에 나눠 준다.
 
-        읽기 전용(mode=ro)으로 연다 — hub는 조회만 하는 쪽이라 쓰기 가능한
+        /api/usage는 집계 결과, /api/icons/<프로세스 이름>은 아이콘 PNG다.
+        """
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/usage":
+            self._get_usage(parsed.query)
+        elif parsed.path.startswith(_ICON_PATH_PREFIX):
+            self._get_icon(unquote(parsed.path[len(_ICON_PATH_PREFIX) :]))
+        else:
+            self._send_json(404, api_error.error_body(api_error.NOT_FOUND, "not found"))
+
+    def _get_usage(self, raw_query: str) -> None:
+        """읽기 전용(mode=ro)으로 연다 — hub는 조회만 하는 쪽이라 쓰기 가능한
         연결을 열어둘 이유가 없고, recorder가 쓰는 도중에도 안전하게 읽을 수
         있다(WAL 모드). DB가 아직 없거나(recorder가 한 번도 안 돈 경우) 읽는
         중 문제가 생기면, 응답 없이 연결이 끊기는 대신 503으로 알린다.
         """
-        parsed = urlparse(self.path)
-        if parsed.path != "/api/usage":
-            self._send_json(404, api_error.error_body(api_error.NOT_FOUND, "not found"))
-            return
-
         try:
-            start, end = _usage_bounds(parse_qs(parsed.query))
+            start, end = _usage_bounds(parse_qs(raw_query))
         except ValueError as exc:
             self._send_json(
                 400, api_error.error_body(api_error.INVALID_REQUEST, str(exc))
@@ -156,6 +177,60 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         self._send_json(200, payload)
+
+    def _get_icon(self, process_name: str) -> None:
+        """프로세스 이름 → exe 경로(DB) → 아이콘 PNG.
+
+        클라이언트가 경로를 주지 않고 이름만 준다 — 임의 경로의 파일을 열어 보는
+        요청이 되지 않도록, 경로는 recorder가 기록해 둔 것만 쓴다. 아이콘이 없는
+        경우에도 잠시 캐시하게 해서(브라우저가 같은 404를 계속 다시 묻지 않게)
+        차트가 15초마다 다시 그려져도 요청이 늘어나지 않는다.
+        """
+        try:
+            conn = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
+            try:
+                row = conn.execute(
+                    "SELECT exe_path FROM processes WHERE name = ?", (process_name,)
+                ).fetchone()
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            logger.exception("집계 DB를 읽지 못했습니다: %s", self.db_path)
+            self._send_json(
+                503,
+                api_error.error_body(api_error.UNAVAILABLE, "database unavailable"),
+            )
+            return
+
+        icon = self.icon_store.get(row[0]) if row and row[0] else None
+        if icon is None:
+            self._send_json(
+                404,
+                api_error.error_body(api_error.NOT_FOUND, "icon not found"),
+                {"Cache-Control": f"private, max-age={_ICON_MISSING_MAX_AGE_SECONDS}"},
+            )
+            return
+
+        key, png = icon
+        etag = f'"{key}"'
+        headers = {
+            "ETag": etag,
+            "Cache-Control": f"private, max-age={_ICON_MAX_AGE_SECONDS}",
+        }
+        if self.headers.get("If-None-Match") == etag:
+            self.send_response(304)
+            for name, value in headers.items():
+                self.send_header(name, value)
+            self.end_headers()
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(png)))
+        for name, value in headers.items():
+            self.send_header(name, value)
+        self.end_headers()
+        self.wfile.write(png)
 
     def log_message(self, log_format: str, *args: object) -> None:
         pass  # 기본 동작(stderr에 접근 로그 출력)을 끈다.

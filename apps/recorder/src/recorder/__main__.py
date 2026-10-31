@@ -10,14 +10,16 @@ SQLite에 저장하는 워커.
 import argparse
 import logging
 import math
+import sqlite3
 import sys
 import time
 from pathlib import Path
 
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
 from supervision.log_setup import configure_logging
-from recorder.sampling import sample_tick
-from recorder.storage import open_db, save_tick
+from recorder.process_paths import resolve_exe_paths
+from recorder.sampling import TickSample, sample_tick
+from recorder.storage import open_db, save_process_paths, save_tick
 from supervision.lock import AlreadyRunningError, acquire_lock
 
 DEFAULT_INTERVAL_SECONDS = 15.0
@@ -99,12 +101,16 @@ def run(interval: float, db_path: Path) -> None:
             raise
 
         tick_count = 0
+        # 이번 실행에서 경로 조회를 이미 시도한 프로세스 이름. 못 구한 이름도 넣어서
+        # 매 틱 다시 훑지 않는다.
+        path_checked: set[str] = set()
         logger.info("%s초 간격으로 기록합니다. DB: %s", interval, db_path)
 
         try:
             while True:
                 sample = sample_tick()
                 save_tick(conn, sample)
+                _record_new_process_paths(conn, sample, path_checked)
                 tick_count += 1
                 logger.info(
                     "[tick %d] FG=%s WIN=%d개 idle=%.1fs",
@@ -125,6 +131,26 @@ def run(interval: float, db_path: Path) -> None:
             conn.close()
     finally:
         lock.release()
+
+
+def _record_new_process_paths(
+    conn: sqlite3.Connection, sample: TickSample, checked: set[str]
+) -> None:
+    """이번 실행에서 처음 본 프로세스의 exe 경로를 기록한다(아이콘 표시용).
+
+    부가 정보라서, 여기서 실패해도 틱 기록 자체를 멈추지는 않는다.
+    """
+    names = set(sample.windowed_processes)
+    if sample.foreground_process is not None:
+        names.add(sample.foreground_process)
+    new_names = names - checked
+    if not new_names:
+        return
+    checked |= new_names
+    try:
+        save_process_paths(conn, resolve_exe_paths(new_names))
+    except Exception:
+        logger.warning("프로세스 경로를 기록하지 못했습니다.", exc_info=True)
 
 
 def main() -> None:

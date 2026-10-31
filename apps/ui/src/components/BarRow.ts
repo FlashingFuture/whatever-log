@@ -1,6 +1,7 @@
 import type { ProcessUsage } from "../api";
 import { injectStyle } from "../styles/injectStyle";
 import { theme } from "../theme";
+import { createProcessIcon } from "./ProcessIcon";
 
 injectStyle(
   "bar-row",
@@ -12,10 +13,16 @@ injectStyle(
     gap: 0.75rem;
   }
   .bar-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
+    color: ${theme.colors.text};
+  }
+  .bar-label-text {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: ${theme.colors.text};
   }
   .bar-track {
     height: 1rem;
@@ -67,12 +74,15 @@ export function createBarRow(row: ProcessUsage, maxTotal: number): HTMLElement {
 
   const label = document.createElement("span");
   label.className = "bar-label";
-  // 프로세스 이름은 OS에서 온 값이라 innerHTML로 바로 꽂지 않고
-  // textContent로 넣어 혹시 모를 마크업 삽입을 피한다.
-  label.textContent = row.process;
   // 9rem보다 긴 이름은 ellipsis로 잘리므로, title(마우스 호버 툴팁)로 전체
   // 이름을 확인할 수 있게 한다.
   label.title = row.process;
+  const labelText = document.createElement("span");
+  labelText.className = "bar-label-text";
+  // 프로세스 이름은 OS에서 온 값이라 innerHTML로 바로 꽂지 않고
+  // textContent로 넣어 혹시 모를 마크업 삽입을 피한다.
+  labelText.textContent = row.process;
+  label.append(createProcessIcon(row.process), labelText);
 
   const breakdown =
     `${row.process}: 활성 ${formatDuration(row.active_seconds)}, ` +

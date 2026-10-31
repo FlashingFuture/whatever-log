@@ -9,12 +9,13 @@ from http.server import ThreadingHTTPServer
 
 import pytest
 from recorder.sampling import TickSample
-from recorder.storage import open_db, save_tick
+from recorder.storage import open_db, save_process_paths, save_tick
 from supervision.lock import acquire_lock
 
 import hub.__main__ as hub_main
 from common.exit_codes import EXIT_ALREADY_RUNNING
 from hub.__main__ import _Handler, _lock_path_for_port, main
+from hub.icons import IconStore
 
 # fixture가 넣는 틱 시각. 두 틱이 15초 간격이라 chrome.exe가 active 15초가 된다.
 _TICK_AT = datetime(2026, 10, 28, 3, 0, tzinfo=UTC)
@@ -40,9 +41,14 @@ def running_server(tmp_path):
                 seconds_since_last_input=0.0,
             ),
         )
+    exe = tmp_path / "chrome.exe"
+    exe.write_bytes(b"fake exe")
+    save_process_paths(conn, {"chrome.exe": str(exe)})
     conn.close()
 
     _Handler.db_path = db_path
+    # 실제 Win32 추출 대신 가짜 추출기를 써서 플랫폼과 무관하게 응답 규약만 본다.
+    _Handler.icon_store = IconStore(tmp_path / "icons", lambda path: b"PNG-fake")
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -178,3 +184,39 @@ def test_main_exits_with_already_running_code_when_lock_is_held(tmp_path, monkey
         hub_main.logger.handlers.clear()
 
     assert exc_info.value.code == EXIT_ALREADY_RUNNING
+
+
+def test_icon_endpoint_serves_png_with_cache_headers(running_server) -> None:
+    with urllib.request.urlopen(f"{running_server}/api/icons/chrome.exe", timeout=2) as response:
+        body = response.read()
+        headers = response.headers
+
+    assert body == b"PNG-fake"
+    assert headers["Content-Type"] == "image/png"
+    assert "max-age" in headers["Cache-Control"]
+    assert headers["ETag"]
+
+
+def test_icon_endpoint_returns_304_for_matching_etag(running_server) -> None:
+    url = f"{running_server}/api/icons/chrome.exe"
+    with urllib.request.urlopen(url, timeout=2) as response:
+        etag = response.headers["ETag"]
+
+    request = urllib.request.Request(url, headers={"If-None-Match": etag})
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(request, timeout=2)
+
+    assert exc_info.value.code == 304
+
+
+@pytest.mark.parametrize("name", ["unknown.exe", "..%2F..%2Fwindows%2Fsystem32%2Fnotepad.exe"])
+def test_icon_endpoint_404_for_unknown_process_and_never_opens_arbitrary_paths(
+    running_server, name
+) -> None:
+    """이름은 DB에 기록된 프로세스만 허용한다 — 경로처럼 생긴 값으로 파일을 읽을 수 없다."""
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(f"{running_server}/api/icons/{name}", timeout=2)
+
+    assert exc_info.value.code == 404
+    assert json.loads(exc_info.value.read())["error"]["code"] == "not_found"
+    assert "max-age" in exc_info.value.headers["Cache-Control"]  # 없음도 잠시 캐시
