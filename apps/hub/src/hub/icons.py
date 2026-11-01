@@ -162,7 +162,7 @@ def _icon_pixels(exe_path: str, size: int) -> bytes | None:
         user32.DestroyIcon(icon)
 
     if color_bits is not None:
-        return _to_rgba(color_bits, mask_bits)
+        return _to_rgba(color_bits, mask_bits)  # 마스크가 꼭 필요한데 없으면 None
     if mono_bits is not None:
         return _monochrome_to_rgba(mono_bits, size)
     return None
@@ -185,13 +185,20 @@ def _dib_bits(gdi32, hdc, bitmap, width: int, height: int) -> bytes | None:
     return buffer.raw
 
 
-def _to_rgba(color_bgra: bytes, mask_bgra: bytes | None) -> bytes:
-    """BGRA → RGBA. 알파 채널이 없는 옛 아이콘은 마스크(검정=불투명)로 알파를 만든다."""
+def _to_rgba(color_bgra: bytes, mask_bgra: bytes | None) -> bytes | None:
+    """BGRA → RGBA. 알파 채널이 없는 옛 아이콘은 마스크(검정=불투명)로 알파를 만든다.
+
+    알파가 없는데 마스크도 못 읽었으면 None(추출 실패)이다 — 마스크 없이 "전부
+    불투명"으로 만들면 배경이 사각형으로 남는 아이콘이 디스크 캐시에 굳어 exe가
+    바뀔 때까지 계속 나간다. 실패로 두면 다음 요청에서(실패 기억이 풀린 뒤) 다시
+    시도한다.
+    """
     pixels = bytearray(color_bgra)
     if not any(pixels[3::4]):
+        if mask_bgra is None:
+            return None
         for i in range(0, len(pixels), 4):
-            opaque = mask_bgra is None or mask_bgra[i] == 0
-            pixels[i + 3] = 255 if opaque else 0
+            pixels[i + 3] = 255 if mask_bgra[i] == 0 else 0
     # B와 R을 맞바꾼다.
     pixels[0::4], pixels[2::4] = pixels[2::4], pixels[0::4]
     return bytes(pixels)

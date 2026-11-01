@@ -64,7 +64,19 @@ const HUB_URL = "http://127.0.0.1:8787";
 // hub가 연결만 열어 두고 응답을 끝내지 않아도 요청이 영원히 매달려 있지 않게 한다 —
 // PeriodView의 15초 갱신은 최신 요청이 끝나야 다시 시작되므로, 안 끝나는 요청 하나가
 // 화면 갱신을 멈춰 세운다. 정상 응답(월 단위 집계 포함)보다 충분히 긴 값.
-const REQUEST_TIMEOUT_MS = 10_000;
+const SHORT_REQUEST_TIMEOUT_MS = 10_000;
+// 월 단위 조회는 틱을 한 달치 훑는다 — 기본 15초 간격이면 몇 초지만, recorder를 1초
+// 간격으로 돌리면 틱이 270만 개라 1분 가까이 걸릴 수 있다(틱당 약 20µs). 그때도 시간
+// 초과 오류가 반복되지 않게 긴 조회에는 더 길게 준다.
+const LONG_REQUEST_TIMEOUT_MS = 60_000;
+const LONG_SPAN_MS = 8 * 24 * 60 * 60 * 1000;
+
+/** 조회 구간이 길수록 hub가 더 오래 걸리므로 제한 시간도 길게 준다. */
+export function requestTimeoutMs(spanMs: number): number {
+  return spanMs > LONG_SPAN_MS
+    ? LONG_REQUEST_TIMEOUT_MS
+    : SHORT_REQUEST_TIMEOUT_MS;
+}
 
 /**
  * 프로세스 아이콘 URL. 이름만 넘기고 경로는 hub가 DB에서 찾는다. 브라우저가
@@ -74,9 +86,9 @@ export function iconUrl(processName: string): string {
   return `${HUB_URL}/api/icons/${encodeURIComponent(processName)}`;
 }
 
-async function getJson<T>(path: string): Promise<T> {
+async function getJson<T>(path: string, timeoutMs: number): Promise<T> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${HUB_URL}${path}`, {
       signal: controller.signal,
@@ -106,7 +118,10 @@ export function fetchUsage(start: Date, end: Date): Promise<RangeUsage> {
     start: start.toISOString(),
     end: end.toISOString(),
   });
-  return getJson(`/api/usage?${query}`);
+  return getJson(
+    `/api/usage?${query}`,
+    requestTimeoutMs(end.getTime() - start.getTime()),
+  );
 }
 
 /**
@@ -127,5 +142,6 @@ export function fetchProcessUsage(
   });
   return getJson(
     `/api/processes/${encodeURIComponent(process)}/usage?${query}`,
+    requestTimeoutMs(edges[edges.length - 1].getTime() - edges[0].getTime()),
   );
 }
