@@ -8,9 +8,10 @@ import {
   onRouteChange,
   type Route,
   savedScroll,
+  saveScroll,
 } from "./router";
 import { type LayoutName, layoutOf } from "./routes";
-import { restoreScroll } from "./scroll";
+import { restoreScroll, trackScroll } from "./scroll";
 import "./styles/global.css";
 
 /** 라우트에 맞는 화면을 content에 그리고, 그 화면을 정리하는 함수를 돌려준다. */
@@ -30,6 +31,7 @@ if (app) {
   let cancelScrollRestore: () => void = () => {};
   // 스크롤 위치는 기록(history entry)마다 우리가 저장·복원한다.
   window.history.scrollRestoration = "manual";
+  trackScroll(saveScroll);
 
   function renderRoute(kind: NavigationKind | "initial"): void {
     cancelScrollRestore();

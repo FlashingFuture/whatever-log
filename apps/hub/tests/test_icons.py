@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from hub.icons import IconStore, _monochrome_to_rgba, encode_png, extract_icon_png
+from hub.icons import IconStore, _monochrome_to_rgba, _to_rgba, encode_png, extract_icon_png
 
 
 def _decode_png(png: bytes) -> tuple[int, int, bytes]:
@@ -76,6 +76,23 @@ def test_monochrome_icon_mask_becomes_black_white_and_transparent() -> None:
     assert rgba[4:8] == bytes((255, 255, 255, 255))  # AND=0,XOR=1 흰색
     assert rgba[8:12] == bytes(4)  # AND=1,XOR=0 투명
     assert rgba[12:16] == bytes(4)  # AND=1,XOR=1 반전 → 투명
+
+
+def test_to_rgba_without_alpha_needs_the_mask() -> None:
+    """알파가 없는 옛 아이콘은 마스크로 알파를 만든다. 마스크를 못 읽었으면 실패(None)다 —
+    전부 불투명으로 만들어 사각 배경 아이콘이 캐시에 굳는 걸 막는다."""
+    color = bytes((10, 20, 30, 0, 40, 50, 60, 0))  # BGRA 두 픽셀, 알파 0
+    mask = bytes((0, 0, 0, 0, 255, 255, 255, 0))  # 첫 픽셀 불투명, 둘째 투명
+
+    assert _to_rgba(color, None) is None
+    rgba = _to_rgba(color, mask)
+    assert rgba == bytes((30, 20, 10, 255, 60, 50, 40, 0))  # 첫 픽셀 불투명, 둘째 투명
+
+
+def test_to_rgba_with_alpha_does_not_need_the_mask() -> None:
+    color = bytes((10, 20, 30, 200))  # 알파가 있으면 마스크 없이도 그대로 쓴다
+
+    assert _to_rgba(color, None) == bytes((30, 20, 10, 200))
 
 
 def _exe(tmp_path: Path, content: bytes = b"v1") -> str:

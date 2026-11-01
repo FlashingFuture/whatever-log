@@ -79,12 +79,21 @@ export function navigate(route: Route): void {
     return;
   }
   // 떠나는 기록에 스크롤 위치를 적어 둔다 — 뒤로 돌아왔을 때 복원한다.
-  window.history.replaceState(
-    { ...(window.history.state as object | null), scrollY: window.scrollY },
-    "",
-  );
+  saveScroll(window.scrollY);
   window.history.pushState({ depth: currentDepth() + 1 }, "", routeHref(route));
   notify("push");
+}
+
+/**
+ * 지금 기록에 스크롤 위치를 적는다. 이동(navigate)뿐 아니라 스크롤할 때마다(scroll.ts)
+ * 불러서, 뒤로 가기·앞으로 가기로 기록을 옮길 때도 떠나는 기록에 위치가 남아 있게 한다
+ * — popstate는 이미 기록이 바뀐 뒤에 오므로 그때는 떠난 기록에 쓸 수 없다.
+ */
+export function saveScroll(y: number): void {
+  window.history.replaceState(
+    { ...(window.history.state as object | null), scrollY: y },
+    "",
+  );
 }
 
 /** 지금 기록에 저장돼 있는 스크롤 위치(없으면 맨 위). */
