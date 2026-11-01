@@ -1,0 +1,38 @@
+/*
+ * 디자인 토큰. 연한 파란색(--color-active) 하나만 포인트로 쓰고 나머지는 흑백/회색 톤 —
+ * active(진짜 몰입해서 쓴 시간)만 눈에 띄게, 나머지는 차분하게.
+ *
+ * 컴포넌트 CSS는 색·간격·모서리·글자 크기를 여기 변수로만 쓴다. 값을 바꾸고 싶으면 이
+ * 파일 한 곳만 고치면 된다(토큰에 없는 값은 그 컴포넌트에서만 쓰는 미세 조정이다).
+ */
+:root {
+  --color-bg: #ffffff;
+  --color-text: #111111;
+  --color-text-muted: #6b6b6b;
+  --color-text-disabled: #c4c4c4;
+  --color-border: #d4d4d4;
+  --color-track: #f1f1f1;
+  --color-active: #9ec5fb;
+  --color-idle: #b5b5b5;
+  --color-background-segment: #e2e2e2;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.85rem;
+  --text-md: 0.9rem;
+
+  --focus-ring: 2px solid var(--color-active);
+  --shadow-popover: 0 6px 20px rgba(0, 0, 0, 0.08);
+  --z-popover: 10;
+}

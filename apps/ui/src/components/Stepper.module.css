@@ -1,0 +1,15 @@
+.label {
+  text-align: center;
+  font-weight: 600;
+}
+/* 누를 수 없는 라벨: 테두리는 그룹과 이어지되 버튼처럼 반응하지 않는다. */
+.labelStatic {
+  composes: button from "./Button.module.css";
+  cursor: default;
+}
+.hint {
+  composes: muted from "../styles/shared.module.css";
+  margin-left: var(--space-2);
+  font-weight: 400;
+  font-size: var(--text-sm);
+}

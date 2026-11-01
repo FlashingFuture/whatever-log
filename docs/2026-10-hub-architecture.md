@@ -193,8 +193,12 @@ hub는 지금 `range=24h`(최근 24시간, rolling) 하나만 지원하고(`/api
 apps/ui/src/
 ├─ api.ts                     # hub fetch + 타입(RangeUsage, ProcessSeries, ApiError)
 ├─ period.ts                  # 일/주/월 구간 계산(순수 함수, DOM 없음)
-├─ theme.ts                   # 색상 토큰
-├─ styles/injectStyle.ts      # <style> 태그 1회 주입 헬퍼
+├─ format.ts                  # 사용 시간 글자(1분 미만은 초 단위, 순수 함수)
+├─ scroll.ts                  # 뒤로 가기 때 스크롤 위치 복원
+├─ styles/
+│  ├─ tokens.css              # 디자인 토큰(색·간격·모서리·글자 크기·포커스 링)
+│  ├─ global.css              # body 등 전역(토큰 import)
+│  └─ shared.module.css       # 여러 컴포넌트가 composes로 쓰는 공통 스타일
 ├─ router.ts                  # 해시 라우터(#/ , #/process/<이름>) + 앱 안 이동 깊이
 ├─ routes.ts                  # 라우트 → 레이아웃(plain/back) 대응(순수 데이터)
 ├─ components/
@@ -223,16 +227,29 @@ apps/ui/tests/               # period/router 테스트(Node 내장 러너, `pnpm
 `Stepper`/`SegmentedControl`/`Button`/`Popover`/`BackBar`/`UsageRow`는 "사용 현황"이라는 걸 모른다 — 라벨과
 콜백만 받는다. "무엇을 보여줄지"는 화면(`UsagePage`/`ProcessPage`)이, 구간 상태는 `PeriodView`가 갖는다.
 
-CSS는 별도 `.css` 파일 대신, 각 컴포넌트 파일이 자기 스타일을 `injectStyle(id,
-css템플릿)`로 직접 들고 있다 — styled-components 같은 라이브러리(빌드 플러그인
-필요)는 안 들이고, "컴포넌트 파일 안에 그 컴포넌트의 스타일을 같이 둔다"는
-정도로 가볍게 흉내만 냈다. 모듈이 import될 때 한 번 `<style>` 태그를 넣고,
-이미 넣은 id면 다시 안 넣는다.
+스타일은 **CSS Modules**다. 컴포넌트마다 옆에 `Foo.module.css`를 두고 `import styles from
+"./Foo.module.css"`로 클래스 이름(`styles.row`)을 받는다 — Vite가 기본으로 지원해서
+의존성·설정이 없다. 처음엔 컴포넌트 파일 안에 `injectStyle(id, css템플릿)`으로 CSS를 문자열로
+들고 있다가 갈아탔다:
 
-색 테마는 연한 파란색(`active`) 하나만 포인트로 쓰고 나머지는 흑백/회색 — 막대는
-`bar-fill`(이 프로세스의 total_seconds만큼 폭) 안에 active/idle/background
+- **런타임 비용이 없다.** `injectStyle`은 JS가 실행될 때 컴포넌트마다 `<style>` 태그를 만들어
+  넣었다. 지금은 빌드가 CSS 한 파일(gzip 약 1.7KB)로 뽑아내서 `<link>`로 로드되고, 브라우저가
+  JS와 별개로 캐싱·병렬 파싱한다(JS가 뜨기 전에 스타일이 먼저 있어서 깜빡임도 없다).
+- **이름 충돌이 없다.** 클래스가 `_row_1x2y3`처럼 파일별로 해시돼서, 전역 문자열 클래스
+  (`.bar-row` 등)끼리 겹칠 수 없다. 안 쓰는 클래스는 TypeScript가 아니라 파일에서 눈에 띈다.
+- **CSS를 CSS로 쓴다.** 템플릿 문자열 안이라 에디터 지원·린트가 안 되던 걸 일반 CSS 파일로 돌려놨다.
+
+공통 값은 `styles/tokens.css`의 CSS 변수가 맡는다(옛 `theme.ts` 대체). 색(`--color-*`),
+간격(`--space-*`), 모서리(`--radius-*`), 글자 크기(`--text-*`), 포커스 링(`--focus-ring`),
+그림자·z-index까지 토큰이라, 컴포넌트 CSS는 이 변수로만 쓰고 값을 바꾸고 싶으면 한 파일만
+고친다(토큰에 없는 값은 그 컴포넌트에서만 쓰는 미세 조정). 같은 모양을 여러 곳에서 쓰면
+`composes`로 가져온다(`shared.module.css`의 `muted`, 정적 라벨이 버튼 모양을 빌리는 `Stepper`).
+막대 세 구간 색도 인라인 스타일이 아니라 클래스(`segActive` 등)다 — 폭만 JS가 정한다.
+
+색 테마는 연한 파란색(`--color-active`) 하나만 포인트로 쓰고 나머지는 흑백/회색 — 막대는
+`fill`(이 프로세스의 total_seconds만큼 폭) 안에 active/idle/background
 세 구간을 겹치지 않게 나란히 채운다(`display: flex`, 각 구간 폭은 그 버킷/total
-비율).
+비율). 창이 좁으면(30rem 이하) 막대를 라벨·값 아래 한 줄로 내려 폭이 0이 되지 않게 한다.
 
 ## "최근 24시간"에서 일/주/월 단위 탐색으로
 
@@ -376,3 +393,19 @@ API: `GET /api/processes/<이름>/usage?edges=<ISO 경계,…>` — 경계 목�
 
 한계: 월 단위 상세는 한 달치 틱을 한 번 훑는다(홈의 월 조회와 같은 비용이라 같은 한계를
 공유한다). 실제로 느려지면 일 단위 사전 집계를 둔다.
+
+### 상세 화면 보완(코드 리뷰 반영)
+
+- **요청에 제한 시간(10초)을 건다.** hub가 연결만 열어 두고 응답을 끝내지 않으면 최신 요청이
+  끝나지 않아 `PeriodView`의 15초 갱신이 영영 멈춘다. 본문을 읽는 동안에도 적용한다.
+- **1분 미만은 초 단위로 보여 준다**(`format.ts`). 분으로 반올림하면 15초 사용이 "0분"으로
+  나와 막대와 글자가 어긋난다.
+- **뒤로 가기는 홈의 스크롤 위치를 되살린다.** 떠날 때 history state에 위치를 적고
+  (`router.navigate`), 돌아오면 내용이 비동기로 그려질 때까지 매 프레임 시도한다
+  (`scroll.ts`, 사용자가 스크롤하면 중단). 새 화면은 맨 위에서 시작한다.
+- **일광절약시간이 끝나는 날의 반복된 1시**는 라벨에 UTC 오프셋을 붙인다(`1시 (UTC-04:00)`).
+  라벨은 서버가 준 시각이 아니라 클라이언트가 만든 칸으로 만든다.
+- **아이콘**: 색 비트맵이 없는 모노크롬 아이콘은 AND/XOR 마스크로 RGBA를 만든다. 경로 기록이
+  일시적으로 실패하면 다음 틱에 재시도(3번까지)한다. `exe_path` 컬럼이 없는 옛 DB는 503이
+  아니라 "아이콘 없음"(404)이다. ui는 "없음"을 5분 동안만 기억해서, 나중에 경로가 채워지면
+  새로고침 없이 복구된다.

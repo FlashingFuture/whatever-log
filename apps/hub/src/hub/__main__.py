@@ -272,6 +272,17 @@ class _Handler(BaseHTTPRequestHandler):
                 ).fetchone()
             finally:
                 conn.close()
+        except sqlite3.OperationalError as exc:
+            if "no such column: exe_path" not in str(exc):
+                logger.exception("집계 DB를 읽지 못했습니다: %s", self.db_path)
+                self._send_json(
+                    503,
+                    api_error.error_body(api_error.UNAVAILABLE, "database unavailable"),
+                )
+                return
+            # 새 recorder가 컬럼을 추가하기 전의 옛 DB — hub는 읽기 전용이라 직접 고치지
+            # 않고, 경로가 없는 것(아이콘 없음)으로 취급한다.
+            row = None
         except sqlite3.Error:
             logger.exception("집계 DB를 읽지 못했습니다: %s", self.db_path)
             self._send_json(

@@ -209,6 +209,30 @@ def test_icon_endpoint_returns_304_for_matching_etag(running_server) -> None:
     assert exc_info.value.code == 304
 
 
+def test_icon_endpoint_treats_a_pre_migration_database_as_no_icon(tmp_path) -> None:
+    """exe_path 컬럼이 아직 없는 옛 DB는 503이 아니라 아이콘 없음(404)이어야 한다."""
+    import sqlite3
+
+    old_db = tmp_path / "old.db"
+    conn = sqlite3.connect(old_db)
+    conn.execute("CREATE TABLE processes (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)")
+    conn.execute("INSERT INTO processes (name) VALUES ('chrome.exe')")
+    conn.commit()
+    conn.close()
+
+    _Handler.db_path = old_db
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(
+                f"http://127.0.0.1:{server.server_port}/api/icons/chrome.exe", timeout=2
+            )
+        assert exc_info.value.code == 404
+    finally:
+        server.shutdown()
+
+
 @pytest.mark.parametrize("name", ["unknown.exe", "..%2F..%2Fwindows%2Fsystem32%2Fnotepad.exe"])
 def test_icon_endpoint_404_for_unknown_process_and_never_opens_arbitrary_paths(
     running_server, name

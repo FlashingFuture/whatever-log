@@ -1,15 +1,6 @@
 import type { LayoutName } from "../routes";
-import { injectStyle } from "../styles/injectStyle";
 import { createBackBar } from "./BackBar";
-
-injectStyle(
-  "layouts",
-  `
-  .layout-back-bar {
-    margin-bottom: 1.5rem;
-  }
-`,
-);
+import styles from "./Layouts.module.css";
 
 export interface LayoutProps {
   onBack: () => void;
@@ -30,7 +21,7 @@ const LAYOUTS: Record<
   },
   back(root, props) {
     const bar = createBackBar(props.onBack);
-    bar.classList.add("layout-back-bar");
+    bar.classList.add(styles.backBar);
     const content = document.createElement("main");
     root.replaceChildren(bar, content);
     return content;

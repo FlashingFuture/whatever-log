@@ -1,0 +1,44 @@
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 16rem;
+}
+.list {
+  display: flex;
+  flex-direction: column;
+  max-height: 18rem;
+  overflow-y: auto;
+}
+.item {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font: inherit;
+  font-size: var(--text-md);
+  text-align: left;
+  padding: var(--space-2) 0.6rem;
+  border: none;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-text);
+  cursor: pointer;
+}
+.item:hover:not(:disabled) {
+  background: var(--color-track);
+}
+.item:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+.item:disabled {
+  color: var(--color-text-disabled);
+  cursor: default;
+}
+.item[aria-current="true"] {
+  background: var(--color-active);
+}
+.meta {
+  composes: muted from "../styles/shared.module.css";
+  font-size: var(--text-xs);
+}
