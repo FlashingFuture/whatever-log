@@ -26,11 +26,12 @@ test("남은 시간은 기록 종류별 만료 시각에서 계산하고, 지우
 
   assert.equal(cache.remainingMs("a.exe", 11_000), TRANSIENT_TTL_MS - 10_000);
   assert.equal(cache.remainingMs("b.exe", 11_000), MISSING_TTL_MS - 10_000);
-  assert.equal(cache.remainingMs("a.exe", 1_000 + TRANSIENT_TTL_MS), null);
-  assert.equal(cache.remainingMs("none.exe", 0), null);
 
-  cache.clear("a.exe"); // 재시도로 불러와졌다
+  cache.clear("a.exe"); // 재시도로 불러와졌다 — 아직 살아 있는 항목을 지운다
   assert.equal(cache.statusOf("a.exe", 11_000), null);
+  assert.equal(cache.remainingMs("a.exe", 11_000), null);
+  assert.equal(cache.remainingMs("b.exe", 1_000 + MISSING_TTL_MS), null); // 만료
+  assert.equal(cache.remainingMs("none.exe", 0), null);
 });
 
 test("새로 기록할 때 만료된 항목을 함께 지워 쌓이지 않는다", () => {

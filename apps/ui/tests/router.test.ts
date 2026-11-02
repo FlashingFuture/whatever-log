@@ -50,8 +50,10 @@ test("복원 중에는 이동해도 기록의 스크롤 위치를 덮어쓰지 �
   const history = {
     state: { depth: 0, scrollY: 500 } as object | null,
     replaced: 0,
+    savedY: undefined as number | undefined,
     replaceState(state: object) {
       this.replaced += 1;
+      this.savedY = (state as { scrollY?: number }).scrollY;
       this.state = state;
     },
     pushState(state: object) {
@@ -83,6 +85,7 @@ test("복원 중에는 이동해도 기록의 스크롤 위치를 덮어쓰지 �
     fakeWindow.location.hash = "#/process/a.exe";
     navigate({ name: "home" });
     assert.equal(history.replaced, 1);
+    assert.equal(history.savedY, 150, "지금 위치(150)를 적는다");
   } finally {
     delete globals.window;
     delete globals.document;
