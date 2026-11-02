@@ -29,7 +29,8 @@ from recorder.sampling import TickSample
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS processes (
     id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE
+    name TEXT NOT NULL UNIQUE,
+    exe_path TEXT
 );
 
 CREATE TABLE IF NOT EXISTS ticks (
@@ -63,7 +64,19 @@ def open_db(path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous = NORMAL")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(_SCHEMA)
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """이미 만들어진 DB에 뒤늦게 추가된 컬럼을 채워 넣는다.
+
+    CREATE TABLE IF NOT EXISTS는 있는 테이블을 고치지 않으므로, 예전 recorder가
+    만든 DB에는 exe_path가 없다.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(processes)")}
+    if "exe_path" not in columns:
+        conn.execute("ALTER TABLE processes ADD COLUMN exe_path TEXT")
 
 
 def _get_or_create_process_id(conn: sqlite3.Connection, name: str) -> int:
@@ -116,3 +129,17 @@ def save_tick(conn: sqlite3.Connection, sample: TickSample) -> None:
         raise
     else:
         conn.execute("COMMIT")
+
+
+def save_process_paths(conn: sqlite3.Connection, paths: dict[str, str]) -> None:
+    """{프로세스 이름: exe 경로}를 processes에 기록한다.
+
+    경로가 바뀐 경우(앱 업데이트로 폴더가 바뀌는 등)에는 새 값으로 덮어쓴다.
+    같은 값이면 쓰지 않는다. 아직 틱에 나온 적 없는 이름은 행이 없어 무시된다 —
+    호출부는 save_tick() 뒤에 부른다.
+    """
+    conn.executemany(
+        "UPDATE processes SET exe_path = ? "
+        "WHERE name = ? AND (exe_path IS NULL OR exe_path != ?)",
+        [(path, name, path) for name, path in paths.items()],
+    )

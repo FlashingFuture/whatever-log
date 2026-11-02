@@ -1,0 +1,65 @@
+.row {
+  display: grid;
+  grid-template-columns: 9rem minmax(0, 1fr) 10rem;
+  align-items: center;
+  gap: var(--space-3);
+  color: inherit;
+  text-decoration: none;
+}
+/* 창이 좁으면 막대가 0폭으로 사라지지 않게, 막대를 라벨·값 아래 한 줄로 내린다. */
+@media (max-width: 30rem) {
+  .row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .track {
+    grid-column: 1 / -1;
+    order: 1;
+  }
+}
+/* 누를 수 있는 줄(링크)만 반응한다. 옆 줄과 겹치지 않게 살짝 안쪽 여백을 둔다. */
+a.row {
+  margin: 0 calc(var(--space-2) * -1);
+  padding: 0.15rem var(--space-2);
+  border-radius: var(--radius-md);
+}
+a.row:hover {
+  background: var(--color-track);
+}
+a.row:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+.track {
+  height: var(--space-4);
+  background: var(--color-track);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+a.row:hover .track {
+  background: var(--color-bg);
+}
+.fill {
+  height: 100%;
+  display: flex;
+}
+.segActive {
+  height: 100%;
+  background: var(--color-active);
+}
+.segIdle {
+  height: 100%;
+  background: var(--color-idle);
+}
+.segBackground {
+  height: 100%;
+  background: var(--color-background-segment);
+}
+.value {
+  composes: muted from "../styles/shared.module.css";
+  font-size: var(--text-sm);
+  text-align: right;
+}
+/* 칸이 좁으면 "활성 / 총" 사이에서만 줄을 바꾸고, "12시간 12분" 안에서는 안 끊는다. */
+.valuePart {
+  white-space: nowrap;
+}

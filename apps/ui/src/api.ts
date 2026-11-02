@@ -12,6 +12,21 @@ export interface RangeUsage {
   by_process: ProcessUsage[];
 }
 
+/** 한 프로세스의 칸 하나(시간 하나, 날짜 하나)의 사용 시간. */
+export interface BucketUsage {
+  start: string;
+  end: string;
+  active_seconds: number;
+  idle_seconds: number;
+  background_seconds: number;
+  total_seconds: number;
+}
+
+export interface ProcessSeries {
+  process: string;
+  buckets: BucketUsage[];
+}
+
 /**
  * hub의 에러 응답 `{"error": {"code", "message"}}`에서 온 오류. 형식의 원본은
  * packages/common의 api_error.py다(언어가 달라 같은 모양을 여기 따로 선언한다
@@ -46,6 +61,56 @@ async function toApiError(response: Response): Promise<ApiError> {
 // apps/hub가 고정 포트로 뜬다(apps/desktop이 자식 프로세스로 띄움).
 const HUB_URL = "http://127.0.0.1:8787";
 
+// hub가 연결만 열어 두고 응답을 끝내지 않아도 요청이 영원히 매달려 있지 않게 한다 —
+// PeriodView의 15초 갱신은 최신 요청이 끝나야 다시 시작되므로, 안 끝나는 요청 하나가
+// 화면 갱신을 멈춰 세운다. 정상 응답(월 단위 집계 포함)보다 충분히 긴 값.
+const SHORT_REQUEST_TIMEOUT_MS = 10_000;
+// 월 단위 조회는 틱을 한 달치 훑는다 — 기본 15초 간격이면 몇 초지만, recorder를 1초
+// 간격으로 돌리면 틱이 270만 개라 1분 가까이 걸릴 수 있다(틱당 약 20µs). 그때도 시간
+// 초과 오류가 반복되지 않게 긴 조회에는 더 길게 준다.
+const LONG_REQUEST_TIMEOUT_MS = 60_000;
+const LONG_SPAN_MS = 8 * 24 * 60 * 60 * 1000;
+
+/** 조회 구간이 길수록 hub가 더 오래 걸리므로 제한 시간도 길게 준다. */
+export function requestTimeoutMs(spanMs: number): number {
+  return spanMs > LONG_SPAN_MS
+    ? LONG_REQUEST_TIMEOUT_MS
+    : SHORT_REQUEST_TIMEOUT_MS;
+}
+
+/**
+ * 프로세스 아이콘 URL. 이름만 넘기고 경로는 hub가 DB에서 찾는다. 브라우저가
+ * hub의 Cache-Control/ETag로 캐싱하므로 같은 URL은 다시 받지 않는다.
+ */
+export function iconUrl(processName: string): string {
+  return `${HUB_URL}/api/icons/${encodeURIComponent(processName)}`;
+}
+
+async function getJson<T>(path: string, timeoutMs: number): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${HUB_URL}${path}`, {
+      signal: controller.signal,
+    });
+    // fetch()는 HTTP 상태와 무관하게 resolve된다 — hub가 DB를 못 읽어 503을
+    // 주면 { "error": ... } 모양이라, 체크 없이 바로 결과로 취급하면 렌더링이
+    // undefined 필드에서 깨진다. 서버가 준 사유는 화면에 보이게 싣는다.
+    if (!response.ok) {
+      throw await toApiError(response);
+    }
+    // 본문을 읽는 동안에도 제한 시간이 적용되도록 같은 try 안에서 읽는다.
+    return (await response.json()) as T;
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("hub 응답 시간이 초과되었습니다.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function fetchUsage(start: Date, end: Date): Promise<RangeUsage> {
   // toISOString()은 항상 UTC("...Z")라 오프셋의 "+"가 쿼리 문자열에서 공백으로
   // 깨질 일이 없다. URLSearchParams가 나머지 인코딩을 맡는다.
@@ -53,13 +118,30 @@ export function fetchUsage(start: Date, end: Date): Promise<RangeUsage> {
     start: start.toISOString(),
     end: end.toISOString(),
   });
-  return fetch(`${HUB_URL}/api/usage?${query}`).then(async (response) => {
-    // fetch()는 HTTP 상태와 무관하게 resolve된다 — hub가 DB를 못 읽어 503을
-    // 주면 { "error": ... } 모양이라, 체크 없이 바로 RangeUsage로 취급하면
-    // 렌더링이 undefined 필드에서 깨진다. 서버가 준 사유는 화면에 보이게 싣는다.
-    if (!response.ok) {
-      throw await toApiError(response);
-    }
-    return response.json() as Promise<RangeUsage>;
+  return getJson(
+    `/api/usage?${query}`,
+    requestTimeoutMs(end.getTime() - start.getTime()),
+  );
+}
+
+/**
+ * 한 프로세스의 사용 시간을 칸별로 받는다. 칸 경계는 로컬 타임존으로 계산한
+ * 것을 넘긴다(hub는 달력을 모른다) — 맨 앞 칸의 시작부터 맨 뒤 칸의 끝까지
+ * 이어진 경계 목록이다.
+ */
+export function fetchProcessUsage(
+  process: string,
+  buckets: { start: Date; end: Date }[],
+): Promise<ProcessSeries> {
+  const edges = [
+    ...buckets.map((b) => b.start),
+    buckets[buckets.length - 1].end,
+  ];
+  const query = new URLSearchParams({
+    edges: edges.map((edge) => edge.toISOString()).join(","),
   });
+  return getJson(
+    `/api/processes/${encodeURIComponent(process)}/usage?${query}`,
+    requestTimeoutMs(edges[edges.length - 1].getTime() - edges[0].getTime()),
+  );
 }

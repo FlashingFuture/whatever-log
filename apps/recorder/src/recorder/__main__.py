@@ -16,6 +16,7 @@ from pathlib import Path
 
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
 from supervision.log_setup import configure_logging
+from recorder.process_paths import ProcessPathTracker
 from recorder.sampling import sample_tick
 from recorder.storage import open_db, save_tick
 from supervision.lock import AlreadyRunningError, acquire_lock
@@ -99,12 +100,17 @@ def run(interval: float, db_path: Path) -> None:
             raise
 
         tick_count = 0
+        path_tracker = ProcessPathTracker()
         logger.info("%s초 간격으로 기록합니다. DB: %s", interval, db_path)
 
         try:
             while True:
                 sample = sample_tick()
                 save_tick(conn, sample)
+                path_tracker.record_new(
+                    conn,
+                    {*sample.windowed_processes, *filter(None, [sample.foreground_process])},
+                )
                 tick_count += 1
                 logger.info(
                     "[tick %d] FG=%s WIN=%d개 idle=%.1fs",

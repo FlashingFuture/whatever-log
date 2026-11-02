@@ -3,7 +3,9 @@ from datetime import UTC, datetime, timedelta, timezone
 from recorder.sampling import TickSample
 from recorder.storage import open_db, save_tick
 
-from aggregation.range import usage_by_range
+import pytest
+
+from aggregation.range import process_usage_by_bucket, usage_by_range
 
 
 def _tick(
@@ -182,3 +184,69 @@ def test_float_noise_does_not_break_total_ties(tmp_path) -> None:
     result = usage_by_range(conn, now, t + timedelta(seconds=1))
 
     assert result["by_process"][-1]["process"] == "a_bg.exe"
+
+
+def test_process_usage_by_bucket_splits_one_process_by_edges(tmp_path) -> None:
+    """칸마다 그 칸에 시작한 구간만 들어가고, 다른 프로세스는 섞이지 않는다."""
+    conn = open_db(tmp_path / "recorder.db")
+    base = datetime(2026, 10, 28, 0, 0, tzinfo=UTC)
+    # 칸0 [0:00,1:00): chrome foreground 2틱(30초) + code가 foreground일 때 background 15초.
+    # 칸1 [1:00,2:00): chrome idle 15초.
+    save_tick(conn, _tick(base, "chrome.exe", {"chrome.exe", "code.exe"}))
+    save_tick(conn, _tick(base + timedelta(seconds=15), "chrome.exe", {"chrome.exe"}))
+    save_tick(conn, _tick(base + timedelta(seconds=30), "code.exe", {"chrome.exe", "code.exe"}))
+    save_tick(conn, _tick(base + timedelta(seconds=45), None, set()))  # 칸0의 마지막 구간을 닫는다
+    save_tick(
+        conn,
+        _tick(base + timedelta(hours=1), "chrome.exe", {"chrome.exe"}, idle_seconds=100.0),
+    )
+    save_tick(conn, _tick(base + timedelta(hours=1, seconds=15), None, set()))
+
+    series = process_usage_by_bucket(
+        conn, "chrome.exe", [base, base + timedelta(hours=1), base + timedelta(hours=2)]
+    )
+
+    assert series["process"] == "chrome.exe"
+    first, second = series["buckets"]
+    assert first["active_seconds"] == 30.0
+    assert first["background_seconds"] == 15.0
+    assert first["total_seconds"] == 45.0
+    assert second["idle_seconds"] == 15.0
+    assert second["active_seconds"] == 0.0
+
+
+def test_process_usage_by_bucket_matches_usage_by_range_totals(tmp_path) -> None:
+    """칸을 모두 더하면 같은 구간의 전체 집계와 같아야 한다(분류 규칙이 같은 코드라는 보증)."""
+    conn = open_db(tmp_path / "recorder.db")
+    base = datetime(2026, 10, 28, 0, 0, tzinfo=UTC)
+    for i in range(40):
+        save_tick(
+            conn,
+            _tick(
+                base + timedelta(seconds=15 * i),
+                "chrome.exe" if i % 3 else "code.exe",
+                {"chrome.exe", "code.exe"},
+                idle_seconds=100.0 if i % 5 == 0 else 0.0,
+            ),
+        )
+    end = base + timedelta(minutes=11)
+    edges = [base + timedelta(minutes=m) for m in (0, 3, 7, 11)]
+
+    series = process_usage_by_bucket(conn, "chrome.exe", edges)
+    whole = {r["process"]: r for r in usage_by_range(conn, base, end)["by_process"]}["chrome.exe"]
+
+    for field in ("active_seconds", "idle_seconds", "background_seconds"):
+        assert sum(b[field] for b in series["buckets"]) == pytest.approx(whole[field])
+
+
+def test_process_usage_by_bucket_fills_empty_buckets_and_validates_edges(tmp_path) -> None:
+    conn = open_db(tmp_path / "recorder.db")
+    base = datetime(2026, 10, 28, 0, 0, tzinfo=UTC)
+
+    series = process_usage_by_bucket(conn, "none.exe", [base, base + timedelta(hours=1)])
+    assert [b["total_seconds"] for b in series["buckets"]] == [0.0]
+
+    with pytest.raises(ValueError):
+        process_usage_by_bucket(conn, "none.exe", [base])
+    with pytest.raises(ValueError):
+        process_usage_by_bucket(conn, "none.exe", [base + timedelta(hours=1), base])

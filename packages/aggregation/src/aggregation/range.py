@@ -7,6 +7,8 @@ apps/ui가 로컬 타임존 기준으로 계산해서 hub에 넘긴다).
 """
 
 import sqlite3
+from bisect import bisect_right
+from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
 from typing import TypedDict
 
@@ -44,6 +46,82 @@ class RangeUsage(TypedDict):
     by_process: list[ProcessUsage]
 
 
+def _intervals(
+    conn: sqlite3.Connection,
+    start_iso: str,
+    end_iso: str,
+    idle_threshold_seconds: float,
+    *,
+    only_process: str | None = None,
+) -> Iterator[tuple[datetime, str, str, float]]:
+    """[start, end)의 틱을 (구간 시작 시각, 프로세스, 분류, 길이(초))로 풀어서 내놓는다.
+
+    분류는 "active"/"idle"/"background" 중 하나다. 전체 집계와 구간별 집계가 같은
+    규칙(간격 상한, foreground 합치기, idle 판정)을 쓰도록 한곳에 둔다.
+    only_process를 주면 그 프로세스의 구간만 내놓는다 — 간격 계산에는 틱이 모두
+    필요하지만, 창 목록 조회는 그 프로세스 것만 읽으면 된다.
+    """
+    ticks = conn.execute(
+        "SELECT ticks.id, ticks.sampled_at, processes.name, ticks.seconds_since_last_input "
+        "FROM ticks LEFT JOIN processes ON processes.id = ticks.foreground_process_id "
+        "WHERE ticks.sampled_at >= ? AND ticks.sampled_at < ? "
+        "ORDER BY ticks.sampled_at",
+        (start_iso, end_iso),
+    ).fetchall()
+
+    if len(ticks) < 2:
+        return
+
+    # 틱 id를 모아서 IN (...)에 바인딩하지 않는다 — recorder는 --interval 1초도
+    # 허용하는데, 그 간격으로 24시간이면 틱이 8만 개를 넘어 SQLite의 파라미터
+    # 개수 한도(기본 32766개)를 넘길 수 있다. 대신 틱과 같은 sampled_at 범위로
+    # 직접 조인한다.
+    windowed_query = (
+        "SELECT tick_windowed_processes.tick_id, processes.name "
+        "FROM tick_windowed_processes "
+        "JOIN processes ON processes.id = tick_windowed_processes.process_id "
+        "JOIN ticks ON ticks.id = tick_windowed_processes.tick_id "
+        "WHERE ticks.sampled_at >= ? AND ticks.sampled_at < ?"
+    )
+    windowed_params: tuple[str, ...] = (start_iso, end_iso)
+    if only_process is not None:
+        windowed_query += " AND processes.name = ?"
+        windowed_params += (only_process,)
+    windowed_rows = conn.execute(windowed_query, windowed_params).fetchall()
+
+    windowed_by_tick: dict[int, set[str]] = {}
+    for tick_id, name in windowed_rows:
+        windowed_by_tick.setdefault(tick_id, set()).add(name)
+
+    for (tick_id, sampled_at, fg_name, since_last_input), (_, next_sampled_at, _, _) in zip(
+        ticks, ticks[1:]
+    ):
+        started = datetime.fromisoformat(sampled_at)
+        gap = (datetime.fromisoformat(next_sampled_at) - started).total_seconds()
+        if gap > _MAX_GAP_SECONDS:
+            continue
+
+        # get_foreground_process_name()과 get_windowed_process_names()는
+        # 서로 독립적으로 조회된다(window_snapshot.py) — 제목 없는 foreground
+        # 창은 창 목록 필터(GetWindowTextLengthW == 0 제외)에서 빠질 수 있다.
+        # foreground를 열려 있던 프로세스 집합에 직접 합쳐야 누락 없이 active/idle
+        # 로 분류된다.
+        open_names = windowed_by_tick.get(tick_id, set())
+        if fg_name is not None:
+            open_names = open_names | {fg_name}
+
+        for name in open_names:
+            if only_process is not None and name != only_process:
+                continue
+            if name != fg_name:
+                kind = "background"
+            elif since_last_input < idle_threshold_seconds:
+                kind = "active"
+            else:
+                kind = "idle"
+            yield started, name, kind, gap
+
+
 def usage_by_range(
     conn: sqlite3.Connection,
     start: datetime,
@@ -72,62 +150,17 @@ def usage_by_range(
     start_iso = start.astimezone(UTC).isoformat()
     end_iso = end.astimezone(UTC).isoformat()
 
-    ticks = conn.execute(
-        "SELECT ticks.id, ticks.sampled_at, processes.name, ticks.seconds_since_last_input "
-        "FROM ticks LEFT JOIN processes ON processes.id = ticks.foreground_process_id "
-        "WHERE ticks.sampled_at >= ? AND ticks.sampled_at < ? "
-        "ORDER BY ticks.sampled_at",
-        (start_iso, end_iso),
-    ).fetchall()
-
-    if len(ticks) < 2:
-        return {"start": start_iso, "end": end_iso, "by_process": []}
-
-    # 틱 id를 모아서 IN (...)에 바인딩하지 않는다 — recorder는 --interval 1초도
-    # 허용하는데, 그 간격으로 24시간이면 틱이 8만 개를 넘어 SQLite의 파라미터
-    # 개수 한도(기본 32766개)를 넘길 수 있다. 대신 틱과 같은 sampled_at 범위로
-    # 직접 조인한다.
-    windowed_rows = conn.execute(
-        "SELECT tick_windowed_processes.tick_id, processes.name "
-        "FROM tick_windowed_processes "
-        "JOIN processes ON processes.id = tick_windowed_processes.process_id "
-        "JOIN ticks ON ticks.id = tick_windowed_processes.tick_id "
-        "WHERE ticks.sampled_at >= ? AND ticks.sampled_at < ?",
-        (start_iso, end_iso),
-    ).fetchall()
-
-    windowed_by_tick: dict[int, set[str]] = {}
-    for tick_id, name in windowed_rows:
-        windowed_by_tick.setdefault(tick_id, set()).add(name)
-
     active_seconds: dict[str, float] = {}
     idle_seconds: dict[str, float] = {}
     background_seconds: dict[str, float] = {}
-
-    for (tick_id, sampled_at, fg_name, since_last_input), (_, next_sampled_at, _, _) in zip(
-        ticks, ticks[1:]
-    ):
-        gap = (
-            datetime.fromisoformat(next_sampled_at) - datetime.fromisoformat(sampled_at)
-        ).total_seconds()
-        if gap > _MAX_GAP_SECONDS:
-            continue
-
-        # get_foreground_process_name()과 get_windowed_process_names()는
-        # 서로 독립적으로 조회된다(window_snapshot.py) — 제목 없는 foreground
-        # 창은 창 목록 필터(GetWindowTextLengthW == 0 제외)에서 빠질 수 있다.
-        # foreground를 열려 있던 프로세스 집합에 직접 합쳐야 누락 없이 active/idle
-        # 로 분류된다.
-        open_names = windowed_by_tick.get(tick_id, set())
-        if fg_name is not None:
-            open_names = open_names | {fg_name}
-
-        for name in open_names:
-            if name == fg_name:
-                bucket = active_seconds if since_last_input < idle_threshold_seconds else idle_seconds
-            else:
-                bucket = background_seconds
-            bucket[name] = bucket.get(name, 0.0) + gap
+    totals_by_kind = {
+        "active": active_seconds,
+        "idle": idle_seconds,
+        "background": background_seconds,
+    }
+    for _, name, kind, gap in _intervals(conn, start_iso, end_iso, idle_threshold_seconds):
+        totals = totals_by_kind[kind]
+        totals[name] = totals.get(name, 0.0) + gap
 
     names = set(active_seconds) | set(idle_seconds) | set(background_seconds)
     by_process: list[ProcessUsage] = []
@@ -157,3 +190,70 @@ def usage_by_range(
     )
 
     return {"start": start_iso, "end": end_iso, "by_process": by_process}
+
+
+class BucketUsage(TypedDict):
+    """process_usage_by_bucket()의 한 칸. 경계는 [start, end)이고, 세 값의 의미는
+    ProcessUsage와 같다."""
+
+    start: str
+    end: str
+    active_seconds: float
+    idle_seconds: float
+    background_seconds: float
+    total_seconds: float
+
+
+class ProcessSeries(TypedDict):
+    """process_usage_by_bucket()의 반환 모양."""
+
+    process: str
+    buckets: list[BucketUsage]
+
+
+def process_usage_by_bucket(
+    conn: sqlite3.Connection,
+    process: str,
+    edges: Sequence[datetime],
+    *,
+    idle_threshold_seconds: float = IDLE_THRESHOLD_SECONDS,
+) -> ProcessSeries:
+    """한 프로세스의 사용 시간을 edges가 나누는 칸([e0,e1), [e1,e2), ...)별로 집계한다.
+
+    칸 경계(예: 하루의 시간별, 한 주의 날짜별)는 로컬 타임존·일광절약시간을
+    아는 호출부가 정해서 넘긴다 — 여기서 달력을 계산하지 않는다. 각 틱이 대표하는
+    구간은 그 틱의 시각이 속한 칸에 통째로 넣는다(칸 경계에 걸친 한 틱의 구간까지
+    쪼개지는 않는다. 틱 간격은 최대 2분이라 오차가 그 이내다).
+
+    edges는 오름차순이어야 하고 2개 이상이어야 한다. 데이터가 없는 칸도 0으로
+    채워서, 칸 수는 항상 len(edges) - 1이다.
+    """
+    if len(edges) < 2:
+        raise ValueError("edges는 2개 이상이어야 합니다.")
+    utc_edges = [edge.astimezone(UTC) for edge in edges]
+    if any(later <= earlier for earlier, later in zip(utc_edges, utc_edges[1:])):
+        raise ValueError("edges는 오름차순이어야 합니다.")
+
+    sums = [{"active": 0.0, "idle": 0.0, "background": 0.0} for _ in range(len(edges) - 1)]
+    for started, _, kind, gap in _intervals(
+        conn,
+        utc_edges[0].isoformat(),
+        utc_edges[-1].isoformat(),
+        idle_threshold_seconds,
+        only_process=process,
+    ):
+        index = bisect_right(utc_edges, started) - 1
+        sums[index][kind] += gap
+
+    buckets: list[BucketUsage] = [
+        {
+            "start": utc_edges[i].isoformat(),
+            "end": utc_edges[i + 1].isoformat(),
+            "active_seconds": part["active"],
+            "idle_seconds": part["idle"],
+            "background_seconds": part["background"],
+            "total_seconds": part["active"] + part["idle"] + part["background"],
+        }
+        for i, part in enumerate(sums)
+    ]
+    return {"process": process, "buckets": buckets}

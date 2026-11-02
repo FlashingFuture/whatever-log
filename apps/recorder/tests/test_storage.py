@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 import pytest
 
 from recorder.sampling import TickSample
-from recorder.storage import open_db, save_tick
+from recorder.storage import open_db, save_process_paths, save_tick
 
 
 def _process_name(conn: sqlite3.Connection, process_id: int) -> str:
@@ -105,3 +105,42 @@ def test_each_tick_commits_as_one_transaction(tmp_path) -> None:
     windowed_count = conn.execute("SELECT COUNT(*) FROM tick_windowed_processes").fetchone()[0]
     assert tick_count == 1
     assert windowed_count == 3
+
+
+def test_save_process_paths_records_and_updates_changed_path(tmp_path) -> None:
+    """경로는 처음 한 번 채우고, 앱 업데이트 등으로 바뀌면 새 값으로 덮어쓴다."""
+    conn = open_db(tmp_path / "test.db")
+    save_tick(
+        conn,
+        TickSample(
+            sampled_at=datetime(2026, 1, 1, tzinfo=UTC),
+            foreground_process="Code.exe",
+            windowed_processes=frozenset({"Code.exe"}),
+            seconds_since_last_input=0.0,
+        ),
+    )
+
+    def path() -> str | None:
+        return conn.execute("SELECT exe_path FROM processes WHERE name = 'Code.exe'").fetchone()[0]
+
+    assert path() is None
+    save_process_paths(conn, {"Code.exe": r"C:\old\Code.exe", "Unseen.exe": r"C:\x.exe"})
+    assert path() == r"C:\old\Code.exe"
+    save_process_paths(conn, {"Code.exe": r"C:\new\Code.exe"})
+    assert path() == r"C:\new\Code.exe"
+    # 틱에 나온 적 없는 이름은 행을 새로 만들지 않는다.
+    assert conn.execute("SELECT COUNT(*) FROM processes").fetchone()[0] == 1
+
+
+def test_open_db_adds_exe_path_to_existing_database(tmp_path) -> None:
+    """exe_path가 없던 예전 DB를 열어도 컬럼이 추가돼야 한다."""
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.execute("CREATE TABLE processes (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)")
+    old.execute("INSERT INTO processes (name) VALUES ('chrome.exe')")
+    old.commit()
+    old.close()
+
+    conn = open_db(path)
+
+    assert conn.execute("SELECT name, exe_path FROM processes").fetchall() == [("chrome.exe", None)]

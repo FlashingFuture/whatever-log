@@ -1,0 +1,157 @@
+/**
+ * 뒤로/앞으로 가기로 돌아온 화면의 스크롤 위치를 되살린다.
+ *
+ * 화면 내용은 비동기로 그려져서(hub 응답이 느리면 몇 초 뒤에도), 돌아온 직후엔 문서가
+ * 짧아 원하는 위치까지 스크롤할 수 없다. 그래서 프레임 수로 포기하지 않고 문서 크기가
+ * 바뀔 때마다(ResizeObserver) 다시 시도해, 내용이 언제 그려지든 위치에 닿으면 끝낸다.
+ * 사용자가 직접 스크롤하려는 순간(휠·터치·스크롤 막대·스크롤 키)이나 화면을 떠날 때
+ * (돌려주는 함수)에는 멈춘다.
+ *
+ * 위치는 현재 기록(history entry)에 스크롤할 때마다 적어 둔다(trackScroll). 이동 시점에만
+ * 적으면 뒤로 간 뒤 앞으로 돌아올 때 떠난 기록에 위치가 없다.
+ */
+// 내용이 영영 안 그려지는 경우(에러 화면 등)에 관찰을 무한정 붙들고 있지 않는 안전장치.
+// hub 요청 제한 시간(최대 60초)보다 길게 둔다.
+export const MAX_RESTORE_MS = 90_000;
+
+// 페이지를 스크롤하는 키. Tab·글자 키 등으로는 복원을 멈추지 않는다(로딩 중에 Tab을
+// 눌렀다고 위치를 잃으면 안 된다).
+const SCROLL_KEYS = new Set([
+  "ArrowUp",
+  "ArrowDown",
+  "PageUp",
+  "PageDown",
+  "Home",
+  "End",
+  " ",
+]);
+
+export function isScrollKey(key: string): boolean {
+  return SCROLL_KEYS.has(key);
+}
+
+// 포커스된 이 요소들에서 Space는 페이지를 스크롤하지 않고 요소를 작동시킨다(버튼 누르기 등).
+const SPACE_IS_ACTIVATION = new Set(["BUTTON", "INPUT", "TEXTAREA", "SELECT"]);
+
+/**
+ * 이 키 입력이 사용자가 페이지를 스크롤하려는 것이어서 복원을 멈춰야 하는지.
+ * 피커처럼 방향키를 스스로 처리해 기본 동작(스크롤)을 막은 입력(defaultPrevented)과, 버튼
+ * 위에서의 Space(스크롤이 아니라 누르기)는 페이지가 움직이지 않으니 멈추지 않는다.
+ */
+export function stopsRestore(event: {
+  key: string;
+  defaultPrevented: boolean;
+  targetTag?: string;
+}): boolean {
+  if (!isScrollKey(event.key) || event.defaultPrevented) {
+    return false;
+  }
+  return !(event.key === " " && SPACE_IS_ACTIVATION.has(event.targetTag ?? ""));
+}
+
+/**
+ * 스크롤 막대를 잡으려는 포인터 누름인지. 막대는 문서 루트의 일부라 그 위의 누름은
+ * 대상이 루트이고 좌표가 내용 영역(clientWidth/Height) 바깥이다. 내용 위의 일반 클릭
+ * (빈 영역, 기간 버튼 등)은 복원을 멈추면 안 된다.
+ */
+export function isScrollbarPress(
+  event: { target: unknown; clientX: number; clientY: number },
+  root: { clientWidth: number; clientHeight: number },
+): boolean {
+  return (
+    event.target === root &&
+    (event.clientX >= root.clientWidth || event.clientY >= root.clientHeight)
+  );
+}
+
+// 복원이 진행 중인 동안에는 위치를 기록에 적지 않는다 — 내용이 다 그려지기 전의 짧은
+// 문서에서 밀린 값(또는 복원 중간값)으로 저장돼 있던 위치를 덮어쓰면 안 된다.
+let restoring = 0;
+
+/** 스크롤 위치 복원이 진행 중인지(그동안의 window.scrollY는 중간값이다). */
+export function isRestoringScroll(): boolean {
+  return restoring > 0;
+}
+
+export function restoreScroll(y: number): () => void {
+  if (y <= 0) {
+    window.scrollTo(0, 0);
+    return () => {};
+  }
+
+  restoring += 1;
+  let stopped = false;
+  let observer: ResizeObserver | null = null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const stop = (): void => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
+    restoring -= 1;
+    observer?.disconnect();
+    clearTimeout(timer);
+    window.removeEventListener("wheel", stop);
+    window.removeEventListener("touchstart", stop);
+    window.removeEventListener("pointerdown", onPointerDown);
+    window.removeEventListener("keydown", onKeyDown);
+  };
+  const onKeyDown = (event: KeyboardEvent): void => {
+    if (
+      stopsRestore({
+        key: event.key,
+        defaultPrevented: event.defaultPrevented,
+        targetTag: (event.target as Element | null)?.tagName,
+      })
+    ) {
+      stop();
+    }
+  };
+  const onPointerDown = (event: PointerEvent): void => {
+    if (isScrollbarPress(event, document.documentElement)) {
+      stop();
+    }
+  };
+  const attempt = (): void => {
+    if (stopped) {
+      return;
+    }
+    window.scrollTo(0, y);
+    if (Math.abs(window.scrollY - y) <= 1) {
+      stop();
+    }
+  };
+
+  window.addEventListener("wheel", stop, { passive: true });
+  window.addEventListener("touchstart", stop, { passive: true });
+  window.addEventListener("pointerdown", onPointerDown, { passive: true });
+  window.addEventListener("keydown", onKeyDown);
+  observer = new ResizeObserver(attempt);
+  observer.observe(document.documentElement);
+  timer = setTimeout(stop, MAX_RESTORE_MS);
+
+  attempt();
+  return stop;
+}
+
+/** 스크롤할 때마다(프레임당 한 번) save(현재 위치)를 부른다. 복원 중에는 부르지 않는다. */
+export function trackScroll(save: (y: number) => void): void {
+  let scheduled = false;
+  window.addEventListener(
+    "scroll",
+    () => {
+      if (scheduled) {
+        return;
+      }
+      scheduled = true;
+      requestAnimationFrame(() => {
+        scheduled = false;
+        if (restoring === 0) {
+          save(window.scrollY);
+        }
+      });
+    },
+    { passive: true },
+  );
+}

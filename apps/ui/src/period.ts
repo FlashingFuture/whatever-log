@@ -170,3 +170,75 @@ export const CURRENT_PERIOD_HINT: Record<PeriodUnit, string> = {
   week: "이번 주",
   month: "이번 달",
 };
+
+/** 구간을 잘게 나눈 한 칸(시간 하나, 날짜 하나). */
+export interface Bucket {
+  start: Date;
+  end: Date;
+  /** 같은 로컬 시(時)가 하루에 두 번 있는 칸(일광절약시간 종료일) — 라벨에 오프셋을 붙인다. */
+  repeatedHour?: boolean;
+}
+
+const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * 상세 화면이 막대를 한 줄씩 그릴 칸들. 일 → 시간별, 주/월 → 날짜별.
+ *
+ * 하루는 일광절약시간 전환일에 23/25시간이라 "0~23시"를 가정하지 않고, 시작에서
+ * 실제 1시간씩 더해 구간 끝까지 간다. 날짜별은 로컬 달력으로 하루씩 넘긴다.
+ */
+export function bucketsOf(period: Period): Bucket[] {
+  const buckets: Bucket[] = [];
+  if (period.unit === "day") {
+    for (
+      let start = period.start.getTime();
+      start < period.end.getTime();
+      start += HOUR_MS
+    ) {
+      const end = Math.min(start + HOUR_MS, period.end.getTime());
+      buckets.push({ start: new Date(start), end: new Date(end) });
+    }
+    markRepeatedHours(buckets);
+    return buckets;
+  }
+  for (
+    let day = periodContaining("day", period.start);
+    day.start < period.end;
+    day = shiftPeriod(day, 1)
+  ) {
+    buckets.push({ start: day.start, end: day.end });
+  }
+  return buckets;
+}
+
+/** 일광절약시간이 끝나는 날은 로컬 1시가 두 번 나온다 — 그 칸들에 표시를 단다. */
+function markRepeatedHours(buckets: Bucket[]): void {
+  const counts = new Map<number, number>();
+  for (const bucket of buckets) {
+    const hour = bucket.start.getHours();
+    counts.set(hour, (counts.get(hour) ?? 0) + 1);
+  }
+  for (const bucket of buckets) {
+    if ((counts.get(bucket.start.getHours()) ?? 0) > 1) {
+      bucket.repeatedHour = true;
+    }
+  }
+}
+
+/** "UTC-04:00" 꼴의 로컬 오프셋. */
+function formatUtcOffset(date: Date): string {
+  const minutes = -date.getTimezoneOffset();
+  const sign = minutes < 0 ? "-" : "+";
+  const abs = Math.abs(minutes);
+  return `UTC${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+}
+
+/** 칸 하나의 라벨. 일: "13시"(반복되는 시각은 "1시 (UTC-04:00)"), 주/월: "10/29 (목)". */
+export function formatBucketLabel(unit: PeriodUnit, bucket: Bucket): string {
+  const { start } = bucket;
+  if (unit === "day") {
+    const hour = `${start.getHours()}시`;
+    return bucket.repeatedHour ? `${hour} (${formatUtcOffset(start)})` : hour;
+  }
+  return `${start.getMonth() + 1}/${start.getDate()} (${WEEKDAYS[start.getDay()]})`;
+}

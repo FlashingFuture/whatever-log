@@ -8,59 +8,8 @@ import {
   type Period,
   periodsInYear,
 } from "../period";
-import { injectStyle } from "../styles/injectStyle";
-import { theme } from "../theme";
+import styles from "./PeriodListPicker.module.css";
 import { createStepper } from "./Stepper";
-
-injectStyle(
-  "period-list-picker",
-  `
-  .period-list-picker {
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-    width: 16rem;
-  }
-  .period-list {
-    display: flex;
-    flex-direction: column;
-    max-height: 18rem;
-    overflow-y: auto;
-  }
-  .period-list-item {
-    display: flex;
-    justify-content: space-between;
-    gap: 0.5rem;
-    font: inherit;
-    font-size: 0.9rem;
-    text-align: left;
-    padding: 0.4rem 0.6rem;
-    border: none;
-    border-radius: 6px;
-    background: none;
-    color: ${theme.colors.text};
-    cursor: pointer;
-  }
-  .period-list-item:hover:not(:disabled) {
-    background: ${theme.colors.track};
-  }
-  .period-list-item:focus-visible {
-    outline: 2px solid ${theme.colors.active};
-    outline-offset: -2px;
-  }
-  .period-list-item:disabled {
-    color: ${theme.colors.textDisabled};
-    cursor: default;
-  }
-  .period-list-item[aria-current="true"] {
-    background: ${theme.colors.active};
-  }
-  .period-list-item-meta {
-    color: ${theme.colors.textMuted};
-    font-size: 0.8rem;
-  }
-`,
-);
 
 export interface PeriodListPickerProps {
   unit: "week" | "month";
@@ -77,7 +26,7 @@ export function createPeriodListPicker(
   props: PeriodListPickerProps,
 ): HTMLElement {
   const root = document.createElement("div");
-  root.className = "period-list-picker";
+  root.className = styles.picker;
   const latestYear = props.now.getFullYear();
   let year = listYearOf(props.selected);
 
@@ -98,7 +47,7 @@ export function createPeriodListPicker(
     });
 
     const list = document.createElement("div");
-    list.className = "period-list";
+    list.className = styles.list;
     periodsInYear(props.unit, year).forEach((period, index) => {
       list.append(createItem(period, index));
     });
@@ -119,7 +68,7 @@ export function createPeriodListPicker(
   function createItem(period: Period, index: number): HTMLButtonElement {
     const item = document.createElement("button");
     item.type = "button";
-    item.className = "period-list-item";
+    item.className = styles.item;
     item.disabled = !isSelectablePeriod(period, props.now);
 
     const label = document.createElement("span");
@@ -131,7 +80,7 @@ export function createPeriodListPicker(
 
     if (isCurrentPeriod(period, props.now)) {
       const meta = document.createElement("span");
-      meta.className = "period-list-item-meta";
+      meta.className = styles.meta;
       meta.textContent = CURRENT_PERIOD_HINT[props.unit];
       item.append(meta);
     }
