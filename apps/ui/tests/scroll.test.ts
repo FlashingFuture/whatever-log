@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, test } from "node:test";
+import { afterEach, beforeEach, mock, test } from "node:test";
 
-import { isScrollKey, restoreScroll } from "../src/scroll.ts";
+import {
+  isScrollbarPress,
+  isScrollKey,
+  MAX_RESTORE_MS,
+  restoreScroll,
+  stopsRestore,
+  trackScroll,
+} from "../src/scroll.ts";
 
 test("페이지를 스크롤하는 키만 복원을 멈춘다", () => {
   for (const key of [
@@ -26,6 +33,63 @@ test("페이지를 스크롤하는 키만 복원을 멈춘다", () => {
   ]) {
     assert.equal(isScrollKey(key), false, key);
   }
+});
+
+test("스크롤 키라도 피커가 막은 입력(defaultPrevented)은 멈추지 않는다", () => {
+  assert.equal(
+    stopsRestore({ key: "ArrowDown", defaultPrevented: false }),
+    true,
+  );
+  assert.equal(
+    stopsRestore({ key: "ArrowDown", defaultPrevented: true }),
+    false,
+  );
+  assert.equal(stopsRestore({ key: "Tab", defaultPrevented: false }), false);
+});
+
+test("버튼·입력창 위의 Space는 스크롤이 아니라 누르기라 멈추지 않는다", () => {
+  assert.equal(
+    stopsRestore({ key: " ", defaultPrevented: false, targetTag: "BUTTON" }),
+    false,
+  );
+  assert.equal(
+    stopsRestore({ key: " ", defaultPrevented: false, targetTag: "INPUT" }),
+    false,
+  );
+  assert.equal(
+    stopsRestore({ key: " ", defaultPrevented: false, targetTag: "BODY" }),
+    true,
+  );
+  // 방향키는 버튼에 포커스가 있어도 페이지를 스크롤한다.
+  assert.equal(
+    stopsRestore({
+      key: "ArrowDown",
+      defaultPrevented: false,
+      targetTag: "BUTTON",
+    }),
+    true,
+  );
+});
+
+test("스크롤 막대를 잡은 포인터만 복원을 멈춘다(내용 위의 일반 클릭은 무시)", () => {
+  const root = { clientWidth: 1000, clientHeight: 700 };
+
+  assert.equal(
+    isScrollbarPress({ target: root, clientX: 1008, clientY: 100 }, root),
+    true,
+  ); // 세로 막대
+  assert.equal(
+    isScrollbarPress({ target: root, clientX: 100, clientY: 710 }, root),
+    true,
+  ); // 가로 막대
+  assert.equal(
+    isScrollbarPress({ target: root, clientX: 500, clientY: 300 }, root),
+    false,
+  ); // 빈 영역
+  assert.equal(
+    isScrollbarPress({ target: {}, clientX: 1008, clientY: 100 }, root),
+    false,
+  ); // 버튼 등
 });
 
 // --- restoreScroll: 가짜 window로 "문서가 나중에 길어지는" 상황을 흉내 낸다 ---
@@ -65,7 +129,9 @@ beforeEach(() => {
   fakeWindow = new FakeWindow();
   observers = [];
   globals.window = fakeWindow;
-  globals.document = { documentElement: {} };
+  globals.document = {
+    documentElement: { clientWidth: 1000, clientHeight: 300 },
+  };
   globals.ResizeObserver = class {
     entry = { callback: () => {}, disconnected: false };
     constructor(callback: () => void) {
@@ -109,7 +175,15 @@ test("복원: 사용자가 스크롤하면(휠/스크롤 키/포인터) 멈추�
   for (const [type, event] of [
     ["wheel", {}],
     ["keydown", { key: "PageDown" }],
-    ["pointerdown", {}],
+    [
+      "pointerdown",
+      {
+        target: (globals.document as { documentElement: unknown })
+          .documentElement,
+        clientX: 1008,
+        clientY: 10,
+      },
+    ],
   ] as const) {
     restoreScroll(500);
     fakeWindow.emit(type, event);
@@ -119,6 +193,19 @@ test("복원: 사용자가 스크롤하면(휠/스크롤 키/포인터) 멈추�
     fakeWindow.docHeight = 300; // 다음 반복은 다시 짧은 문서에서 시작
     observers.length = 0;
   }
+});
+
+test("복원: 내용 위의 일반 클릭이나 피커가 막은 방향키는 멈추지 않는다", () => {
+  restoreScroll(500);
+  fakeWindow.emit("pointerdown", { target: {}, clientX: 100, clientY: 100 });
+  fakeWindow.emit("keydown", {
+    key: "ArrowDown",
+    defaultPrevented: true,
+    target: { tagName: "DIV" },
+  });
+  growDocument(1200);
+
+  assert.equal(fakeWindow.scrollY, 500);
 });
 
 test("복원: Tab 키는 멈추지 않는다", () => {
@@ -146,4 +233,58 @@ test("복원: 위치가 0이면 맨 위로 보내고 관찰하지 않는다", ()
 
   assert.equal(fakeWindow.scrollY, 0);
   assert.equal(observers.length, 0);
+});
+
+test("복원: 내용이 영영 안 그려져도 90초 뒤에는 관찰을 끝낸다", () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    restoreScroll(500);
+    assert.equal(observers[0].disconnected, false);
+
+    mock.timers.tick(MAX_RESTORE_MS - 1);
+    assert.equal(observers[0].disconnected, false);
+    mock.timers.tick(1);
+
+    assert.equal(observers[0].disconnected, true);
+    assert.equal(fakeWindow.listenerCount(), 0);
+    assert.equal(fakeWindow.scrollY, 0); // 목표에는 못 닿았다
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+// --- trackScroll: 복원 중에는 기록에 쓰지 않는다 ---
+
+test("위치 저장: 스크롤마다 한 번 저장하되, 복원 중에는 저장하지 않는다", () => {
+  const frames: (() => void)[] = [];
+  globals.requestAnimationFrame = (callback: () => void) =>
+    frames.push(callback);
+  const flush = (): void => {
+    for (const frame of frames.splice(0)) frame();
+  };
+  try {
+    const saved: number[] = [];
+    trackScroll((y) => saved.push(y));
+
+    fakeWindow.scrollY = 40;
+    fakeWindow.emit("scroll");
+    fakeWindow.emit("scroll"); // 같은 프레임의 중복은 한 번으로
+    flush();
+    assert.deepEqual(saved, [40]);
+
+    // 복원 중(내용이 아직 짧아 위치를 못 맞춘 동안)에는 밀린 위치를 덮어쓰지 않는다.
+    const cancel = restoreScroll(500);
+    fakeWindow.scrollY = 0;
+    fakeWindow.emit("scroll");
+    flush();
+    assert.deepEqual(saved, [40]);
+
+    cancel(); // 복원이 끝나면 다시 저장한다
+    fakeWindow.scrollY = 77;
+    fakeWindow.emit("scroll");
+    flush();
+    assert.deepEqual(saved, [40, 77]);
+  } finally {
+    delete globals.requestAnimationFrame;
+  }
 });

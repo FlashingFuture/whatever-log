@@ -30,6 +30,46 @@ export function isScrollKey(key: string): boolean {
   return SCROLL_KEYS.has(key);
 }
 
+// 포커스된 이 요소들에서 Space는 페이지를 스크롤하지 않고 요소를 작동시킨다(버튼 누르기 등).
+const SPACE_IS_ACTIVATION = new Set([
+  "BUTTON",
+  "INPUT",
+  "TEXTAREA",
+  "SELECT",
+  "A",
+]);
+
+/**
+ * 이 키 입력이 사용자가 페이지를 스크롤하려는 것이어서 복원을 멈춰야 하는지.
+ * 피커처럼 방향키를 스스로 처리해 기본 동작(스크롤)을 막은 입력(defaultPrevented)과, 버튼
+ * 위에서의 Space(스크롤이 아니라 누르기)는 페이지가 움직이지 않으니 멈추지 않는다.
+ */
+export function stopsRestore(event: {
+  key: string;
+  defaultPrevented: boolean;
+  targetTag?: string;
+}): boolean {
+  if (!isScrollKey(event.key) || event.defaultPrevented) {
+    return false;
+  }
+  return !(event.key === " " && SPACE_IS_ACTIVATION.has(event.targetTag ?? ""));
+}
+
+/**
+ * 스크롤 막대를 잡으려는 포인터 누름인지. 막대는 문서 루트의 일부라 그 위의 누름은
+ * 대상이 루트이고 좌표가 내용 영역(clientWidth/Height) 바깥이다. 내용 위의 일반 클릭
+ * (빈 영역, 기간 버튼 등)은 복원을 멈추면 안 된다.
+ */
+export function isScrollbarPress(
+  event: { target: unknown; clientX: number; clientY: number },
+  root: { clientWidth: number; clientHeight: number },
+): boolean {
+  return (
+    event.target === root &&
+    (event.clientX >= root.clientWidth || event.clientY >= root.clientHeight)
+  );
+}
+
 // 복원이 진행 중인 동안에는 위치를 기록에 적지 않는다 — 내용이 다 그려지기 전의 짧은
 // 문서에서 밀린 값(또는 복원 중간값)으로 저장돼 있던 위치를 덮어쓰면 안 된다.
 let restoring = 0;
@@ -55,11 +95,22 @@ export function restoreScroll(y: number): () => void {
     clearTimeout(timer);
     window.removeEventListener("wheel", stop);
     window.removeEventListener("touchstart", stop);
-    window.removeEventListener("pointerdown", stop);
+    window.removeEventListener("pointerdown", onPointerDown);
     window.removeEventListener("keydown", onKeyDown);
   };
   const onKeyDown = (event: KeyboardEvent): void => {
-    if (isScrollKey(event.key)) {
+    if (
+      stopsRestore({
+        key: event.key,
+        defaultPrevented: event.defaultPrevented,
+        targetTag: (event.target as Element | null)?.tagName,
+      })
+    ) {
+      stop();
+    }
+  };
+  const onPointerDown = (event: PointerEvent): void => {
+    if (isScrollbarPress(event, document.documentElement)) {
       stop();
     }
   };
@@ -75,7 +126,7 @@ export function restoreScroll(y: number): () => void {
 
   window.addEventListener("wheel", stop, { passive: true });
   window.addEventListener("touchstart", stop, { passive: true });
-  window.addEventListener("pointerdown", stop, { passive: true });
+  window.addEventListener("pointerdown", onPointerDown, { passive: true });
   window.addEventListener("keydown", onKeyDown);
   observer = new ResizeObserver(attempt);
   observer.observe(document.documentElement);
