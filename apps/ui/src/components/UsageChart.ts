@@ -17,7 +17,8 @@ export function createUsageChart(usage: RangeUsage): HTMLElement {
 
   // 가장 오래 떠 있던(total) 프로세스를 기준으로 막대 폭을 정한다 — 구간
   // 전체 길이(하루/한 주/한 달)를 기준으로 하면 거의 모든 막대가 짤막해져서
-  // 비교가 어렵다.
+  // 비교가 어렵다. 줄 순서는 집중(active) 시간순이라(서버 정렬), 막대 길이(전체 시간)와
+  // 순서가 다를 수 있다.
   const maxTotal = Math.max(
     ...usage.by_process.map((row) => row.total_seconds),
   );
