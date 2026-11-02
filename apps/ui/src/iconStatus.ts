@@ -36,6 +36,20 @@ export class IconStatusCache {
     return entry.status;
   }
 
+  /** 이 이름의 기록이 만료되기까지 남은 시간(기록이 없거나 이미 만료됐으면 null). */
+  remainingMs(name: string, now: number): number | null {
+    const entry = this.entries.get(name);
+    if (!entry || this.statusOf(name, now) === null) {
+      return null;
+    }
+    return TTL_MS[entry.status] - (now - entry.at);
+  }
+
+  /** 아이콘이 실제로 불러와졌으면 앞선 실패 기록은 더 이상 맞지 않는다. */
+  clear(name: string): void {
+    this.entries.delete(name);
+  }
+
   record(name: string, status: IconStatus, now: number): void {
     this.prune(now);
     this.entries.set(name, { status, at: now });

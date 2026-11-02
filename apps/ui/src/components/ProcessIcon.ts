@@ -1,10 +1,18 @@
 import { iconUrl } from "../api";
-import { IconStatusCache, TRANSIENT_TTL_MS } from "../iconStatus";
+import { IconStatusCache } from "../iconStatus";
 import styles from "./ProcessIcon.module.css";
 
 // 아이콘이 없다고 확인되었거나(404) 일시적으로 실패한 프로세스의 기억. 15초마다 차트를 다시
 // 그릴 때 같은 이름을 또 요청하지 않고 바로 대체 표시를 그린다(자세한 규칙은 iconStatus.ts).
 const status = new IconStatusCache();
+
+// 이름별로 가장 최근에 시작한 확인의 순번. 겹친 확인 중 먼저 보낸 것이 늦게 끝나도 최신
+// 결과를 덮어쓰지 않게 한다.
+const latestCheck = new Map<string, number>();
+let checkSeq = 0;
+
+// 확인 요청이 응답 없이 매달리면 재시도 예약도 실행되지 않으니 제한 시간을 둔다.
+const CLASSIFY_TIMEOUT_MS = 5_000;
 
 // 일시적 실패 뒤 같은 아이콘 자리를 다시 시도하는 간격. 횟수에 상한이 있고, 넘으면 대체 글자를
 // 유지한다(계속 실패하는데 무한히 두드리지 않게). 상세 화면 제목처럼 한 번만 만들어지고 다시
@@ -20,10 +28,15 @@ type FailureKind = "missing" | "transient";
  * 잠시 캐시하게 해 두어서 브라우저 캐시에서 바로 나오는 경우가 많다).
  */
 async function classifyFailure(url: string): Promise<FailureKind> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CLASSIFY_TIMEOUT_MS);
   try {
-    return (await fetch(url)).status === 404 ? "missing" : "transient";
+    const response = await fetch(url, { signal: controller.signal });
+    return response.status === 404 ? "missing" : "transient";
   } catch {
-    return "transient"; // 연결 실패 등 — 없는 게 아니라 못 물어본 것
+    return "transient"; // 연결 실패·시간 초과 등 — 없는 게 아니라 못 물어본 것
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -45,13 +58,19 @@ function createImage(
   image.alt = "";
   image.decoding = "async";
   image.src = iconUrl(name);
+  image.addEventListener("load", () => status.clear(name), { once: true });
   image.addEventListener(
     "error",
     () => {
       // 일단 대체 글자를 보여 주고, 원인을 확인해 기억한다.
       const fallback = createFallback(name, large);
       image.replaceWith(fallback);
+      const check = ++checkSeq;
+      latestCheck.set(name, check);
       void classifyFailure(image.src).then((kind) => {
+        if (latestCheck.get(name) !== check) {
+          return;
+        }
         status.record(name, kind, Date.now());
         if (kind === "transient" && attempt < RETRY_DELAYS_MS.length) {
           setTimeout(
@@ -87,15 +106,14 @@ export function createProcessIcon(
   name: string,
   { large = false }: { large?: boolean } = {},
 ): HTMLElement {
-  const known = status.statusOf(name, Date.now());
-  if (known === null) {
+  const now = Date.now();
+  const remaining = status.remainingMs(name, now);
+  if (remaining === null) {
     return createImage(name, large, 0);
   }
+  // 기록이 만료되는 때 한 번 다시 시도한다 — 상세 화면 제목처럼 다시 그려지지 않는 자리가
+  // 대체 글자로 남지 않게(분리된 자리는 retry가 알아서 건너뛴다).
   const fallback = createFallback(name, large);
-  if (known === "transient") {
-    // 차트가 다시 그려져 새로 만든 자리도, 쉬는 시간이 끝나면 한 번 다시 시도한다(원래
-    // 실패한 자리는 이미 사라졌을 수 있어서).
-    setTimeout(() => retry(fallback, name, large, 1), TRANSIENT_TTL_MS);
-  }
+  setTimeout(() => retry(fallback, name, large, 1), remaining);
   return fallback;
 }

@@ -41,3 +41,51 @@ test("같은 경로 판정", () => {
     false,
   );
 });
+
+test("복원 중에는 이동해도 기록의 스크롤 위치를 덮어쓰지 않는다", async () => {
+  const globals = globalThis as Record<string, unknown>;
+  const { restoreScroll } = await import("../src/scroll.ts");
+  const { navigate } = await import("../src/router.ts");
+
+  const history = {
+    state: { depth: 0, scrollY: 500 } as object | null,
+    replaced: 0,
+    replaceState(state: object) {
+      this.replaced += 1;
+      this.state = state;
+    },
+    pushState(state: object) {
+      this.state = state;
+    },
+  };
+  const fakeWindow = {
+    scrollY: 150, // 짧은 문서에서 밀린 중간값
+    location: { hash: "#/" },
+    history,
+    scrollTo() {},
+    addEventListener() {},
+    removeEventListener() {},
+    dispatchEvent() {},
+  };
+  globals.window = fakeWindow;
+  globals.document = { documentElement: {} };
+  globals.ResizeObserver = class {
+    observe(): void {}
+    disconnect(): void {}
+  };
+  try {
+    const stop = restoreScroll(500);
+    navigate({ name: "process", process: "a.exe" });
+    assert.equal(history.replaced, 0, "중간값을 기록에 적지 않는다");
+    assert.equal((history.state as { depth: number }).depth, 1, "이동은 한다");
+
+    stop(); // 복원이 끝난 뒤의 이동은 지금 위치를 적는다
+    fakeWindow.location.hash = "#/process/a.exe";
+    navigate({ name: "home" });
+    assert.equal(history.replaced, 1);
+  } finally {
+    delete globals.window;
+    delete globals.document;
+    delete globals.ResizeObserver;
+  }
+});

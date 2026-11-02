@@ -31,13 +31,7 @@ export function isScrollKey(key: string): boolean {
 }
 
 // 포커스된 이 요소들에서 Space는 페이지를 스크롤하지 않고 요소를 작동시킨다(버튼 누르기 등).
-const SPACE_IS_ACTIVATION = new Set([
-  "BUTTON",
-  "INPUT",
-  "TEXTAREA",
-  "SELECT",
-  "A",
-]);
+const SPACE_IS_ACTIVATION = new Set(["BUTTON", "INPUT", "TEXTAREA", "SELECT"]);
 
 /**
  * 이 키 입력이 사용자가 페이지를 스크롤하려는 것이어서 복원을 멈춰야 하는지.
@@ -73,6 +67,11 @@ export function isScrollbarPress(
 // 복원이 진행 중인 동안에는 위치를 기록에 적지 않는다 — 내용이 다 그려지기 전의 짧은
 // 문서에서 밀린 값(또는 복원 중간값)으로 저장돼 있던 위치를 덮어쓰면 안 된다.
 let restoring = 0;
+
+/** 스크롤 위치 복원이 진행 중인지(그동안의 window.scrollY는 중간값이다). */
+export function isRestoringScroll(): boolean {
+  return restoring > 0;
+}
 
 export function restoreScroll(y: number): () => void {
   if (y <= 0) {

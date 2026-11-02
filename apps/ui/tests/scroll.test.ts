@@ -208,6 +208,18 @@ test("복원: 내용 위의 일반 클릭이나 피커가 막은 방향키는 �
   assert.equal(fakeWindow.scrollY, 500);
 });
 
+test("복원: 루트 요소의 내용 영역 클릭은 멈추지 않는다", () => {
+  restoreScroll(500);
+  fakeWindow.emit("pointerdown", {
+    target: (globals.document as { documentElement: unknown }).documentElement,
+    clientX: 500,
+    clientY: 100,
+  });
+  growDocument(1200);
+
+  assert.equal(fakeWindow.scrollY, 500);
+});
+
 test("복원: Tab 키는 멈추지 않는다", () => {
   restoreScroll(500);
   fakeWindow.emit("keydown", { key: "Tab" });
