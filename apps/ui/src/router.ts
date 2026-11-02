@@ -9,6 +9,8 @@
  * 파싱·주소 만들기는 순수 함수라 DOM 없이 테스트한다.
  */
 
+import { isRestoringScroll } from "./scroll.ts";
+
 export type Route = { name: "home" } | { name: "process"; process: string };
 
 export const HOME: Route = { name: "home" };
@@ -78,8 +80,11 @@ export function navigate(route: Route): void {
   if (isSameRoute(route, currentRoute())) {
     return;
   }
-  // 떠나는 기록에 스크롤 위치를 적어 둔다 — 뒤로 돌아왔을 때 복원한다.
-  saveScroll(window.scrollY);
+  // 떠나는 기록에 스크롤 위치를 적어 둔다 — 뒤로 돌아왔을 때 복원한다. 복원 중이면 지금
+  // 위치는 중간값(짧은 문서에서 밀린 값)이라, 기록에 이미 있는 목표를 덮어쓰지 않는다.
+  if (!isRestoringScroll()) {
+    saveScroll(window.scrollY);
+  }
   window.history.pushState({ depth: currentDepth() + 1 }, "", routeHref(route));
   notify("push");
 }
