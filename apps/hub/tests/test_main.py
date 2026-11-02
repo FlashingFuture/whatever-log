@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import sys
 import threading
 import urllib.error
@@ -210,9 +211,8 @@ def test_icon_endpoint_returns_304_for_matching_etag(running_server) -> None:
 
 
 def test_icon_endpoint_treats_a_pre_migration_database_as_no_icon(tmp_path) -> None:
-    """exe_path 컬럼이 아직 없는 옛 DB는 503이 아니라 아이콘 없음(404)이어야 한다."""
-    import sqlite3
-
+    """exe_path 컬럼이 아직 없는 옛 DB는 503이 아니라 아이콘 없음(404)이어야 하고,
+    recorder가 컬럼과 경로를 채우면 같은 서버에서 바로 아이콘(200)이 나와야 한다."""
     old_db = tmp_path / "old.db"
     conn = sqlite3.connect(old_db)
     conn.execute("CREATE TABLE processes (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)")
@@ -220,15 +220,29 @@ def test_icon_endpoint_treats_a_pre_migration_database_as_no_icon(tmp_path) -> N
     conn.commit()
     conn.close()
 
+    exe = tmp_path / "chrome.exe"
+    exe.write_bytes(b"fake exe")
+
     _Handler.db_path = old_db
+    _Handler.icon_store = IconStore(tmp_path / "icons", lambda path: b"PNG-fake")
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_port}/api/icons/chrome.exe"
     try:
         with pytest.raises(urllib.error.HTTPError) as exc_info:
-            urllib.request.urlopen(
-                f"http://127.0.0.1:{server.server_port}/api/icons/chrome.exe", timeout=2
-            )
+            urllib.request.urlopen(url, timeout=2)
         assert exc_info.value.code == 404
+
+        # recorder가 새 코드로 떠서 컬럼을 추가하고 경로를 기록한 상황.
+        conn = sqlite3.connect(old_db)
+        conn.execute("ALTER TABLE processes ADD COLUMN exe_path TEXT")
+        conn.execute("UPDATE processes SET exe_path = ? WHERE name = 'chrome.exe'", (str(exe),))
+        conn.commit()
+        conn.close()
+
+        with urllib.request.urlopen(url, timeout=2) as response:
+            assert response.status == 200
+            assert response.read() == b"PNG-fake"
     finally:
         server.shutdown()
 

@@ -21,6 +21,20 @@ function isKnownMissing(name: string): boolean {
   return true;
 }
 
+/**
+ * <img>의 error 이벤트는 원인을 알려 주지 않는다 — hub 재시작·503·네트워크 오류도 같은
+ * 이벤트다. 그런 일시적 실패까지 "아이콘 없음"으로 5분 동안 기억하면 hub가 돌아와도
+ * 대체 글자만 나온다. 그래서 같은 주소를 한 번 더 물어 404(없음)일 때만 기억한다(없음
+ * 응답은 hub가 잠시 캐시하게 해 두어서 브라우저 캐시에서 바로 나오는 경우가 많다).
+ */
+async function confirmMissing(url: string): Promise<boolean> {
+  try {
+    return (await fetch(url)).status === 404;
+  } catch {
+    return false; // 연결 실패 등 — 없는 게 아니라 못 물어본 것
+  }
+}
+
 function createFallback(name: string, large: boolean): HTMLSpanElement {
   const fallback = document.createElement("span");
   fallback.className = `${styles.icon} ${styles.fallback}${large ? ` ${styles.large}` : ""}`;
@@ -48,8 +62,13 @@ export function createProcessIcon(
   image.addEventListener(
     "error",
     () => {
-      missing.set(name, Date.now());
+      // 일단 대체 글자를 보여 주고, 진짜 "없음"일 때만 기억한다.
       image.replaceWith(createFallback(name, large));
+      void confirmMissing(image.src).then((isMissing) => {
+        if (isMissing) {
+          missing.set(name, Date.now());
+        }
+      });
     },
     { once: true },
   );
