@@ -18,13 +18,14 @@ import hashlib
 import re
 import shutil
 import sqlite3
+import threading
 from collections.abc import Sequence
 from contextlib import closing
 from pathlib import Path
 
 from chromium.browsers import BROWSERS
 from chromium.profiles import profile_folders
-from chromium.snapshot import create_work_dir, snapshot_database
+from chromium.snapshot import create_work_dir, open_readonly, snapshot_database
 
 from hub.memory_cache import ImageMemoryCache
 
@@ -44,11 +45,20 @@ _DOMAIN = re.compile(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?")
 # 도메인 하나의 페이지 주소를 찾는 LIKE 패턴 수: (https, http) x (도메인, www.도메인) x (경로 "/",
 # 포트 ":"). 쿼리 문자열을 상수로 만들어 두려고 개수를 미리 정해 둔다.
 _PAGE_URL_PATTERN_COUNT = 8
+# icon_mapping을 favicon_bitmaps에 조인하면 같은 아이콘을 쓰는 페이지 수만큼 BLOB 행이 반복돼서
+# (방문 페이지가 많은 도메인이면 수천 번) 메모리와 시간이 낭비된다 — 아이콘 id만 먼저 구해
+# 비트맵 행은 한 번씩만 읽는다.
 _FAVICON_QUERY = (
     "SELECT b.image_data, b.width, b.last_updated "
-    "FROM icon_mapping m JOIN favicon_bitmaps b ON b.icon_id = m.icon_id "
-    "WHERE " + " OR ".join(["m.page_url LIKE ?"] * _PAGE_URL_PATTERN_COUNT)
+    "FROM favicon_bitmaps b "
+    "WHERE b.icon_id IN (SELECT m.icon_id FROM icon_mapping m WHERE "
+    + " OR ".join(["m.page_url LIKE ?"] * _PAGE_URL_PATTERN_COUNT)
+    + ")"
 )
+
+# 서로 다른 도메인의 캐시 미스가 동시에 여러 개 오면 각자 모든 프로필의 Favicons를 복사한다 —
+# 임시 디스크 사용과 지연이 요청 수에 비례해 커지지 않게 동시에 복사하는 수를 제한한다.
+_MAX_CONCURRENT_READS = 2
 
 
 def is_valid_domain(domain: str) -> bool:
@@ -106,32 +116,23 @@ class SiteIconStore:
             else [browser.user_data_dir() for browser in BROWSERS]
         )
         self._cache = cache or ImageMemoryCache(ttl_seconds=SITE_ICON_TTL_SECONDS)
+        self._read_slots = threading.BoundedSemaphore(_MAX_CONCURRENT_READS)
 
     def get(self, domain: str) -> tuple[str, bytes] | None:
         """(ETag로 쓸 키, PNG 바이트). 도메인 모양이 틀렸거나 브라우저에 아이콘이 없으면 None."""
         if not is_valid_domain(domain):
             return None
-        png = self._cache.get(domain)
+        # 같은 도메인의 동시 요청이 각자 파일을 복사하지 않게 캐시가 한 번만 읽게 한다.
+        png = self._cache.get_or_load(domain, lambda: self._safe_read(domain))
         if png is None:
-            if self._cache.is_missing(domain):
-                return None
-            # 같은 도메인의 동시 요청이 각자 파일을 복사하지 않게, 잠근 뒤 다시 확인한다.
-            with self._cache.lock_for(domain):
-                png = self._cache.get(domain)
-                if png is None:
-                    if self._cache.is_missing(domain):
-                        return None
-                    png = self._safe_read(domain)
-                    if png is None:
-                        self._cache.mark_missing(domain)
-                        return None
-                    self._cache.put(domain, png)
+            return None
         # 키는 내용의 해시라, 브라우저가 아이콘을 바꾸면 브라우저 캐시도 자연히 새로 받는다.
         return hashlib.sha256(png).hexdigest()[:32], png
 
     def _safe_read(self, domain: str) -> bytes | None:
         try:
-            return self._read_from_browsers(domain)
+            with self._read_slots:
+                return self._read_from_browsers(domain)
         except Exception:
             # 아이콘은 장식이라, 브라우저 파일이 이상해도 API 전체 오류가 되면 안 된다.
             return None
@@ -154,7 +155,7 @@ class SiteIconStore:
             if not snapshot_database(source, copy):
                 return []
             try:
-                with closing(sqlite3.connect(f"file:{copy.as_posix()}?mode=ro", uri=True)) as db:
+                with closing(open_readonly(copy)) as db:
                     return db.execute(_FAVICON_QUERY, patterns).fetchall()
             except sqlite3.Error:
                 return []

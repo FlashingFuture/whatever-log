@@ -384,3 +384,58 @@ def test_creating_a_second_resolver_does_not_delete_the_first_ones_copies(tmp_pa
         assert first.resolve("뉴스 - Google Chrome") == "a.example.com"
     finally:
         first.close()
+
+
+def test_recent_non_web_visits_do_not_hide_an_older_valid_visit(tmp_path) -> None:
+    """같은 제목의 최근 방문 5건이 chrome:// 같은 주소여도 그보다 오래된 https 방문을 찾는다."""
+    visits = [("뉴스", f"chrome://page/{i}", 1000 + i) for i in range(8)]
+    visits.append(("뉴스", "https://old.example.com/a", 1))
+    _write_browser(tmp_path, {"Default": "개인"}, {"Default": visits})
+    resolver = BrowserSiteResolver(CHROME, tmp_path)
+    try:
+        assert resolver.resolve("뉴스 - Google Chrome") == "old.example.com"
+    finally:
+        resolver.close()
+
+
+def test_profile_folders_whose_names_differ_only_by_case_or_separator_keep_separate_copies(
+    tmp_path,
+) -> None:
+    """"Profile 1"과 "profile_1"이 같은 복사본 파일을 덮어써 서로의 방문 기록을 읽지 않는다."""
+    _write_browser(
+        tmp_path,
+        {"Profile 1": "업무", "profile_1": "개인"},
+        {
+            "Profile 1": [("보고서", "https://work.example.com/", 100)],
+            "profile_1": [("보고서", "https://personal.example.com/", 100)],
+        },
+    )
+    resolver = BrowserSiteResolver(CHROME, tmp_path)
+    try:
+        assert resolver.resolve("보고서 - 업무 - Chrome") == "work.example.com"
+        assert resolver.resolve("보고서 - 개인 - Chrome") == "personal.example.com"
+        assert len({copy for _, copy in resolver._copies.values()}) == 2
+    finally:
+        resolver.close()
+
+
+def test_resolver_reads_a_profile_that_has_no_display_name(tmp_path) -> None:
+    """Local State에 name이 없는 프로필도, 이름 없는 제목이면 방문 기록을 찾는다."""
+    _write_browser(
+        tmp_path,
+        {"Default": "개인"},
+        {
+            "Default": [],
+            "Profile 1": [("뉴스", "https://news.example.com/", 1)],
+        },
+    )
+    state = json.loads((tmp_path / "Local State").read_text(encoding="utf-8"))
+    state["profile"]["info_cache"]["Profile 1"] = {}
+    (tmp_path / "Local State").write_text(json.dumps(state), encoding="utf-8")
+    resolver = BrowserSiteResolver(CHROME, tmp_path)
+    try:
+        assert resolver.resolve("뉴스 - Google Chrome") == "news.example.com"
+        # 제목에 다른 프로필 이름이 있으면 그 프로필만 본다.
+        assert resolver.resolve("뉴스 - 개인 - Chrome") is None
+    finally:
+        resolver.close()

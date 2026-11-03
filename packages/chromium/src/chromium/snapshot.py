@@ -58,6 +58,16 @@ def _abort_if_locked(status: int, remaining: int, total: int) -> None:
         raise sqlite3.OperationalError("source database is locked")
 
 
+def open_readonly(path: Path, timeout: float = 5.0) -> sqlite3.Connection:
+    """SQLite 파일을 읽기 전용으로 연다(호출부가 contextlib.closing으로 닫는다).
+
+    경로를 file: URI로 만들 때 직접 이어 붙이면 "#"(이후가 잘려 mode=ro가 사라진다)나 "%41" 같은
+    문자열(디코딩되어 다른 경로가 된다)이 든 사용자 폴더에서 엉뚱한 파일을 열거나 실패한다 —
+    Path.as_uri()가 이런 문자를 인코딩한다. recorder·hub 어디서든 이 함수로 연다.
+    """
+    return sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=timeout)
+
+
 def snapshot_database(source: Path, target: Path) -> bool:
     """source를 target에 복사한다. 성공하면 True.
 
@@ -68,9 +78,7 @@ def snapshot_database(source: Path, target: Path) -> bool:
     """
     try:
         with (
-            contextlib.closing(
-                sqlite3.connect(f"file:{source.as_posix()}?mode=ro", uri=True, timeout=0.1)
-            ) as src,
+            contextlib.closing(open_readonly(source, timeout=0.1)) as src,
             contextlib.closing(sqlite3.connect(target)) as dst,
         ):
             src.backup(dst, progress=_abort_if_locked)

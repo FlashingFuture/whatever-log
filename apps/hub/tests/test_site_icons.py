@@ -207,6 +207,64 @@ def test_concurrent_requests_for_one_domain_read_the_browser_files_once(
     assert all(result is not None for result in results)
 
 
+def test_reads_each_bitmap_once_even_when_many_pages_share_an_icon(tmp_path) -> None:
+    """같은 아이콘을 쓰는 페이지가 수천 개여도 비트맵 행이 페이지 수만큼 반복 적재되면 안 된다."""
+    (tmp_path / "Default").mkdir()
+    conn = sqlite3.connect(tmp_path / "Default" / "Favicons")
+    conn.execute("CREATE TABLE icon_mapping (id INTEGER PRIMARY KEY, page_url TEXT, icon_id INTEGER)")
+    conn.execute(
+        "CREATE TABLE favicon_bitmaps (id INTEGER PRIMARY KEY, icon_id INTEGER, "
+        "last_updated INTEGER, image_data BLOB, width INTEGER, height INTEGER)"
+    )
+    conn.execute(
+        "INSERT INTO favicon_bitmaps (icon_id, last_updated, image_data, width, height) "
+        "VALUES (1, 1, ?, 32, 32)",
+        (_png("shared"),),
+    )
+    conn.executemany(
+        "INSERT INTO icon_mapping (page_url, icon_id) VALUES (?, 1)",
+        [(f"https://news.example.com/page/{i}",) for i in range(500)],
+    )
+    conn.commit()
+    conn.close()
+    store = SiteIconStore([tmp_path])
+    seen = []
+    original = store._query_profile
+    store._query_profile = lambda source, patterns: (seen.append(original(source, patterns)), seen[-1])[1]
+
+    assert store.get("news.example.com")[1] == _png("shared")
+    assert [len(rows) for rows in seen] == [1]
+
+
+def test_copies_for_different_domains_are_limited_to_a_few_at_a_time(tmp_path, monkeypatch) -> None:
+    _write_favicons(tmp_path, "Default", [(f"https://d{i}.example.com/", "x", 32, 1) for i in range(8)])
+    store = SiteIconStore([tmp_path])
+    running = []
+    peak = []
+    guard = threading.Lock()
+    original = store._read_from_browsers
+
+    def slow_read(domain):
+        with guard:
+            running.append(1)
+            peak.append(len(running))
+        time.sleep(0.1)
+        try:
+            return original(domain)
+        finally:
+            with guard:
+                running.pop()
+
+    monkeypatch.setattr(store, "_read_from_browsers", slow_read)
+    threads = [threading.Thread(target=store.get, args=(f"d{i}.example.com",)) for i in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert max(peak) <= 2
+
+
 def test_leaves_no_copy_of_the_favicons_behind(tmp_path, monkeypatch) -> None:
     import tempfile
 
@@ -365,6 +423,24 @@ def test_site_icon_endpoint_only_serves_domains_the_recorder_saw(
         urllib.request.urlopen(ui_request(f"{site_server}/api/site-icons/{domain}"), timeout=2)
 
     assert exc_info.value.code == 404
+    assert json.loads(exc_info.value.read())["error"]["code"] == "not_found"
+
+
+@pytest.mark.parametrize("referer", [None, "https://evil.example/", "http://127.0.0.1@evil.example/"])
+@pytest.mark.parametrize("domain", ["news.example.com", "missing.example.com"])
+def test_site_icon_requests_from_other_pages_get_the_same_answer_whether_or_not_it_was_recorded(
+    site_server, domain, referer
+) -> None:
+    """다른 웹페이지가 <img>로 불러 보고 기록된 사이트(news.example.com)와 아닌 사이트를 구별하지
+    못해야 한다 — 둘 다 똑같이 캐시되지 않는 404다."""
+    headers = {"Referer": referer} if referer else {}
+    request = urllib.request.Request(f"{site_server}/api/site-icons/{domain}", headers=headers)
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(request, timeout=2)
+
+    assert exc_info.value.code == 404
+    assert exc_info.value.headers["Cache-Control"] == "no-store"
     assert json.loads(exc_info.value.read())["error"]["code"] == "not_found"
 
 

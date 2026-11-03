@@ -235,35 +235,22 @@ class IconStore:
         if key is None:
             return None
 
-        png = self._cache.get(key)
-        if png is not None:
-            return key, png
-        if self._cache.is_missing(key):
-            return None
-
         # 같은 아이콘을 여러 요청이 동시에 달라고 해도 추출은 한 번만 한다(차트가 이미지를
-        # 한꺼번에 요청하므로 흔한 상황이다).
-        with self._cache.lock_for(key):
-            png = self._cache.get(key)
-            if png is not None:
-                return key, png
+        # 한꺼번에 요청하므로 흔한 상황이다 — 잠금과 재확인은 캐시가 맡는다).
+        png = self._cache.get_or_load(key, lambda: self._load(key, exe_path))
+        return None if png is None else (key, png)
 
-            disk_path = self._cache_dir / f"{key}.png"
-            try:
-                png = disk_path.read_bytes()
-            except OSError:
-                png = None
-
-            if png is None:
-                png = self._safe_extract(exe_path)
-                if png is not None:
-                    self._write_disk(disk_path, png)
-
-            if png is None:
-                self._cache.mark_missing(key)
-                return None
-            self._cache.put(key, png)
-            return key, png
+    def _load(self, key: str, exe_path: str) -> bytes | None:
+        """메모리 캐시에 없을 때: 디스크 캐시에서 읽고, 없으면 exe에서 추출해 디스크에 남긴다."""
+        disk_path = self._cache_dir / f"{key}.png"
+        try:
+            return disk_path.read_bytes()
+        except OSError:
+            pass
+        png = self._safe_extract(exe_path)
+        if png is not None:
+            self._write_disk(disk_path, png)
+        return png
 
     @staticmethod
     def key_for(exe_path: str) -> str | None:

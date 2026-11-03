@@ -14,6 +14,7 @@ Chromium 계열(Chrome, Edge, Brave, Vivaldi)을 지원한다. 브라우저 확�
 방식과 작업 폴더 규칙은 chromium.snapshot). 복사는 원본이 바뀌었을 때만 한다.
 """
 
+import hashlib
 import logging
 import re
 import shutil
@@ -28,6 +29,7 @@ from chromium.snapshot import (
     Fingerprint,
     create_work_dir,
     fingerprint,
+    open_readonly,
     remove_stale_work_dirs,
     snapshot_database,
 )
@@ -130,16 +132,13 @@ class BrowserSiteResolver:
         return None
 
     def _resolve_page(self, parsed: ParsedTitle, profiles: dict[str, str]) -> str | None:
-        if profiles:
-            folders = [
-                folder
-                for folder, name in profiles.items()
-                if parsed.profile is None or name == parsed.profile
-            ]
-        else:
-            # Local State를 못 읽으면 프로필 이름을 모른다(parsed.profile도 None) — 폴더 이름으로
-            # 찾는다(아이콘 조회와 같은 규칙).
-            folders = profile_folders(self._user_data_dir)
+        # 표시 이름이 없는 프로필도 포함한다(Local State를 못 읽으면 폴더 이름으로 찾는다 —
+        # 아이콘 조회와 같은 규칙). 창 제목에 프로필 이름이 있으면 그 이름의 프로필만 본다.
+        folders = [
+            folder
+            for folder in profile_folders(self._user_data_dir)
+            if parsed.profile is None or profiles.get(folder) == parsed.profile
+        ]
         # 프로필을 모를 땐 여러 프로필을 다 찾아, 방문 시각이 가장 최근인 결과를 쓴다.
         best: tuple[int, str] | None = None
         for folder in folders:
@@ -153,9 +152,12 @@ class BrowserSiteResolver:
         if copy is None:
             return None
         try:
-            with closing(sqlite3.connect(f"file:{copy.as_posix()}?mode=ro", uri=True)) as db:
+            with closing(open_readonly(copy)) as db:
+                # 주소 종류는 SQL에서 거른다 — 최근 5건이 chrome:// 같은 페이지라 그보다 오래된
+                # 유효한 방문을 놓치지 않게(LIMIT은 http(s) 방문에만 적용된다).
                 rows = db.execute(
                     "SELECT url, last_visit_time FROM urls WHERE title = ? "
+                    "AND (url LIKE 'http://%' OR url LIKE 'https://%') "
                     "ORDER BY last_visit_time DESC LIMIT 5",
                     (page,),
                 ).fetchall()
@@ -175,7 +177,10 @@ class BrowserSiteResolver:
         cached = self._copies.get(folder)
         if cached and cached[0] == current:
             return cached[1]
-        target = self._work_dir / f"{folder.replace(' ', '_')}.db"
+        # 폴더 이름을 그대로 파일 이름에 쓰면 "Profile 1"과 "profile_1"처럼 다른 폴더가 같은
+        # 복사본을 덮어쓸 수 있다(Windows는 대소문자도 구분하지 않는다) — 이름의 해시를 쓴다.
+        digest = hashlib.sha256(folder.encode("utf-8")).hexdigest()[:16]
+        target = self._work_dir / f"{digest}.db"
         if not snapshot_database(source, target):
             # 복사에 실패하면 캐시에 남은 옛 복사본도 믿지 않는다(다음 틱에 다시 시도).
             self._copies.pop(folder, None)

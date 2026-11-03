@@ -26,14 +26,17 @@ test("제한 시간이 지나면 undefined를 돌려주고, 원래 promise는 �
   }
 });
 
-test("먼저 끝나면 시간 제한 타이머를 남기지 않는다", async () => {
+test("먼저 끝나면 시간 제한 타이머를 정리한다", async () => {
   mock.timers.enable({ apis: ["setTimeout"] });
   try {
+    const cleared = mock.method(globalThis, "clearTimeout");
+
     await settleWithin(Promise.resolve(1), 300);
 
-    // 타이머가 정리됐다면 시간이 흘러도 아무 일도 일어나지 않는다.
-    assert.doesNotThrow(() => mock.timers.tick(1_000));
+    // 정리하지 않으면 끝난 요청마다 300ms짜리 타이머가 남는다.
+    assert.equal(cleared.mock.callCount(), 1);
   } finally {
+    mock.restoreAll();
     mock.timers.reset();
   }
 });

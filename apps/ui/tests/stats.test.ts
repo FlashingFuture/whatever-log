@@ -3,7 +3,11 @@ import { test } from "node:test";
 
 import { maxOf } from "../src/stats.ts";
 
-test("가장 큰 값을, 비어 있으면 0을 돌려준다", () => {
+test("0 이상의 가장 큰 값을, 비어 있거나 음수뿐이면 0을 돌려준다(바닥이 0)", () => {
+  assert.equal(
+    maxOf([-5, -2], (value) => value),
+    0,
+  );
   assert.equal(
     maxOf([{ v: 3 }, { v: 9 }, { v: 5 }], (item) => item.v),
     9,

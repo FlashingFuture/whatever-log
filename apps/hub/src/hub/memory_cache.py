@@ -8,18 +8,29 @@
   같다)에 필요하다. 키가 내용을 담고 있으면(프로세스 아이콘: 경로+수정시각+크기) 줄 필요가 없다.
 - 없음 기억: 찾지 못한 키를 잠시 "없음"으로 기억해서, 같은 요청마다 비싼 조회(Win32 호출,
   브라우저 파일 복사)를 되풀이하지 않는다. 잠깐의 실패가 영원히 남지 않게 유한하다.
-- 키별 잠금: 같은 키를 여러 요청이 동시에 달라고 해도 조회는 한 번만 하도록, 호출부가 잠금을
-  잡은 뒤 캐시를 다시 확인한다(차트가 이미지를 한꺼번에 요청하므로 흔한 상황이다).
+- 키별 잠금(get_or_load): 같은 키를 여러 요청이 동시에 달라고 해도 조회는 한 번만 한다(차트가
+  이미지를 한꺼번에 요청하므로 흔한 상황이다). 잠금을 잡은 뒤 성공 캐시와 "없음" 기억을 모두
+  다시 확인하고, 쓰는 스레드가 없는 키의 잠금은 지워서 키가 늘어도 메모리가 계속 늘지 않는다.
+  잠금 처리를 한곳에 두어, 이 캐시를 쓰는 곳마다 확인 순서를 따로 구현하다 빠뜨리지 않게 한다.
 """
 
 import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable
+from dataclasses import dataclass
 
 DEFAULT_MAX_ENTRIES = 256
 # 아이콘이 없다고 판단한 결과를 기억하는 시간.
 DEFAULT_MISSING_TTL_SECONDS = 300.0
+
+
+@dataclass
+class _KeyLock:
+    """한 키의 조회를 직렬화하는 잠금과, 지금 그 잠금을 쓰는(기다리는 포함) 스레드 수."""
+
+    lock: threading.Lock
+    users: int = 0
 
 
 class ImageMemoryCache:
@@ -39,7 +50,7 @@ class ImageMemoryCache:
         # 키 -> (이미지, 만료 시각 또는 None)
         self._entries: OrderedDict[str, tuple[bytes, float | None]] = OrderedDict()
         self._missing_until: dict[str, float] = {}
-        self._locks: dict[str, threading.Lock] = {}
+        self._locks: dict[str, _KeyLock] = {}
         self._guard = threading.Lock()
 
     def get(self, key: str) -> bytes | None:
@@ -81,7 +92,44 @@ class ImageMemoryCache:
         with self._guard:
             self._missing_until[key] = self._clock() + self._missing_ttl_seconds
 
-    def lock_for(self, key: str) -> threading.Lock:
-        """이 키의 조회를 직렬화하는 잠금. 잡은 뒤에 get/is_missing을 다시 확인한다."""
+    def get_or_load(self, key: str, load: Callable[[], bytes | None]) -> bytes | None:
+        """캐시에 있으면 그것을, 없으면 load()로 만들어 넣고 돌려준다. 못 만들면 None.
+
+        load()가 None을 돌려주면 "없음"으로 잠시 기억한다. 같은 키의 동시 호출은 한 번만
+        load()를 부른다 — 먼저 온 호출이 끝나면 나머지는 그 결과(성공이든 없음이든)를 그대로 쓴다.
+        load()가 예외를 던지면 그대로 올라가고 아무것도 기억하지 않는다(호출부가 다룬다).
+        """
+        image = self.get(key)
+        if image is not None:
+            return image
+        if self.is_missing(key):
+            return None
+
+        key_lock = self._enter_key_lock(key)
+        try:
+            with key_lock.lock:
+                image = self.get(key)
+                if image is not None:
+                    return image
+                if self.is_missing(key):
+                    return None
+                image = load()
+                if image is None:
+                    self.mark_missing(key)
+                else:
+                    self.put(key, image)
+                return image
+        finally:
+            self._leave_key_lock(key, key_lock)
+
+    def _enter_key_lock(self, key: str) -> _KeyLock:
         with self._guard:
-            return self._locks.setdefault(key, threading.Lock())
+            key_lock = self._locks.setdefault(key, _KeyLock(threading.Lock()))
+            key_lock.users += 1
+            return key_lock
+
+    def _leave_key_lock(self, key: str, key_lock: _KeyLock) -> None:
+        with self._guard:
+            key_lock.users -= 1
+            if key_lock.users == 0:
+                del self._locks[key]

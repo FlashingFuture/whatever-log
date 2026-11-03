@@ -40,6 +40,8 @@ def test_reads_profile_names_and_tolerates_a_missing_or_broken_file(tmp_path) ->
     [
         {"profile": {"info_cache": ["not", "a", "dict"]}},
         {"profile": {"info_cache": {"Default": "not a dict"}}},
+        {"profile": {"info_cache": {"Default": {"name": ["개인"]}}}},
+        {"profile": {"info_cache": {"Default": {"name": 3}}}},
         {"profile": []},
         [],
     ],
@@ -48,6 +50,17 @@ def test_unexpected_local_state_shapes_are_treated_as_unreadable(tmp_path, state
     (tmp_path / "Local State").write_text(json.dumps(state), encoding="utf-8")
 
     assert read_profile_names(tmp_path) == {}
+
+
+def test_profiles_without_a_display_name_are_still_listed(tmp_path) -> None:
+    """일부 프로필에 name이 없어도 그 폴더의 방문 기록·아이콘은 읽어야 한다."""
+    info = {"Default": {"name": "개인"}, "Profile 1": {}, "Profile 2": {"name": ["x"]}}
+    (tmp_path / "Local State").write_text(
+        json.dumps({"profile": {"info_cache": info}}), encoding="utf-8"
+    )
+
+    assert read_profile_names(tmp_path) == {"Default": "개인"}
+    assert profile_folders(tmp_path) == ["Default", "Profile 1", "Profile 2"]
 
 
 def test_profile_folders_prefers_local_state_and_falls_back_to_folder_names(tmp_path) -> None:

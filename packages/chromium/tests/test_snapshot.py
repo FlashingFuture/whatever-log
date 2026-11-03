@@ -1,10 +1,14 @@
 import os
 import sqlite3
 import time
+from contextlib import closing
+
+import pytest
 
 from chromium.snapshot import (
     create_work_dir,
     fingerprint,
+    open_readonly,
     remove_stale_work_dirs,
     snapshot_database,
 )
@@ -34,6 +38,23 @@ def test_snapshot_copies_a_database(tmp_path) -> None:
     assert snapshot_database(tmp_path / "src.db", tmp_path / "copy.db")
 
     assert _values(tmp_path / "copy.db") == ["a", "b"]
+
+
+def test_paths_with_uri_special_characters_open_the_right_file(tmp_path) -> None:
+    """"#"이나 "%41"이 든 폴더 이름이 file: URI에서 잘리거나 디코딩되면 다른 파일을 연다."""
+    tricky = tmp_path / "profile#1 %41"
+    tricky.mkdir()
+    decoy = tmp_path / "profile#1 A"
+    decoy.mkdir()
+    _make_db(tricky / "src.db", ("right",))
+    _make_db(decoy / "src.db", ("decoy",))
+
+    assert snapshot_database(tricky / "src.db", tmp_path / "copy.db")
+    assert _values(tmp_path / "copy.db") == ["right"]
+    with closing(open_readonly(tricky / "src.db")) as db:
+        assert [row[0] for row in db.execute("SELECT v FROM t")] == ["right"]
+        with pytest.raises(sqlite3.OperationalError):  # 읽기 전용이다
+            db.execute("INSERT INTO t VALUES ('x')")
 
 
 def test_snapshot_includes_records_that_only_exist_in_the_wal(tmp_path) -> None:
