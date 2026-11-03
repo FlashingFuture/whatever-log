@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from chrome.profiles import profile_folders, read_profile_names
-from chrome.urls import domain_of
+from chromium.profiles import profile_folders, read_profile_names
+from chromium.urls import domain_of
 
 
 @pytest.mark.parametrize(
@@ -45,3 +45,20 @@ def test_profile_folders_prefers_local_state_and_falls_back_to_folder_names(tmp_
     _write_local_state(tmp_path, {"Profile 1": "업무"})
     assert profile_folders(tmp_path) == ["Profile 1"]
     assert profile_folders(tmp_path / "missing") == []
+
+
+def test_browser_table_maps_each_process_to_one_browser() -> None:
+    from chromium.browsers import BROWSER_BY_PROCESS, BROWSERS
+
+    assert len(BROWSER_BY_PROCESS) == len(BROWSERS)
+    assert BROWSER_BY_PROCESS["msedge.exe"].key == "edge"
+    assert "Microsoft Edge" in BROWSER_BY_PROCESS["msedge.exe"].title_labels
+
+
+def test_user_data_dir_is_under_local_app_data(monkeypatch) -> None:
+    from chromium.browsers import BROWSER_BY_PROCESS
+
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\me\AppData\Local")
+
+    brave = BROWSER_BY_PROCESS["brave.exe"].user_data_dir()
+    assert brave.parts[-3:] == ("BraveSoftware", "Brave-Browser", "User Data")

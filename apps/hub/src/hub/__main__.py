@@ -239,12 +239,18 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_json(200, payload)
 
     def _get_site_usage(self, raw_query: str) -> None:
-        """구간의 사이트(도메인)별 사용 시간(상세 화면의 Chrome 사이트 목록용).
+        """구간의 사이트(도메인)별 사용 시간(브라우저 상세 화면의 사이트 목록용).
+
+        process 쿼리 파라미터가 어느 브라우저의 사용 시간인지 정한다.
 
         사이트 컬럼이 생기기 전의 옛 DB는 hub가 고치지 않고(읽기 전용) 빈 목록으로 답한다.
         """
+        query = parse_qs(raw_query)
         try:
-            start, end = _usage_bounds(parse_qs(raw_query))
+            start, end = _usage_bounds(query)
+            process = query.get("process", [""])[0]
+            if not process:
+                raise ValueError("process가 필요합니다.")
         except ValueError as exc:
             self._send_json(
                 400, api_error.error_body(api_error.INVALID_REQUEST, str(exc))
@@ -254,7 +260,7 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             conn = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
             try:
-                payload = site_usage_by_range(conn, start, end)
+                payload = site_usage_by_range(conn, process, start, end)
             finally:
                 conn.close()
         except sqlite3.OperationalError as exc:

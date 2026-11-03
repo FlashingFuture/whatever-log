@@ -6,7 +6,7 @@ import { createUsageRow } from "./UsageRow";
 function heading(): HTMLElement {
   const title = document.createElement("h2");
   title.className = styles.title;
-  title.textContent = "사이트별 (Chrome)";
+  title.textContent = "사이트별";
   return title;
 }
 
@@ -18,8 +18,8 @@ function note(text: string): HTMLElement {
 }
 
 /**
- * Chrome 상세 화면의 사이트(도메인)별 사용 시간. 프로세스 목록과 같은 줄 모양을 쓰되, 사이트는
- * foreground일 때만 알 수 있어 백그라운드 구간은 없다. 사이트는 Chrome 창 제목으로 추정한
+ * 브라우저 상세 화면의 사이트(도메인)별 사용 시간. 프로세스 목록과 같은 줄 모양을 쓰되, 사이트는
+ * foreground일 때만 알 수 있어 백그라운드 구간은 없다. 사이트는 브라우저 창 제목으로 추정한
  * 값이라 일부 시간은 어느 사이트에도 들어가지 않는다 — 그 점을 화면에 밝힌다.
  */
 export function createSiteUsageList(usage: SiteRangeUsage): HTMLElement {

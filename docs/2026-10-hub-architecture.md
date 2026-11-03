@@ -416,33 +416,44 @@ API: `GET /api/processes/<이름>/usage?edges=<ISO 경계,…>` — 경계 목�
   시간이 된다. 유휴를 더한 값은 보조 줄("유휴 포함")로 보여 준다. "가장 많이 사용한 프로그램"도
   집중 시간 기준이다(0이면 "-").
 
-### Chrome 사이트 기록(확장 없이)
+### 브라우저 사이트 기록(확장 없이)
 
-Chrome 상세 화면에서 어떤 사이트를 얼마나 봤는지 보여 준다. 사용자에게 보이는 데이터 처리
+브라우저 상세 화면에서 어떤 사이트를 얼마나 봤는지 보여 준다. 사용자에게 보이는 데이터 처리
 설명은 `docs/data-handling.md`에 있고, 여기는 구조만 적는다.
 
-- **수집(recorder)**: Chrome이 foreground일 때만 창 제목을 읽어 `History`의 읽기 전용
-  복사본에서 같은 제목의 가장 최근 방문 URL을 찾고 **도메인만** `ticks.foreground_site_id`
-  (`sites` 테이블)에 저장한다. 제목이 같은 서로 다른 페이지나 기록에 아직 없는 페이지는 틀리거나
-  빠지는 추정이다. 조회가 실패해도 기록 루프는 멈추지 않는다(`browser_site.py`).
-- **공통 규칙은 `packages/chrome`**: 프로필 폴더 위치(`Local State`의 프로필 이름)와 URL → 도메인
-  변환. recorder(방문 기록)와 hub(아이콘)가 둘 다 쓰므로 한쪽 앱에 두지 않았다. 파일을 읽거나
-  복사하지는 않는다.
-- **집계(`site_usage_by_range`)**: 사이트는 foreground일 때만 알 수 있어 active/idle만 있다.
-  간격 상한(2분)과 active/idle 판정은 프로세스 집계와 같은 함수(`_gap_seconds`,
-  `_foreground_kind`)를 쓴다. 사이트를 못 알아낸 틱은 어느 사이트에도 안 들어가서 사이트 합은
-  Chrome의 foreground 시간 이하다. 정렬은 집중 시간 → 전체 시간 → 이름.
-- **API**: `GET /api/sites?start&end`(사이트별 집계), `GET /api/site-icons/<도메인>`(아이콘 PNG).
-  옛 DB(사이트 컬럼 없음)는 hub가 고치지 않고 빈 목록/404로 답한다. 아이콘은 recorder가 기록한
-  도메인만 받고(브라우저 기록을 더듬는 통로가 되지 않게), 도메인 모양도 검사한다.
-- **아이콘(`site_icons.py`)**: Chrome이 이미 저장한 `Favicons`에서 읽으므로 외부 요청이 없다.
-  Chrome이 파일을 잠가 두어 요청마다 임시 폴더에 복사해 읽고 바로 지운다. 결과는 디스크에
-  저장하지 않고 메모리 LRU에만 둔다(Chrome 기록을 지우면 흔적이 남지 않게). 16px/32px 중 32px에
-  가까운 것, 여러 프로필이면 가장 최근에 갱신된 것을 쓴다.
-- **UI**: `chrome.exe` 상세 화면에서만 칸별 차트 아래에 사이트 목록(`SiteUsageList`)이 붙는다.
-  같은 줄 모양(`UsageRow`)을 쓰고, 아이콘은 프로세스 아이콘과 같은 규칙(실패 기억·재시도)으로
-  불러온다(`ProcessIcon`의 `createSiteIcon`). 사이트 정보를 못 불러와도 칸별 차트는 그대로 보이고,
-  "창 제목으로 추정한 값" 안내를 목록 아래에 붙인다.
+- **지원 브라우저는 Chromium 계열 한 표**(`packages/chromium`의 `browsers.py`): Chrome, Edge,
+  Brave, Vivaldi. 같은 엔진이라 `History`·`Favicons`·`Local State`의 형식이 같고, 달라지는 건
+  프로세스 이름, 창 제목 끝의 브라우저 이름, 사용자 데이터 폴더뿐이라 표 한 줄로 더한다(화면
+  쪽 `apps/ui/src/browsers.ts`의 프로세스 목록도 같이 맞춘다). Edge는 제목의 "Microsoft Edge"
+  안에 보이지 않는 글자(zero-width space)를 넣어서 비교 전에 걷어 낸다. Firefox
+  (`places.sqlite`)와 Opera(프로필 폴더 구조가 다름)는 형식이 달라 넣지 않았다.
+- **수집(recorder)**: 지원하는 브라우저가 foreground일 때만 창 제목을 읽어 그 브라우저
+  `History`의 읽기 전용 복사본에서 같은 제목의 가장 최근 방문 URL을 찾고 **도메인만**
+  `ticks.foreground_site_id`(`sites` 테이블)에 저장한다. 어느 브라우저였는지는 틱의
+  foreground 프로세스가 이미 알려 주므로 따로 저장하지 않는다. 브라우저마다 리졸버(복사본
+  캐시)를 처음 필요할 때 만든다. 제목이 같은 서로 다른 페이지나 기록에 아직 없는 페이지는
+  틀리거나 빠지는 추정이다. 조회가 실패해도 기록 루프는 멈추지 않는다(`browser_site.py`).
+- **공통 규칙은 `packages/chromium`**: 브라우저 표, 프로필 폴더 위치(`Local State`의 프로필
+  이름), URL → 도메인 변환. recorder(방문 기록)와 hub(아이콘)가 둘 다 쓰므로 한쪽 앱에 두지
+  않았다. 파일을 읽거나 복사하지는 않는다.
+- **집계(`site_usage_by_range(conn, process, ...)`)**: 어느 브라우저의 사용 시간인지 `process`로
+  고른다(같은 사이트도 브라우저가 다르면 따로 센다). 사이트는 foreground일 때만 알 수 있어
+  active/idle만 있다. 간격 상한(2분)과 active/idle 판정은 프로세스 집계와 같은 함수
+  (`_gap_seconds`, `_foreground_kind`)를 쓴다. 사이트를 못 알아낸 틱은 어느 사이트에도 안
+  들어가서 사이트 합은 그 브라우저의 foreground 시간 이하다. 정렬은 집중 시간 → 전체 시간 →
+  이름.
+- **API**: `GET /api/sites?start&end&process`(그 브라우저의 사이트별 집계, process 필수),
+  `GET /api/site-icons/<도메인>`(아이콘 PNG). 옛 DB(사이트 컬럼 없음)는 hub가 고치지 않고 빈
+  목록/404로 답한다. 아이콘은 recorder가 기록한 도메인만 받고(브라우저 기록을 더듬는 통로가
+  되지 않게), 도메인 모양도 검사한다.
+- **아이콘(`site_icons.py`)**: 설치된 브라우저들의 `Favicons`를 모두 찾아 읽으므로 외부 요청이
+  없다. 브라우저가 파일을 잠가 두어 요청마다 임시 폴더에 복사해 읽고 바로 지운다. 결과는
+  디스크에 저장하지 않고 메모리 LRU에만 둔다(브라우저 기록을 지우면 흔적이 남지 않게).
+  16px/32px 중 32px에 가까운 것, 여러 프로필·브라우저면 가장 최근에 갱신된 것을 쓴다.
+- **UI**: 지원하는 브라우저의 상세 화면에서만 칸별 차트 아래에 사이트 목록(`SiteUsageList`)이
+  붙는다. 같은 줄 모양(`UsageRow`)을 쓰고, 아이콘은 프로세스 아이콘과 같은 규칙(실패
+  기억·재시도)으로 불러온다(`ProcessIcon`의 `createSiteIcon`). 사이트 정보를 못 불러와도 칸별
+  차트는 그대로 보이고, "창 제목으로 추정한 값" 안내를 목록 아래에 붙인다.
 
 ### 상세 화면 보완(코드 리뷰 반영)
 

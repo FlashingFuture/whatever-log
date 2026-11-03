@@ -1,13 +1,7 @@
-"""Chrome 사용자 데이터 폴더와 프로필 목록."""
+"""사용자 데이터 폴더 안의 프로필 목록(Chromium 계열 공통)."""
 
 import json
-import os
 from pathlib import Path
-
-
-def default_user_data_dir() -> Path:
-    """Windows에서 Chrome 프로필들이 있는 폴더."""
-    return Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome" / "User Data"
 
 
 def read_profile_names(user_data_dir: Path) -> dict[str, str]:

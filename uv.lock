@@ -5,7 +5,7 @@ requires-python = ">=3.14"
 [manifest]
 members = [
     "aggregation",
-    "chrome",
+    "chromium",
     "common",
     "desktop",
     "hub",
@@ -70,9 +70,9 @@ wheels = [
 ]
 
 [[package]]
-name = "chrome"
+name = "chromium"
 version = "0.1.0"
-source = { editable = "packages/chrome" }
+source = { editable = "packages/chromium" }
 
 [package.dev-dependencies]
 dev = [
@@ -162,7 +162,7 @@ version = "0.1.0"
 source = { editable = "apps/hub" }
 dependencies = [
     { name = "aggregation" },
-    { name = "chrome" },
+    { name = "chromium" },
     { name = "common" },
     { name = "recorder" },
     { name = "supervision" },
@@ -176,7 +176,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aggregation", editable = "packages/aggregation" },
-    { name = "chrome", editable = "packages/chrome" },
+    { name = "chromium", editable = "packages/chromium" },
     { name = "common", editable = "packages/common" },
     { name = "recorder", editable = "apps/recorder" },
     { name = "supervision", editable = "packages/supervision" },
@@ -413,7 +413,7 @@ name = "recorder"
 version = "0.1.0"
 source = { editable = "apps/recorder" }
 dependencies = [
-    { name = "chrome" },
+    { name = "chromium" },
     { name = "common" },
     { name = "psutil" },
     { name = "supervision" },
@@ -426,7 +426,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "chrome", editable = "packages/chrome" },
+    { name = "chromium", editable = "packages/chromium" },
     { name = "common", editable = "packages/common" },
     { name = "psutil", specifier = ">=6.1.0" },
     { name = "supervision", editable = "packages/supervision" },

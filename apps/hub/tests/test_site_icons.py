@@ -65,7 +65,7 @@ def test_reads_the_icon_closest_to_the_preferred_size(tmp_path) -> None:
             ("https://other.example.com/", "other", 32, 100),
         ],
     )
-    store = SiteIconStore(tmp_path)
+    store = SiteIconStore([tmp_path])
 
     key, png = store.get("news.example.com")
 
@@ -76,14 +76,14 @@ def test_reads_the_icon_closest_to_the_preferred_size(tmp_path) -> None:
 def test_prefers_the_most_recently_updated_icon_across_profiles(tmp_path) -> None:
     _write_favicons(tmp_path, "Default", [("https://news.example.com/", "old", 32, 100)])
     _write_favicons(tmp_path, "Profile 1", [("http://news.example.com/", "new", 32, 900)])
-    store = SiteIconStore(tmp_path)
+    store = SiteIconStore([tmp_path])
 
     assert store.get("news.example.com")[1] == _png("new")
 
 
 def test_returns_none_for_unknown_domains_and_non_png_data(tmp_path) -> None:
     _write_favicons(tmp_path, "Default", [("https://ico.example.com/", "RAW:not-a-png", 32, 1)])
-    store = SiteIconStore(tmp_path)
+    store = SiteIconStore([tmp_path])
 
     assert store.get("missing.example.com") is None
     assert store.get("ico.example.com") is None
@@ -92,7 +92,7 @@ def test_returns_none_for_unknown_domains_and_non_png_data(tmp_path) -> None:
 
 def test_does_not_match_a_longer_domain_that_merely_contains_the_name(tmp_path) -> None:
     _write_favicons(tmp_path, "Default", [("https://notexample.com/", "other", 32, 1)])
-    store = SiteIconStore(tmp_path)
+    store = SiteIconStore([tmp_path])
 
     assert store.get("example.com") is None
 
@@ -101,14 +101,14 @@ def test_survives_missing_or_broken_favicon_files(tmp_path) -> None:
     (tmp_path / "Default").mkdir()
     (tmp_path / "Profile 1").mkdir()
     (tmp_path / "Profile 1" / "Favicons").write_bytes(b"not a sqlite file")
-    store = SiteIconStore(tmp_path)
+    store = SiteIconStore([tmp_path])
 
     assert store.get("news.example.com") is None
 
 
 def test_caches_hits_in_memory_and_remembers_misses_briefly(tmp_path, monkeypatch) -> None:
     _write_favicons(tmp_path, "Default", [("https://news.example.com/", "x", 32, 1)])
-    store = SiteIconStore(tmp_path)
+    store = SiteIconStore([tmp_path])
     reads = []
     original = store._read_from_chrome
     monkeypatch.setattr(store, "_read_from_chrome", lambda d: (reads.append(d), original(d))[1])
@@ -129,7 +129,7 @@ def test_leaves_no_copy_of_the_favicons_behind(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(tempfile, "tempdir", str(work))
     _write_favicons(tmp_path / "chrome", "Default", [("https://news.example.com/", "x", 32, 1)])
 
-    SiteIconStore(tmp_path / "chrome").get("news.example.com")
+    SiteIconStore([tmp_path / "chrome"]).get("news.example.com")
 
     assert list(work.iterdir()) == []
 
@@ -168,7 +168,7 @@ def site_server(tmp_path):
         ],
     )
     _Handler.db_path = db_path
-    _Handler.site_icon_store = SiteIconStore(tmp_path / "chrome")
+    _Handler.site_icon_store = SiteIconStore([tmp_path / "chrome"])
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
@@ -179,7 +179,11 @@ def site_server(tmp_path):
 
 def test_sites_endpoint_returns_usage_per_domain(site_server) -> None:
     query = urllib.parse.urlencode(
-        {"start": _TICK_AT.isoformat(), "end": (_TICK_AT + timedelta(hours=1)).isoformat()}
+        {
+            "start": _TICK_AT.isoformat(),
+            "end": (_TICK_AT + timedelta(hours=1)).isoformat(),
+            "process": "chrome.exe",
+        }
     )
 
     with urllib.request.urlopen(f"{site_server}/api/sites?{query}", timeout=2) as response:
@@ -195,11 +199,29 @@ def test_sites_endpoint_returns_usage_per_domain(site_server) -> None:
     ]
 
 
-def test_sites_endpoint_rejects_missing_bounds(site_server) -> None:
-    with pytest.raises(urllib.error.HTTPError) as exc_info:
-        urllib.request.urlopen(f"{site_server}/api/sites", timeout=2)
+def test_sites_endpoint_rejects_missing_bounds_or_process(site_server) -> None:
+    window = {
+        "start": _TICK_AT.isoformat(),
+        "end": (_TICK_AT + timedelta(hours=1)).isoformat(),
+    }
+    for query in ({}, window, {**window, "process": ""}):
+        url = f"{site_server}/api/sites?{urllib.parse.urlencode(query)}"
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(url, timeout=2)
+        assert exc_info.value.code == 400
 
-    assert exc_info.value.code == 400
+
+def test_sites_endpoint_only_counts_the_requested_browser(site_server) -> None:
+    query = urllib.parse.urlencode(
+        {
+            "start": _TICK_AT.isoformat(),
+            "end": (_TICK_AT + timedelta(hours=1)).isoformat(),
+            "process": "msedge.exe",
+        }
+    )
+
+    with urllib.request.urlopen(f"{site_server}/api/sites?{query}", timeout=2) as response:
+        assert json.loads(response.read())["by_site"] == []
 
 
 def test_sites_endpoint_treats_a_pre_site_database_as_empty(tmp_path) -> None:
@@ -216,7 +238,11 @@ def test_sites_endpoint_treats_a_pre_site_database_as_empty(tmp_path) -> None:
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     query = urllib.parse.urlencode(
-        {"start": _TICK_AT.isoformat(), "end": (_TICK_AT + timedelta(hours=1)).isoformat()}
+        {
+            "start": _TICK_AT.isoformat(),
+            "end": (_TICK_AT + timedelta(hours=1)).isoformat(),
+            "process": "chrome.exe",
+        }
     )
     try:
         with urllib.request.urlopen(
@@ -256,7 +282,7 @@ def test_site_icon_endpoint_is_404_for_a_pre_site_database(tmp_path) -> None:
     old_db = tmp_path / "old.db"
     sqlite3.connect(old_db).close()
     _Handler.db_path = old_db
-    _Handler.site_icon_store = SiteIconStore(tmp_path / "chrome")
+    _Handler.site_icon_store = SiteIconStore([tmp_path / "chrome"])
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
@@ -268,3 +294,12 @@ def test_site_icon_endpoint_is_404_for_a_pre_site_database(tmp_path) -> None:
         assert exc_info.value.code == 404
     finally:
         server.shutdown()
+
+
+def test_reads_icons_from_every_installed_browser(tmp_path) -> None:
+    _write_favicons(tmp_path / "chrome", "Default", [("https://a.example.com/", "from-chrome", 32, 1)])
+    _write_favicons(tmp_path / "edge", "Default", [("https://b.example.com/", "from-edge", 32, 1)])
+    store = SiteIconStore([tmp_path / "chrome", tmp_path / "edge", tmp_path / "not-installed"])
+
+    assert store.get("a.example.com")[1] == _png("from-chrome")
+    assert store.get("b.example.com")[1] == _png("from-edge")

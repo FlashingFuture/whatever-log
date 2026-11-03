@@ -223,34 +223,40 @@ def usage_by_range(
 
 def site_usage_by_range(
     conn: sqlite3.Connection,
+    process: str,
     start: datetime,
     end: datetime,
     *,
     idle_threshold_seconds: float = IDLE_THRESHOLD_SECONDS,
 ) -> SiteRangeUsage:
-    """[start, end) 구간에서 foreground였던 시간을 사이트(도메인)별 active/idle로 집계한다.
+    """[start, end) 구간에서 process(브라우저)가 foreground였던 시간을 사이트(도메인)별
+    active/idle로 집계한다.
 
-    recorder가 틱에 사이트를 적어 둔 경우(Chrome이 foreground일 때)만 센다. 간격 상한과
+    recorder가 틱에 사이트를 적어 둔 경우(브라우저가 foreground일 때)만 센다. 같은 사이트라도
+    브라우저가 다르면 따로 집계한다 — 호출부가 어느 브라우저인지 고른다. 간격 상한과
     active/idle 판정은 usage_by_range와 같은 규칙이다(_gap_seconds, _foreground_kind).
     사이트를 알아내지 못한 틱의 시간은 어느 사이트에도 들어가지 않으므로 사이트 합은 그
-    프로세스의 foreground 시간보다 작거나 같다. 집중 시간 내림차순, 같으면 전체 시간,
+    브라우저의 foreground 시간보다 작거나 같다. 집중 시간 내림차순, 같으면 전체 시간,
     그래도 같으면 이름순이다.
     """
     start_iso = start.astimezone(UTC).isoformat()
     end_iso = end.astimezone(UTC).isoformat()
     ticks = conn.execute(
-        "SELECT ticks.sampled_at, sites.domain, ticks.seconds_since_last_input "
+        "SELECT ticks.sampled_at, sites.domain, ticks.seconds_since_last_input, "
+        "processes.name "
         "FROM ticks LEFT JOIN sites ON sites.id = ticks.foreground_site_id "
+        "LEFT JOIN processes ON processes.id = ticks.foreground_process_id "
         "WHERE ticks.sampled_at >= ? AND ticks.sampled_at < ? "
         "ORDER BY ticks.sampled_at",
         (start_iso, end_iso),
     ).fetchall()
 
     totals: dict[str, dict[str, float]] = {}
-    for (sampled_at, domain, since_last_input), (next_sampled_at, _, _) in zip(
+    for (sampled_at, domain, since_last_input, name), (next_sampled_at, _, _, _) in zip(
         ticks, ticks[1:]
     ):
-        if domain is None:
+        # 간격 계산에는 모든 틱이 필요하지만, 이 브라우저의 틱만 센다.
+        if domain is None or name != process:
             continue
         gap = _gap_seconds(sampled_at, next_sampled_at)
         if gap is None:

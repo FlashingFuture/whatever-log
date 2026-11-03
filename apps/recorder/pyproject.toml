@@ -5,13 +5,13 @@ description = "활성 프로세스를 주기적으로 기록하는 워커"
 requires-python = ">=3.14"
 dependencies = [
     "psutil>=6.1.0",
-    "chrome",
+    "chromium",
     "common",
     "supervision",
 ]
 
 [tool.uv.sources]
-chrome = { workspace = true }
+chromium = { workspace = true }
 common = { workspace = true }
 supervision = { workspace = true }
 

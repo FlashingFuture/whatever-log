@@ -110,8 +110,8 @@ def run(interval: float, db_path: Path) -> None:
         try:
             while True:
                 sample = sample_tick()
-                # Chrome이 포그라운드일 때만 창 제목을 읽는다(그 외 앱의 창 제목은 읽지 않는다).
-                if sample.foreground_process == "chrome.exe":
+                # 지원하는 브라우저가 포그라운드일 때만 창 제목을 읽는다(그 외 앱의 창 제목은 읽지 않는다).
+                if site_tracker.is_browser(sample.foreground_process):
                     sample = dataclasses.replace(
                         sample,
                         foreground_site=site_tracker.site_for(
@@ -141,8 +141,8 @@ def run(interval: float, db_path: Path) -> None:
             raise
         finally:
             logger.info(
-                "사이트 추적: Chrome 포그라운드 %d틱 중 %d틱에서 도메인을 찾음",
-                site_tracker.chrome_ticks,
+                "사이트 추적: 브라우저 포그라운드 %d틱 중 %d틱에서 도메인을 찾음",
+                site_tracker.browser_ticks,
                 site_tracker.matched_ticks,
             )
             site_tracker.close()

@@ -261,12 +261,16 @@ def test_process_usage_by_bucket_fills_empty_buckets_and_validates_edges(tmp_pat
 
 
 def _site_tick(
-    sampled_at: datetime, site: str | None, *, idle_seconds: float = 0.0
+    sampled_at: datetime,
+    site: str | None,
+    *,
+    idle_seconds: float = 0.0,
+    process: str = "chrome.exe",
 ) -> TickSample:
     return TickSample(
         sampled_at=sampled_at,
-        foreground_process="chrome.exe",
-        windowed_processes=frozenset({"chrome.exe"}),
+        foreground_process=process,
+        windowed_processes=frozenset({process}),
         seconds_since_last_input=idle_seconds,
         foreground_site=site,
     )
@@ -287,7 +291,7 @@ def test_site_usage_splits_active_and_idle_per_domain(tmp_path) -> None:
     for offset, site, idle in ticks:
         save_tick(conn, _site_tick(t0 + timedelta(seconds=offset), site, idle_seconds=idle))
 
-    result = site_usage_by_range(conn, t0, t0 + timedelta(minutes=5))
+    result = site_usage_by_range(conn, "chrome.exe", t0, t0 + timedelta(minutes=5))
 
     assert result["by_site"] == [
         {
@@ -315,7 +319,7 @@ def test_site_usage_skips_long_gaps_and_other_ranges(tmp_path) -> None:
     save_tick(conn, _site_tick(t0 + timedelta(hours=5), "z.example.com"))
     save_tick(conn, _site_tick(t0 + timedelta(hours=5, seconds=15), None))
 
-    result = site_usage_by_range(conn, t0, t0 + timedelta(hours=1))
+    result = site_usage_by_range(conn, "chrome.exe", t0, t0 + timedelta(hours=1))
 
     assert [row["domain"] for row in result["by_site"]] == ["a.example.com"]
     assert result["by_site"][0]["total_seconds"] == 15.0
@@ -337,10 +341,38 @@ def test_site_usage_orders_by_active_then_total_then_name(tmp_path) -> None:
             t += timedelta(seconds=15)
     save_tick(conn, _site_tick(t, None))
 
-    result = site_usage_by_range(conn, t0, t + timedelta(minutes=1))
+    result = site_usage_by_range(conn, "chrome.exe", t0, t + timedelta(minutes=1))
 
     assert [row["domain"] for row in result["by_site"]] == [
         "a.example.com",
         "b.example.com",
         "c.example.com",
     ]
+
+
+def test_site_usage_counts_only_the_requested_browser(tmp_path) -> None:
+    """같은 사이트라도 다른 브라우저에서 본 시간은 따로 집계한다(간격 계산에는 모든 틱을 쓴다)."""
+    conn = open_db(tmp_path / "recorder.db")
+    t0 = datetime(2026, 10, 28, 3, 0, tzinfo=UTC)
+    ticks = [
+        ("chrome.exe", "a.example.com"),
+        ("chrome.exe", "a.example.com"),
+        ("msedge.exe", "a.example.com"),
+        ("msedge.exe", "b.example.com"),
+        ("msedge.exe", None),
+    ]
+    for index, (process, site) in enumerate(ticks):
+        save_tick(conn, _site_tick(t0 + timedelta(seconds=15 * index), site, process=process))
+
+    chrome = site_usage_by_range(conn, "chrome.exe", t0, t0 + timedelta(hours=1))
+    edge = site_usage_by_range(conn, "msedge.exe", t0, t0 + timedelta(hours=1))
+    none = site_usage_by_range(conn, "brave.exe", t0, t0 + timedelta(hours=1))
+
+    assert [(row["domain"], row["total_seconds"]) for row in chrome["by_site"]] == [
+        ("a.example.com", 30.0)
+    ]
+    assert [(row["domain"], row["total_seconds"]) for row in edge["by_site"]] == [
+        ("a.example.com", 15.0),
+        ("b.example.com", 15.0),
+    ]
+    assert none["by_site"] == []

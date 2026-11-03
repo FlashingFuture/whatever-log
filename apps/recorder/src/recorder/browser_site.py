@@ -1,15 +1,15 @@
-"""Chrome이 포그라운드일 때, 지금 보고 있는 사이트의 도메인을 알아낸다.
+"""브라우저가 포그라운드일 때, 지금 보고 있는 사이트의 도메인을 알아낸다.
 
-브라우저 확장 없이 얻기 위해 Chrome이 스스로 남기는 방문 기록(`History` SQLite)을 쓴다:
-활성 창의 제목("페이지 제목 - 프로필 - Chrome")에서 페이지 제목을 뽑아, 방문 기록에서 같은
-제목의 가장 최근 방문 URL을 찾고 도메인만 남긴다. 제목·경로·쿼리는 저장하지 않고 버린다
-(docs/data-handling.md).
+Chromium 계열(Chrome, Edge, Brave, Vivaldi)을 지원한다. 브라우저 확장 없이 얻기 위해 브라우저가
+스스로 남기는 방문 기록(`History` SQLite)을 쓴다: 활성 창의 제목("페이지 제목 - 프로필 - 브라우저
+이름")에서 페이지 제목을 뽑아, 방문 기록에서 같은 제목의 가장 최근 방문 URL을 찾고 도메인만
+남긴다. 제목·경로·쿼리는 저장하지 않고 버린다(docs/data-handling.md).
 
 한계(추정이라는 점): 제목이 같은 서로 다른 사이트(새 탭 등)는 가장 최근 방문으로 고르고,
 방문 기록에 아직 안 남은 페이지나 제목만 바뀐 페이지는 못 찾는다(None). 시크릿 창은
 방문 기록이 없어 자연히 None이다.
 
-Chrome은 History 파일을 쓰는 중이라 원본을 열지 않고 읽기 전용 복사본을 만들어 읽는다.
+브라우저는 History 파일을 쓰는 중이라 원본을 열지 않고 읽기 전용 복사본을 만들어 읽는다.
 복사는 원본이 바뀌었을 때만 한다.
 """
 
@@ -20,38 +20,43 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from chrome.profiles import default_user_data_dir, read_profile_names
-from chrome.urls import domain_of
+from chromium.browsers import BROWSER_BY_PROCESS, Browser
+from chromium.profiles import read_profile_names
+from chromium.urls import domain_of
 
 logger = logging.getLogger("recorder")
-
-BROWSER_LABELS = frozenset({"Google Chrome", "Chrome"})
 
 # 방문 기록이 이보다 크면 복사 비용이 틱마다 부담이라 건너뛴다(사이트 없음으로 처리).
 MAX_HISTORY_BYTES = 512 * 1024 * 1024
 
 _WORK_DIR_PREFIX = "whatever-log-history-"
 
+# Edge는 창 제목의 "Microsoft Edge" 안에 보이지 않는 글자(zero-width space)를 넣는다 — 그대로
+# 비교하면 브라우저 이름이 안 맞는다.
+_INVISIBLE_CHARS = dict.fromkeys(map(ord, "​‌‍⁠﻿"))
+
 
 @dataclass(frozen=True)
 class ParsedTitle:
-    """Chrome 창 제목을 나눈 결과. profile은 제목에 프로필 이름이 있을 때만 채워진다."""
+    """브라우저 창 제목을 나눈 결과. profile은 제목에 프로필 이름이 있을 때만 채워진다."""
 
     page: str
     profile: str | None
 
 
-def parse_chrome_title(title: str, profile_names: frozenset[str]) -> ParsedTitle | None:
-    """"페이지 - Google Chrome", "페이지 - 프로필 - Chrome" 같은 제목에서 페이지 제목을 뽑는다.
+def parse_browser_title(
+    title: str, browser_labels: frozenset[str], profile_names: frozenset[str]
+) -> ParsedTitle | None:
+    """"페이지 - 브라우저", "페이지 - 프로필 - 브라우저" 같은 제목에서 페이지 제목을 뽑는다.
 
     페이지 제목 자체에도 " - "가 들어갈 수 있어서, 뒤에서부터 브라우저 이름과 알려진 프로필
-    이름만 떼어낸다. Chrome 창 제목이 아니면(브라우저 이름이 없으면) None.
+    이름만 떼어낸다. 그 브라우저의 창 제목이 아니면(브라우저 이름이 없으면) None.
     """
-    parts = title.split(" - ")
+    parts = title.translate(_INVISIBLE_CHARS).split(" - ")
     profile: str | None = None
-    if parts[-1] in BROWSER_LABELS:
+    if parts[-1] in browser_labels:
         parts.pop()
-    elif len(parts) >= 2 and parts[-2] in BROWSER_LABELS and parts[-1] in profile_names:
+    elif len(parts) >= 2 and parts[-2] in browser_labels and parts[-1] in profile_names:
         profile = parts.pop()
         parts.pop()
     else:
@@ -62,23 +67,23 @@ def parse_chrome_title(title: str, profile_names: frozenset[str]) -> ParsedTitle
     return ParsedTitle(page, profile) if page else None
 
 
-def _remove_stale_work_dirs() -> None:
+def remove_stale_work_dirs() -> None:
     """recorder가 비정상 종료해 close()가 못 불린 복사본이 임시 폴더에 남아 있으면 지운다.
 
     방문 기록의 사본이 디스크에 오래 남지 않게 하려는 것이다. recorder는 lock으로 한 번에
-    하나만 뜨므로(ChromeSiteResolver는 lock을 잡은 뒤에 만들어진다) 다른 실행의 폴더를
-    지울 염려가 없다.
+    하나만 뜨므로(SiteTracker는 lock을 잡은 뒤에 만들어진다) 다른 실행의 폴더를 지울 염려가
+    없다. 브라우저마다 만드는 리졸버가 서로의 폴더를 지우지 않게, 추적기를 만들 때 한 번만 부른다.
     """
     for stale in Path(tempfile.gettempdir()).glob(f"{_WORK_DIR_PREFIX}*"):
         shutil.rmtree(stale, ignore_errors=True)
 
 
-class ChromeSiteResolver:
-    """창 제목으로 지금 보는 사이트의 도메인을 찾는다. 읽기 전용이고 상태는 복사본 캐시뿐이다."""
+class BrowserSiteResolver:
+    """한 브라우저의 창 제목으로 지금 보는 사이트의 도메인을 찾는다. 상태는 복사본 캐시뿐이다."""
 
-    def __init__(self, user_data_dir: Path | None = None) -> None:
-        self._user_data_dir = user_data_dir or default_user_data_dir()
-        _remove_stale_work_dirs()
+    def __init__(self, browser: Browser, user_data_dir: Path | None = None) -> None:
+        self._browser = browser
+        self._user_data_dir = user_data_dir or browser.user_data_dir()
         self._work_dir = Path(tempfile.mkdtemp(prefix=_WORK_DIR_PREFIX))
         # 프로필 폴더 -> (원본 mtime_ns, size, 복사본 경로). 같으면 다시 복사하지 않는다.
         self._copies: dict[str, tuple[int, int, Path]] = {}
@@ -89,9 +94,11 @@ class ChromeSiteResolver:
         self._copies.clear()
 
     def resolve(self, window_title: str) -> str | None:
-        """Chrome 창 제목에 해당하는 도메인. 못 찾으면 None."""
+        """브라우저 창 제목에 해당하는 도메인. 못 찾으면 None."""
         profiles = read_profile_names(self._user_data_dir)
-        parsed = parse_chrome_title(window_title, frozenset(profiles.values()))
+        parsed = parse_browser_title(
+            window_title, self._browser.title_labels, frozenset(profiles.values())
+        )
         if parsed is None:
             return None
         folders = [
@@ -152,31 +159,43 @@ class ChromeSiteResolver:
 
 
 class SiteTracker:
-    """틱마다 "Chrome이 포그라운드면 사이트 도메인"을 돌려주는 얇은 껍데기.
+    """틱마다 "브라우저가 포그라운드면 사이트 도메인"을 돌려주는 얇은 껍데기.
 
+    브라우저마다 리졸버를 처음 필요할 때 만든다(설치하지 않은 브라우저는 만들 일이 없다).
     부가 정보라서, 어떤 예외가 나도 기록 루프를 멈추지 않고 None을 돌려준다. 어느 정도
-    맞았는지 보려고 Chrome이 포그라운드였던 틱 수와 도메인을 찾은 틱 수만 센다(도메인·제목은
+    맞았는지 보려고 브라우저가 포그라운드였던 틱 수와 도메인을 찾은 틱 수만 센다(도메인·제목은
     로그에 남기지 않는다).
     """
 
-    def __init__(self, resolver: ChromeSiteResolver | None = None) -> None:
-        self._resolver = resolver or ChromeSiteResolver()
-        self.chrome_ticks = 0
+    def __init__(self, resolvers: dict[str, BrowserSiteResolver] | None = None) -> None:
+        remove_stale_work_dirs()
+        # 프로세스 이름 -> 리졸버. 테스트가 가짜 리졸버를 넣을 수 있게 열어 둔다.
+        self._resolvers: dict[str, BrowserSiteResolver] = resolvers if resolvers is not None else {}
+        self.browser_ticks = 0
         self.matched_ticks = 0
 
     def close(self) -> None:
-        """리졸버의 복사본을 정리한다."""
-        self._resolver.close()
+        """리졸버들의 복사본을 정리한다."""
+        for resolver in self._resolvers.values():
+            resolver.close()
+
+    def is_browser(self, process_name: str | None) -> bool:
+        """사이트를 알아낼 수 있는(지원하는) 브라우저 프로세스인지."""
+        return process_name in BROWSER_BY_PROCESS
 
     def site_for(self, foreground_process: str | None, window_title: str | None) -> str | None:
-        """포그라운드가 chrome.exe이고 제목을 알면 도메인, 아니면 None."""
-        if foreground_process != "chrome.exe":
+        """포그라운드가 지원하는 브라우저이고 제목을 알면 도메인, 아니면 None."""
+        browser = BROWSER_BY_PROCESS.get(foreground_process or "")
+        if browser is None:
             return None
-        self.chrome_ticks += 1
+        self.browser_ticks += 1
         if not window_title:
             return None
         try:
-            domain = self._resolver.resolve(window_title)
+            resolver = self._resolvers.get(browser.process_name)
+            if resolver is None:
+                resolver = self._resolvers[browser.process_name] = BrowserSiteResolver(browser)
+            domain = resolver.resolve(window_title)
         except Exception:
             logger.exception("사이트 조회에 실패했습니다(이번 틱은 사이트 없음으로 기록)")
             return None

@@ -100,7 +100,7 @@ export function iconUrl(processName: string): string {
   return `${HUB_URL}/api/icons/${encodeURIComponent(processName)}`;
 }
 
-/** 사이트(도메인) 아이콘 URL. hub가 Chrome이 저장해 둔 아이콘을 돌려준다(외부 요청 없음). */
+/** 사이트(도메인) 아이콘 URL. hub가 브라우저가 저장해 둔 아이콘을 돌려준다(외부 요청 없음). */
 export function siteIconUrl(domain: string): string {
   return `${HUB_URL}/api/site-icons/${encodeURIComponent(domain)}`;
 }
@@ -143,12 +143,14 @@ export function fetchUsage(start: Date, end: Date): Promise<RangeUsage> {
   );
 }
 
-/** 구간의 사이트(도메인)별 사용 시간(Chrome이 foreground였던 시간 기준). */
+/** 구간의 사이트(도메인)별 사용 시간(그 브라우저가 foreground였던 시간 기준). */
 export function fetchSiteUsage(
+  process: string,
   start: Date,
   end: Date,
 ): Promise<SiteRangeUsage> {
   const query = new URLSearchParams({
+    process,
     start: start.toISOString(),
     end: end.toISOString(),
   });
