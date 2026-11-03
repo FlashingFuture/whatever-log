@@ -21,7 +21,7 @@
 .track {
   display: flex;
   align-items: flex-end;
-  width: 100%;
+  width: 1.5rem; /* 막대는 가늘게 — 칸 크기는 그대로, 막대끼리 구분이 잘 되게 */
   height: 9rem;
   margin-bottom: var(--space-1);
   background: var(--color-track);
