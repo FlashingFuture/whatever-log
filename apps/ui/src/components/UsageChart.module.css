@@ -1,7 +1,9 @@
+/* 세로 막대 칸을 한 줄에 대여섯 개(넓이에 따라 자동) 늘어놓고, 넘치면 다음 줄로 —
+   스크롤은 페이지가 세로로 한다. 칸은 집중 시간순이라 눈에 띄는 상위 칸이 왼쪽 위에 온다. */
 .chart {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr));
+  gap: var(--space-2) var(--space-3);
 }
 .empty {
   composes: muted from "../styles/shared.module.css";
