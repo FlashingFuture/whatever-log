@@ -25,10 +25,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from aggregation.range import process_usage_by_bucket, usage_by_range
+from aggregation.range import (
+    process_usage_by_bucket,
+    site_usage_by_range,
+    usage_by_range,
+)
 from common import api_error
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
 from hub.icons import IconStore
+from hub.site_icons import SiteIconStore
 from recorder.__main__ import DEFAULT_DB_PATH
 from supervision.lock import AlreadyRunningError, acquire_lock
 from supervision.log_setup import configure_logging
@@ -142,6 +147,7 @@ def _usage_edges(query: dict[str, list[str]]) -> list[datetime]:
 _PROCESS_PATH_PREFIX = "/api/processes/"
 _PROCESS_USAGE_SUFFIX = "/usage"
 _ICON_PATH_PREFIX = "/api/icons/"
+_SITE_ICON_PATH_PREFIX = "/api/site-icons/"
 # 아이콘은 키(경로+수정시각)가 바뀌어야 내용이 바뀐다 — 캐시 키가 ETag라 오래
 # 캐시해도 안전하고, 만료돼도 If-None-Match로 304만 받으면 된다.
 _ICON_MAX_AGE_SECONDS = 24 * 60 * 60
@@ -149,11 +155,18 @@ _ICON_MAX_AGE_SECONDS = 24 * 60 * 60
 _ICON_MISSING_MAX_AGE_SECONDS = 5 * 60
 
 
+def _is_missing_site_schema(error: sqlite3.OperationalError) -> bool:
+    """사이트 테이블/컬럼이 생기기 전의 옛 DB에서 난 오류인지(다른 DB 오류와 구분)."""
+    message = str(error)
+    return "no such table: sites" in message or "foreground_site_id" in message
+
+
 class _Handler(BaseHTTPRequestHandler):
     """/api/* 요청을 집계 함수로 넘기고 JSON으로 응답한다."""
 
     db_path: Path = DEFAULT_DB_PATH
     icon_store: IconStore = IconStore(DEFAULT_ICON_CACHE_DIR)
+    site_icon_store: SiteIconStore = SiteIconStore()
 
     def _send_json(
         self, status: int, payload: dict, extra_headers: dict[str, str] | None = None
@@ -175,11 +188,16 @@ class _Handler(BaseHTTPRequestHandler):
         """경로별로 처리 함수에 나눠 준다.
 
         /api/usage는 전체 집계, /api/processes/<이름>/usage는 한 프로세스의 칸별
-        집계, /api/icons/<이름>은 아이콘 PNG다.
+        집계, /api/icons/<이름>은 아이콘 PNG, /api/sites는 사이트(도메인)별 집계,
+        /api/site-icons/<도메인>은 사이트 아이콘 PNG다.
         """
         parsed = urlparse(self.path)
         if parsed.path == "/api/usage":
             self._get_usage(parsed.query)
+        elif parsed.path == "/api/sites":
+            self._get_site_usage(parsed.query)
+        elif parsed.path.startswith(_SITE_ICON_PATH_PREFIX):
+            self._get_site_icon(unquote(parsed.path[len(_SITE_ICON_PATH_PREFIX) :]))
         elif parsed.path.startswith(_PROCESS_PATH_PREFIX) and parsed.path.endswith(
             _PROCESS_USAGE_SUFFIX
         ):
@@ -219,6 +237,82 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         self._send_json(200, payload)
+
+    def _get_site_usage(self, raw_query: str) -> None:
+        """구간의 사이트(도메인)별 사용 시간(상세 화면의 Chrome 사이트 목록용).
+
+        사이트 컬럼이 생기기 전의 옛 DB는 hub가 고치지 않고(읽기 전용) 빈 목록으로 답한다.
+        """
+        try:
+            start, end = _usage_bounds(parse_qs(raw_query))
+        except ValueError as exc:
+            self._send_json(
+                400, api_error.error_body(api_error.INVALID_REQUEST, str(exc))
+            )
+            return
+
+        try:
+            conn = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
+            try:
+                payload = site_usage_by_range(conn, start, end)
+            finally:
+                conn.close()
+        except sqlite3.OperationalError as exc:
+            if not _is_missing_site_schema(exc):
+                logger.exception("집계 DB를 읽지 못했습니다: %s", self.db_path)
+                self._send_json(
+                    503,
+                    api_error.error_body(api_error.UNAVAILABLE, "database unavailable"),
+                )
+                return
+            payload = {
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "by_site": [],
+            }
+        except sqlite3.Error:
+            logger.exception("집계 DB를 읽지 못했습니다: %s", self.db_path)
+            self._send_json(
+                503,
+                api_error.error_body(api_error.UNAVAILABLE, "database unavailable"),
+            )
+            return
+
+        self._send_json(200, payload)
+
+    def _get_site_icon(self, domain: str) -> None:
+        """도메인 → Chrome이 저장해 둔 아이콘 PNG.
+
+        recorder가 기록한 도메인(sites 테이블)만 받는다 — 임의의 도메인에 대한 아이콘 조회가
+        브라우저 기록을 더듬는 통로가 되지 않게 한다. 요청은 이 PC의 파일만 읽고 외부로 나가지
+        않는다.
+        """
+        try:
+            conn = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
+            try:
+                known = conn.execute(
+                    "SELECT 1 FROM sites WHERE domain = ?", (domain,)
+                ).fetchone()
+            finally:
+                conn.close()
+        except sqlite3.OperationalError as exc:
+            if not _is_missing_site_schema(exc):
+                logger.exception("집계 DB를 읽지 못했습니다: %s", self.db_path)
+                self._send_json(
+                    503,
+                    api_error.error_body(api_error.UNAVAILABLE, "database unavailable"),
+                )
+                return
+            known = None
+        except sqlite3.Error:
+            logger.exception("집계 DB를 읽지 못했습니다: %s", self.db_path)
+            self._send_json(
+                503,
+                api_error.error_body(api_error.UNAVAILABLE, "database unavailable"),
+            )
+            return
+
+        self._send_icon(self.site_icon_store.get(domain) if known else None)
 
     def _get_process_usage(self, process_name: str, raw_query: str) -> None:
         """한 프로세스의 사용 시간을 edges가 나누는 칸별로 돌려준다(상세 화면용)."""
@@ -291,7 +385,10 @@ class _Handler(BaseHTTPRequestHandler):
             )
             return
 
-        icon = self.icon_store.get(row[0]) if row and row[0] else None
+        self._send_icon(self.icon_store.get(row[0]) if row and row[0] else None)
+
+    def _send_icon(self, icon: tuple[str, bytes] | None) -> None:
+        """(키, PNG)를 캐시 헤더와 함께 보낸다. None이면 404(짧게 캐시)."""
         if icon is None:
             self._send_json(
                 404,

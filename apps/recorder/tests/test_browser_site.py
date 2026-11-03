@@ -2,15 +2,11 @@ import json
 import sqlite3
 from pathlib import Path
 
-import pytest
-
 from recorder.browser_site import (
     ChromeSiteResolver,
     ParsedTitle,
     SiteTracker,
-    domain_of,
     parse_chrome_title,
-    read_profile_names,
 )
 
 PROFILES = frozenset({"개인", "업무"})
@@ -44,22 +40,6 @@ def test_non_chrome_or_empty_titles_are_rejected() -> None:
     assert parse_chrome_title(" - Google Chrome", PROFILES) is None
 
 
-@pytest.mark.parametrize(
-    ("url", "expected"),
-    [
-        ("https://www.youtube.com/watch?v=abc#t=1", "youtube.com"),
-        ("http://Docs.Example.COM:8080/a/b", "docs.example.com"),
-        ("https://127.0.0.1:8787/api", "127.0.0.1"),
-        ("chrome://settings", None),
-        ("file:///C:/a.txt", None),
-        ("https:///nohost", None),
-        ("not a url", None),
-    ],
-)
-def test_domain_of_keeps_only_the_host(url: str, expected: str | None) -> None:
-    assert domain_of(url) == expected
-
-
 def _write_chrome(root: Path, profiles: dict[str, str], visits: dict[str, list[tuple[str, str, int]]]) -> None:
     """가짜 Chrome 사용자 데이터 폴더. visits: {폴더: [(제목, URL, 방문 시각)]}."""
     root.mkdir(parents=True, exist_ok=True)
@@ -74,12 +54,6 @@ def _write_chrome(root: Path, profiles: dict[str, str], visits: dict[str, list[t
         conn.executemany("INSERT INTO urls VALUES (?, ?, ?)", [(u, t, v) for t, u, v in rows])
         conn.commit()
         conn.close()
-
-
-def test_reads_profile_names_and_tolerates_a_missing_file(tmp_path) -> None:
-    assert read_profile_names(tmp_path) == {}
-    _write_chrome(tmp_path, {"Default": "개인"}, {})
-    assert read_profile_names(tmp_path) == {"Default": "개인"}
 
 
 def test_resolver_finds_the_most_recent_visit_for_the_title(tmp_path) -> None:

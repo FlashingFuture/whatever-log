@@ -6,6 +6,20 @@ export interface ProcessUsage {
   total_seconds: number;
 }
 
+/** 사이트(도메인) 하나의 사용 시간. 사이트는 foreground일 때만 알 수 있어 background가 없다. */
+export interface SiteUsage {
+  domain: string;
+  active_seconds: number;
+  idle_seconds: number;
+  total_seconds: number;
+}
+
+export interface SiteRangeUsage {
+  start: string;
+  end: string;
+  by_site: SiteUsage[];
+}
+
 export interface RangeUsage {
   start: string;
   end: string;
@@ -86,6 +100,11 @@ export function iconUrl(processName: string): string {
   return `${HUB_URL}/api/icons/${encodeURIComponent(processName)}`;
 }
 
+/** 사이트(도메인) 아이콘 URL. hub가 Chrome이 저장해 둔 아이콘을 돌려준다(외부 요청 없음). */
+export function siteIconUrl(domain: string): string {
+  return `${HUB_URL}/api/site-icons/${encodeURIComponent(domain)}`;
+}
+
 async function getJson<T>(path: string, timeoutMs: number): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -120,6 +139,21 @@ export function fetchUsage(start: Date, end: Date): Promise<RangeUsage> {
   });
   return getJson(
     `/api/usage?${query}`,
+    requestTimeoutMs(end.getTime() - start.getTime()),
+  );
+}
+
+/** 구간의 사이트(도메인)별 사용 시간(Chrome이 foreground였던 시간 기준). */
+export function fetchSiteUsage(
+  start: Date,
+  end: Date,
+): Promise<SiteRangeUsage> {
+  const query = new URLSearchParams({
+    start: start.toISOString(),
+    end: end.toISOString(),
+  });
+  return getJson(
+    `/api/sites?${query}`,
     requestTimeoutMs(end.getTime() - start.getTime()),
   );
 }

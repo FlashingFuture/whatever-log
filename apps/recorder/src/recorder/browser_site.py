@@ -13,15 +13,15 @@ Chrome은 History 파일을 쓰는 중이라 원본을 열지 않고 읽기 전�
 복사는 원본이 바뀌었을 때만 한다.
 """
 
-import json
 import logging
-import os
 import shutil
 import sqlite3
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
+
+from chrome.profiles import default_user_data_dir, read_profile_names
+from chrome.urls import domain_of
 
 logger = logging.getLogger("recorder")
 
@@ -60,36 +60,6 @@ def parse_chrome_title(title: str, profile_names: frozenset[str]) -> ParsedTitle
         profile = parts.pop()
     page = " - ".join(parts)
     return ParsedTitle(page, profile) if page else None
-
-
-def domain_of(url: str) -> str | None:
-    """URL에서 도메인(호스트)만 남긴다. http(s)가 아니거나 호스트가 없으면 None.
-
-    앞의 "www."는 같은 사이트로 묶기 위해 뗀다. 경로·쿼리·해시는 버린다.
-    """
-    try:
-        parts = urlsplit(url)
-        host = parts.hostname
-    except ValueError:
-        return None
-    if parts.scheme not in ("http", "https") or not host:
-        return None
-    return host.removeprefix("www.")
-
-
-def default_user_data_dir() -> Path:
-    """Windows에서 Chrome 프로필들이 있는 폴더."""
-    return Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome" / "User Data"
-
-
-def read_profile_names(user_data_dir: Path) -> dict[str, str]:
-    """{프로필 폴더 이름: 표시 이름}. `Local State`를 못 읽으면 빈 딕셔너리."""
-    try:
-        state = json.loads((user_data_dir / "Local State").read_text(encoding="utf-8"))
-        cache = state["profile"]["info_cache"]
-        return {folder: info["name"] for folder, info in cache.items() if "name" in info}
-    except (OSError, ValueError, KeyError, TypeError):
-        return {}
 
 
 def _remove_stale_work_dirs() -> None:

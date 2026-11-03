@@ -5,6 +5,7 @@ description = "recorder.db를 읽어 집계 결과를 로컬 HTTP API로 제공�
 requires-python = ">=3.14"
 dependencies = [
     "aggregation",
+    "chrome",
     "recorder",
     "common",
     "supervision",
@@ -12,6 +13,7 @@ dependencies = [
 
 [tool.uv.sources]
 aggregation = { workspace = true }
+chrome = { workspace = true }
 recorder = { workspace = true }
 common = { workspace = true }
 supervision = { workspace = true }

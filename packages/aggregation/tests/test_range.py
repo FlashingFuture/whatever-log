@@ -5,7 +5,11 @@ from recorder.storage import open_db, save_tick
 
 import pytest
 
-from aggregation.range import process_usage_by_bucket, usage_by_range
+from aggregation.range import (
+    process_usage_by_bucket,
+    site_usage_by_range,
+    usage_by_range,
+)
 
 
 def _tick(
@@ -254,3 +258,89 @@ def test_process_usage_by_bucket_fills_empty_buckets_and_validates_edges(tmp_pat
         process_usage_by_bucket(conn, "none.exe", [base])
     with pytest.raises(ValueError):
         process_usage_by_bucket(conn, "none.exe", [base + timedelta(hours=1), base])
+
+
+def _site_tick(
+    sampled_at: datetime, site: str | None, *, idle_seconds: float = 0.0
+) -> TickSample:
+    return TickSample(
+        sampled_at=sampled_at,
+        foreground_process="chrome.exe",
+        windowed_processes=frozenset({"chrome.exe"}),
+        seconds_since_last_input=idle_seconds,
+        foreground_site=site,
+    )
+
+
+def test_site_usage_splits_active_and_idle_per_domain(tmp_path) -> None:
+    """사이트별로 active/idle이 나뉘고, 사이트를 모르는 틱의 시간은 어느 사이트에도 안 들어간다."""
+    conn = open_db(tmp_path / "recorder.db")
+    t0 = datetime(2026, 10, 28, 3, 0, tzinfo=UTC)
+    ticks = [
+        (0, "a.example.com", 0.0),
+        (15, "a.example.com", 100.0),  # idle
+        (30, None, 0.0),  # 사이트를 못 찾은 구간
+        (45, "b.example.com", 0.0),
+        (60, "b.example.com", 0.0),
+        (75, None, 0.0),  # 마지막 구간을 닫는 틱
+    ]
+    for offset, site, idle in ticks:
+        save_tick(conn, _site_tick(t0 + timedelta(seconds=offset), site, idle_seconds=idle))
+
+    result = site_usage_by_range(conn, t0, t0 + timedelta(minutes=5))
+
+    assert result["by_site"] == [
+        {
+            "domain": "b.example.com",
+            "active_seconds": 30.0,
+            "idle_seconds": 0.0,
+            "total_seconds": 30.0,
+        },
+        {
+            "domain": "a.example.com",
+            "active_seconds": 15.0,
+            "idle_seconds": 15.0,
+            "total_seconds": 30.0,
+        },
+    ]
+
+
+def test_site_usage_skips_long_gaps_and_other_ranges(tmp_path) -> None:
+    """절전으로 보이는 긴 간격과 구간 밖의 틱은 세지 않는다."""
+    conn = open_db(tmp_path / "recorder.db")
+    t0 = datetime(2026, 10, 28, 3, 0, tzinfo=UTC)
+    save_tick(conn, _site_tick(t0, "a.example.com"))
+    save_tick(conn, _site_tick(t0 + timedelta(seconds=15), "a.example.com"))
+    save_tick(conn, _site_tick(t0 + timedelta(minutes=10), "a.example.com"))  # 10분 공백
+    save_tick(conn, _site_tick(t0 + timedelta(hours=5), "z.example.com"))
+    save_tick(conn, _site_tick(t0 + timedelta(hours=5, seconds=15), None))
+
+    result = site_usage_by_range(conn, t0, t0 + timedelta(hours=1))
+
+    assert [row["domain"] for row in result["by_site"]] == ["a.example.com"]
+    assert result["by_site"][0]["total_seconds"] == 15.0
+
+
+def test_site_usage_orders_by_active_then_total_then_name(tmp_path) -> None:
+    conn = open_db(tmp_path / "recorder.db")
+    t0 = datetime(2026, 10, 28, 3, 0, tzinfo=UTC)
+    # idle만 길게 쓴 사이트는 active가 있는 사이트 뒤로 가고, 완전히 같으면 이름순이다.
+    rows = [
+        ("c.example.com", 100.0, 3),  # idle 45초
+        ("b.example.com", 0.0, 1),  # active 15초
+        ("a.example.com", 0.0, 1),  # active 15초(동률)
+    ]
+    t = t0
+    for domain, idle, count in rows:
+        for _ in range(count + 1):
+            save_tick(conn, _site_tick(t, domain, idle_seconds=idle))
+            t += timedelta(seconds=15)
+    save_tick(conn, _site_tick(t, None))
+
+    result = site_usage_by_range(conn, t0, t + timedelta(minutes=1))
+
+    assert [row["domain"] for row in result["by_site"]] == [
+        "a.example.com",
+        "b.example.com",
+        "c.example.com",
+    ]
