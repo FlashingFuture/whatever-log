@@ -425,7 +425,10 @@ API: `GET /api/processes/<이름>/usage?edges=<ISO 경계,…>` — 경계 목�
   Brave, Vivaldi. 같은 엔진이라 `History`·`Favicons`·`Local State`의 형식이 같고, 달라지는 건
   프로세스 이름, 창 제목 끝의 브라우저 이름, 사용자 데이터 폴더뿐이라 표 한 줄로 더한다(화면
   쪽 `apps/ui/src/browsers.ts`의 프로세스 목록도 같이 맞춘다). Edge는 제목의 "Microsoft Edge"
-  안에 보이지 않는 글자(zero-width space)를 넣어서 비교 전에 걷어 낸다. Firefox
+  안에 보이지 않는 글자(zero-width space)를 넣어서 비교 전에 걷어 낸다. 탭이 여럿이면 제목 뒤에
+  "외 페이지 N개"(영어는 "and N more pages")를 붙이고, 프로필 이름도 Local State에 적힌 이름과 다르게
+  ("개인") 보여 주므로, 이 접미사를 떼고 마지막 " - " 조각을 모르는 프로필 이름으로 보고 뗀 후보를
+  한 번 더 시도한다(앞의 후보가 방문 기록에 없을 때만). Firefox
   (`places.sqlite`)와 Opera(프로필 폴더 구조가 다름)는 형식이 달라 넣지 않았다.
 - **수집(recorder)**: 지원하는 브라우저가 foreground일 때만 창 제목을 읽어 그 브라우저
   `History`의 읽기 전용 복사본에서 같은 제목의 가장 최근 방문 URL을 찾고 **도메인만**

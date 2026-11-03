@@ -9,6 +9,7 @@ from recorder.browser_site import (
     ParsedTitle,
     SiteTracker,
     parse_browser_title,
+    title_candidates,
 )
 
 PROFILES = frozenset({"개인", "업무"})
@@ -56,6 +57,30 @@ def test_other_chromium_browsers_use_their_own_label() -> None:
 
     assert _parse("뉴스 - Brave", brave) == ParsedTitle("뉴스", None)
     assert _parse("뉴스 - Vivaldi", vivaldi) == ParsedTitle("뉴스", None)
+
+
+def test_edge_multi_tab_suffix_is_removed_from_the_page_title() -> None:
+    """Edge는 탭이 여러 개면 제목 뒤에 "외 페이지 N개"를 붙인다(방문 기록 제목에는 없다)."""
+    assert _parse("뉴스 외 페이지 3개 - Microsoft\u200b Edge", EDGE) == ParsedTitle("뉴스", None)
+    assert _parse("News and 2 more pages - Microsoft\u200b Edge", EDGE) == ParsedTitle("News", None)
+    assert _parse("News and 1 more page - 개인 - Microsoft\u200b Edge", EDGE) == ParsedTitle(
+        "News", "개인"
+    )
+    # 페이지 제목이 우연히 비슷한 글로 끝나지 않으면 건드리지 않는다.
+    assert _parse("페이지 3개 정리 - Google Chrome") == ParsedTitle("페이지 3개 정리", None)
+
+
+def test_title_candidates_also_offer_the_title_without_an_unknown_profile_label() -> None:
+    """Local State의 프로필 이름과 다르게 표시된 프로필 이름("개인")은 후보를 하나 더 만든다."""
+    plain = title_candidates("뉴스 - Google Chrome", CHROME.title_labels, frozenset())
+    assert [c.page for c in plain] == ["뉴스"]
+
+    with_label = title_candidates(
+        "뉴스 외 페이지 2개 - 개인 - Microsoft\u200b Edge", EDGE.title_labels, frozenset({"프로필 1"})
+    )
+    assert [c.page for c in with_label] == ["뉴스 외 페이지 2개 - 개인", "뉴스"]
+
+    assert title_candidates("메모장", CHROME.title_labels, frozenset()) == []
 
 
 def _write_browser(
@@ -124,6 +149,41 @@ def test_resolver_reads_an_edge_profile_with_edge_labels(tmp_path) -> None:
     try:
         assert resolver.resolve("뉴스 - 개인 - Microsoft​ Edge") == "news.example.com"
         assert resolver.resolve("뉴스 - Google Chrome") is None  # Edge의 제목 표기가 아니다
+    finally:
+        resolver.close()
+
+
+def test_resolver_finds_an_edge_page_despite_suffix_and_unknown_profile_label(tmp_path) -> None:
+    """실제 Edge 제목 모양: "제목 외 페이지 N개 - 개인 - Microsoft Edge"(Local State 이름은 다름)."""
+    _write_browser(
+        tmp_path,
+        {"Default": "프로필 1"},
+        {"Default": [("뉴스", "https://news.example.com/a", 1)]},
+    )
+    resolver = BrowserSiteResolver(EDGE, tmp_path)
+    try:
+        assert (
+            resolver.resolve("뉴스 외 페이지 3개 - 개인 - Microsoft\u200b Edge") == "news.example.com"
+        )
+    finally:
+        resolver.close()
+
+
+def test_exact_page_title_wins_over_the_profile_label_guess(tmp_path) -> None:
+    """"A - B" 제목이 방문 기록에 그대로 있으면 "B"를 프로필로 보고 떼어 낸 "A"를 쓰지 않는다."""
+    _write_browser(
+        tmp_path,
+        {"Default": "개인"},
+        {
+            "Default": [
+                ("A", "https://short.example.com/", 900),
+                ("A - B", "https://exact.example.com/", 100),
+            ]
+        },
+    )
+    resolver = BrowserSiteResolver(CHROME, tmp_path)
+    try:
+        assert resolver.resolve("A - B - Google Chrome") == "exact.example.com"
     finally:
         resolver.close()
 

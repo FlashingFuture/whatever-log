@@ -14,6 +14,7 @@ Chromium 계열(Chrome, Edge, Brave, Vivaldi)을 지원한다. 브라우저 확�
 """
 
 import logging
+import re
 import shutil
 import sqlite3
 import tempfile
@@ -34,6 +35,11 @@ _WORK_DIR_PREFIX = "whatever-log-history-"
 # Edge는 창 제목의 "Microsoft Edge" 안에 보이지 않는 글자(zero-width space)를 넣는다 — 그대로
 # 비교하면 브라우저 이름이 안 맞는다.
 _INVISIBLE_CHARS = dict.fromkeys(map(ord, "​‌‍⁠﻿"))
+
+
+# Edge는 창에 탭이 여러 개일 때 활성 탭 제목 뒤에 "외 페이지 3개"(영어는 "and 3 more pages")를
+# 붙인다 — 방문 기록의 제목에는 없는 글자라 떼어내야 찾을 수 있다.
+_MORE_PAGES_SUFFIX = re.compile(r"(?: 외 페이지 \d+개| and \d+ more pages?)$")
 
 
 @dataclass(frozen=True)
@@ -63,8 +69,30 @@ def parse_browser_title(
         return None
     if profile is None and len(parts) >= 2 and parts[-1] in profile_names:
         profile = parts.pop()
-    page = " - ".join(parts)
+    page = _MORE_PAGES_SUFFIX.sub("", " - ".join(parts))
     return ParsedTitle(page, profile) if page else None
+
+
+def title_candidates(
+    title: str, browser_labels: frozenset[str], profile_names: frozenset[str]
+) -> list[ParsedTitle]:
+    """창 제목에서 페이지 제목일 수 있는 후보들을 가능성이 높은 순서로 돌려준다.
+
+    첫 후보는 parse_browser_title의 결과다. 제목에 프로필 이름이 있는데 Local State에 적힌
+    이름과 다르게 표시되는 경우(Edge가 "개인"처럼 프로필 종류를 보여 주는 등)에는 알려진
+    프로필로 걸러지지 않아 그 이름이 페이지 제목에 섞인다. 그래서 마지막 " - " 조각을 모르는
+    프로필 이름으로 보고 뗀 후보를 하나 더 낸다 — 앞의 후보가 방문 기록에 없을 때만 쓰이므로
+    일반 페이지 제목의 " - "를 잘못 떼어 낼 일은 드물다.
+    """
+    first = parse_browser_title(title, browser_labels, profile_names)
+    if first is None:
+        return []
+    candidates = [first]
+    if first.profile is None and " - " in first.page:
+        stripped = _MORE_PAGES_SUFFIX.sub("", first.page.rsplit(" - ", 1)[0])
+        if stripped:
+            candidates.append(ParsedTitle(stripped, None))
+    return candidates
 
 
 def remove_stale_work_dirs() -> None:
@@ -96,11 +124,15 @@ class BrowserSiteResolver:
     def resolve(self, window_title: str) -> str | None:
         """브라우저 창 제목에 해당하는 도메인. 못 찾으면 None."""
         profiles = read_profile_names(self._user_data_dir)
-        parsed = parse_browser_title(
+        for parsed in title_candidates(
             window_title, self._browser.title_labels, frozenset(profiles.values())
-        )
-        if parsed is None:
-            return None
+        ):
+            domain = self._resolve_page(parsed, profiles)
+            if domain is not None:
+                return domain
+        return None
+
+    def _resolve_page(self, parsed: ParsedTitle, profiles: dict[str, str]) -> str | None:
         folders = [
             folder
             for folder, name in profiles.items()
