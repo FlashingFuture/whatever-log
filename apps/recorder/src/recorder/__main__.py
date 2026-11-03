@@ -8,6 +8,7 @@ SQLite에 저장하는 워커.
 """
 
 import argparse
+import dataclasses
 import logging
 import math
 import sys
@@ -16,9 +17,11 @@ from pathlib import Path
 
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
 from supervision.log_setup import configure_logging
+from recorder.browser_site import SiteTracker
 from recorder.process_paths import ProcessPathTracker
 from recorder.sampling import sample_tick
 from recorder.storage import open_db, save_tick
+from recorder.window_snapshot import get_foreground_window_title
 from supervision.lock import AlreadyRunningError, acquire_lock
 
 DEFAULT_INTERVAL_SECONDS = 15.0
@@ -101,11 +104,20 @@ def run(interval: float, db_path: Path) -> None:
 
         tick_count = 0
         path_tracker = ProcessPathTracker()
+        site_tracker = SiteTracker()
         logger.info("%s초 간격으로 기록합니다. DB: %s", interval, db_path)
 
         try:
             while True:
                 sample = sample_tick()
+                # Chrome이 포그라운드일 때만 창 제목을 읽는다(그 외 앱의 창 제목은 읽지 않는다).
+                if sample.foreground_process == "chrome.exe":
+                    sample = dataclasses.replace(
+                        sample,
+                        foreground_site=site_tracker.site_for(
+                            sample.foreground_process, get_foreground_window_title()
+                        ),
+                    )
                 save_tick(conn, sample)
                 path_tracker.record_new(
                     conn,
@@ -128,6 +140,12 @@ def run(interval: float, db_path: Path) -> None:
             )
             raise
         finally:
+            logger.info(
+                "사이트 추적: Chrome 포그라운드 %d틱 중 %d틱에서 도메인을 찾음",
+                site_tracker.chrome_ticks,
+                site_tracker.matched_ticks,
+            )
+            site_tracker.close()
             conn.close()
     finally:
         lock.release()

@@ -23,6 +23,9 @@ class TickSample:
     foreground_process: str | None
     windowed_processes: frozenset[str]
     seconds_since_last_input: float
+    # Chrome이 포그라운드일 때 보던 사이트의 도메인. sample_tick()은 순수하게 두려고 채우지
+    # 않고, 방문 기록을 읽는 호출부(__main__)가 채운다.
+    foreground_site: str | None = None
 
 
 def sample_tick() -> TickSample:
