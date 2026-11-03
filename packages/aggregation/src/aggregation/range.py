@@ -241,23 +241,26 @@ def site_usage_by_range(
     """
     start_iso = start.astimezone(UTC).isoformat()
     end_iso = end.astimezone(UTC).isoformat()
-    ticks = conn.execute(
-        "SELECT ticks.sampled_at, sites.domain, ticks.seconds_since_last_input, "
-        "processes.name "
-        "FROM ticks LEFT JOIN sites ON sites.id = ticks.foreground_site_id "
-        "LEFT JOIN processes ON processes.id = ticks.foreground_process_id "
-        "WHERE ticks.sampled_at >= ? AND ticks.sampled_at < ? "
-        "ORDER BY ticks.sampled_at",
-        (start_iso, end_iso),
-    ).fetchall()
+    # 틱이 한 달에 수백만 개일 수 있어 파이썬 리스트에 올리지 않는다. 다음 틱 시각은 LEAD로
+    # 구하고(간격 계산에는 구간 안의 모든 틱이 필요하다), 이 브라우저의 사이트 있는 틱만 바깥
+    # 쿼리에서 걸러 한 줄씩 흘려 읽는다. 구간 안의 마지막 틱은 다음 틱이 없어 빠진다.
+    rows = conn.execute(
+        "SELECT sampled_at, next_sampled_at, domain, since_last_input FROM ("
+        "  SELECT ticks.sampled_at AS sampled_at, "
+        "         LEAD(ticks.sampled_at) OVER (ORDER BY ticks.sampled_at) AS next_sampled_at, "
+        "         sites.domain AS domain, "
+        "         ticks.seconds_since_last_input AS since_last_input, "
+        "         processes.name AS process_name "
+        "  FROM ticks "
+        "  LEFT JOIN sites ON sites.id = ticks.foreground_site_id "
+        "  LEFT JOIN processes ON processes.id = ticks.foreground_process_id "
+        "  WHERE ticks.sampled_at >= ? AND ticks.sampled_at < ?"
+        ") WHERE process_name = ? AND domain IS NOT NULL AND next_sampled_at IS NOT NULL",
+        (start_iso, end_iso, process),
+    )
 
     totals: dict[str, dict[str, float]] = {}
-    for (sampled_at, domain, since_last_input, name), (next_sampled_at, _, _, _) in zip(
-        ticks, ticks[1:]
-    ):
-        # 간격 계산에는 모든 틱이 필요하지만, 이 브라우저의 틱만 센다.
-        if domain is None or name != process:
-            continue
+    for sampled_at, next_sampled_at, domain, since_last_input in rows:
         gap = _gap_seconds(sampled_at, next_sampled_at)
         if gap is None:
             continue

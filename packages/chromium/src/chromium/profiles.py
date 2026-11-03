@@ -5,12 +5,12 @@ from pathlib import Path
 
 
 def read_profile_names(user_data_dir: Path) -> dict[str, str]:
-    """{프로필 폴더 이름: 표시 이름}. `Local State`를 못 읽으면 빈 딕셔너리."""
+    """{프로필 폴더 이름: 표시 이름}. `Local State`를 못 읽거나 모양이 예상과 다르면 빈 딕셔너리."""
     try:
         state = json.loads((user_data_dir / "Local State").read_text(encoding="utf-8"))
         cache = state["profile"]["info_cache"]
         return {folder: info["name"] for folder, info in cache.items() if "name" in info}
-    except (OSError, ValueError, KeyError, TypeError):
+    except (AttributeError, OSError, ValueError, KeyError, TypeError):
         return {}
 
 

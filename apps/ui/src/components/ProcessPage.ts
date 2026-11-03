@@ -1,14 +1,19 @@
 import { fetchProcessUsage, fetchSiteUsage } from "../api";
 import { isBrowserProcess } from "../browsers";
 import { bucketsOf } from "../period";
+import { settleWithin } from "../settle";
 import { createBucketChart } from "./BucketChart";
 import { createPeriodView } from "./PeriodView";
 import { createProcessIcon } from "./ProcessIcon";
 import styles from "./ProcessPage.module.css";
 import {
   createSiteUsageList,
+  createSiteUsageLoading,
   createSiteUsageUnavailable,
 } from "./SiteUsageList";
+
+// 차트가 준비된 뒤 사이트 목록을 더 기다려 주는 시간. 이보다 느리면 차트를 먼저 보여 준다.
+const SITES_GRACE_MS = 300;
 
 /**
  * 프로세스 상세 화면: 아이콘 + 이름, 그 아래에 선택한 구간을 칸(일: 시간, 주/월:
@@ -31,22 +36,31 @@ export function mountProcessPage(
       // 라벨은 클라이언트가 계산한 칸으로 만든다(서버 응답의 시각이 아니라) — 같은
       // 시(時)가 두 번 나오는 일광절약시간 종료일의 표시가 칸에 들어 있다.
       const buckets = bucketsOf(period);
+      // 사이트 목록은 덤이다: 칸별 차트와 같이 요청하되, 못 불러와도(옛 hub 등) 차트는 그대로
+      // 보여 주고, 느려도 차트를 기다리게 하지 않는다. 이 promise는 거부되지 않는다.
+      const sitesPromise = isBrowserProcess(process)
+        ? fetchSiteUsage(process, period.start, period.end).then(
+            createSiteUsageList,
+            createSiteUsageUnavailable,
+          )
+        : null;
       const chart = createBucketChart(
         period.unit,
         await fetchProcessUsage(process, buckets),
         buckets,
       );
-      if (!isBrowserProcess(process)) {
+      if (sitesPromise === null) {
         return chart;
       }
-      // 사이트 정보는 덤이라, 못 불러와도 칸별 사용 시간은 그대로 보여 준다.
-      const sites = await fetchSiteUsage(
-        process,
-        period.start,
-        period.end,
-      ).then(createSiteUsageList, createSiteUsageUnavailable);
+      // 보통은 차트와 함께 바로 그린다(15초 갱신마다 자리가 깜빡이지 않게). 사이트가 느리면
+      // 차트를 먼저 보여 주고 도착하면 자리를 바꾼다.
+      const sites = await settleWithin(sitesPromise, SITES_GRACE_MS);
+      const slot = sites ?? createSiteUsageLoading();
+      if (sites === undefined) {
+        void sitesPromise.then((loaded) => slot.replaceWith(loaded));
+      }
       const page = document.createElement("div");
-      page.append(chart, sites);
+      page.append(chart, slot);
       return page;
     },
   });

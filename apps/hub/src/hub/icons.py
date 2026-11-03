@@ -7,8 +7,8 @@ gdi32)를 쓰고, 추가 의존성(Pillow 등) 없이 ctypes + zlib만으로 PNG
 
 1. 브라우저: hub가 ETag + Cache-Control을 붙여서 보낸다(__main__). 15초마다 차트가
    다시 그려져도 같은 이미지를 다시 받지 않는다.
-2. 메모리(IconStore._memory): 키 → PNG 바이트. 같은 아이콘이 여러 번 요청돼도
-   디스크를 다시 읽지 않는다.
+2. 메모리(hub.memory_cache.ImageMemoryCache): 키 → PNG 바이트. 같은 아이콘이 여러 번
+   요청돼도 디스크를 다시 읽지 않는다. 사이트 아이콘(site_icons)과 같은 캐시를 쓴다.
 3. 디스크(cache_dir/<키>.png): hub를 다시 띄워도 추출을 반복하지 않는다.
 
 키는 `sha256(경로 + 수정시각 + 크기)`다. 앱이 업데이트돼 exe가 바뀌면 키도 바뀌어
@@ -16,27 +16,21 @@ gdi32)를 쓰고, 추가 의존성(Pillow 등) 없이 ctypes + zlib만으로 PNG
 않는다 — 파일당 몇 KB라 쌓이는 양이 미미하다).
 
 추출에 실패한 경로(아이콘 없음, 접근 불가 등)는 일정 시간 동안 "없음"으로 기억해서
-같은 요청마다 Win32 호출을 되풀이하지 않는다.
+같은 요청마다 Win32 호출을 되풀이하지 않는다(같은 캐시가 맡는다).
 """
 
 import ctypes
 import hashlib
 import struct
 import sys
-import threading
-import time
 import zlib
-from collections import OrderedDict
 from collections.abc import Callable
 from ctypes import wintypes
 from pathlib import Path
 
-ICON_SIZE = 64  # 표시 크기(~20px)의 HiDPI 3배 정도. PNG 한 장이 몇 KB 수준이다.
+from hub.memory_cache import ImageMemoryCache
 
-# 아이콘이 없다고 판단한 결과를 기억하는 시간. 잠깐의 실패(파일 잠금 등)가 영원히
-# 남지 않도록 유한하게 둔다.
-_NEGATIVE_TTL_SECONDS = 300.0
-_MEMORY_ENTRIES = 256
+ICON_SIZE = 64  # 표시 크기(~20px)의 HiDPI 3배 정도. PNG 한 장이 몇 KB 수준이다.
 
 
 def encode_png(width: int, height: int, rgba: bytes) -> bytes:
@@ -232,12 +226,8 @@ class IconStore:
     ) -> None:
         self._cache_dir = cache_dir
         self._extract = extract
-        self._memory: OrderedDict[str, bytes] = OrderedDict()
-        self._missing_until: dict[str, float] = {}
-        # 같은 아이콘을 여러 요청이 동시에 달라고 해도 추출은 한 번만 하도록 키별로
-        # 잠근다(차트가 한꺼번에 이미지를 요청하므로 흔한 상황이다).
-        self._locks: dict[str, threading.Lock] = {}
-        self._guard = threading.Lock()
+        # 키가 경로+수정시각+크기라 내용이 바뀌면 키도 바뀐다 — 만료는 필요 없다.
+        self._cache = ImageMemoryCache()
 
     def get(self, exe_path: str) -> tuple[str, bytes] | None:
         """(키, PNG 바이트)를 돌려준다. 키는 ETag로 쓸 수 있다. 없으면 None."""
@@ -245,14 +235,16 @@ class IconStore:
         if key is None:
             return None
 
-        png = self._from_memory(key)
+        png = self._cache.get(key)
         if png is not None:
             return key, png
-        if self._is_known_missing(key):
+        if self._cache.is_missing(key):
             return None
 
-        with self._lock_for(key):
-            png = self._from_memory(key)
+        # 같은 아이콘을 여러 요청이 동시에 달라고 해도 추출은 한 번만 한다(차트가 이미지를
+        # 한꺼번에 요청하므로 흔한 상황이다).
+        with self._cache.lock_for(key):
+            png = self._cache.get(key)
             if png is not None:
                 return key, png
 
@@ -268,10 +260,9 @@ class IconStore:
                     self._write_disk(disk_path, png)
 
             if png is None:
-                with self._guard:
-                    self._missing_until[key] = time.monotonic() + _NEGATIVE_TTL_SECONDS
+                self._cache.mark_missing(key)
                 return None
-            self._remember(key, png)
+            self._cache.put(key, png)
             return key, png
 
     @staticmethod
@@ -300,31 +291,3 @@ class IconStore:
             tmp.replace(path)
         except OSError:
             pass  # 디스크 캐시는 최적화일 뿐이다 — 메모리에는 남는다.
-
-    def _from_memory(self, key: str) -> bytes | None:
-        with self._guard:
-            png = self._memory.get(key)
-            if png is not None:
-                self._memory.move_to_end(key)
-            return png
-
-    def _remember(self, key: str, png: bytes) -> None:
-        with self._guard:
-            self._memory[key] = png
-            self._memory.move_to_end(key)
-            while len(self._memory) > _MEMORY_ENTRIES:
-                self._memory.popitem(last=False)
-
-    def _is_known_missing(self, key: str) -> bool:
-        with self._guard:
-            until = self._missing_until.get(key)
-            if until is None:
-                return False
-            if time.monotonic() >= until:
-                del self._missing_until[key]
-                return False
-            return True
-
-    def _lock_for(self, key: str) -> threading.Lock:
-        with self._guard:
-            return self._locks.setdefault(key, threading.Lock())

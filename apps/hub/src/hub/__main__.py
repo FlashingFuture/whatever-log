@@ -23,7 +23,7 @@ import sys
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse, urlsplit
 
 from aggregation.range import (
     process_usage_by_bucket,
@@ -31,9 +31,10 @@ from aggregation.range import (
     usage_by_range,
 )
 from common import api_error
+from chromium.snapshot import remove_stale_work_dirs
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
 from hub.icons import IconStore
-from hub.site_icons import SiteIconStore
+from hub.site_icons import SITE_ICON_TTL_SECONDS, WORK_DIR_PREFIX, SiteIconStore
 from recorder.__main__ import DEFAULT_DB_PATH
 from supervision.lock import AlreadyRunningError, acquire_lock
 from supervision.log_setup import configure_logging
@@ -55,6 +56,18 @@ logger = logging.getLogger("hub")
 # 때만 그 origin을 그대로 돌려줘서 허용한다 — desktop이 서빙하는 UI(임의
 # 포트)와 Vite dev server(5173) 둘 다 이 패턴에 맞는다.
 _ALLOWED_ORIGIN = re.compile(r"http://(127\.0\.0\.1|localhost)(:\d+)?")
+
+
+def is_trusted_page(referer: str) -> bool:
+    """아이콘 요청을 보낸 페이지(Referer)가 우리 UI인지.
+
+    아이콘은 <img>로 불려서 CORS 검사를 받지 않는다. 방문 중인 아무 웹페이지가 이 주소들을
+    <img>로 불러 보고 onload/onerror로 "기록된 프로세스·사이트인지"를 알아낼 수 있다. 그래서
+    UI(허용된 origin)가 보낸 요청에만 응답하고, 그 밖에는 기록 여부와 무관하게 똑같은 답(404)을
+    준다. Referer는 다른 사이트가 꾸며 낼 수 없고, 빼 버리면 거부될 뿐이라 정보가 새지 않는다.
+    """
+    parts = urlsplit(referer)
+    return _ALLOWED_ORIGIN.fullmatch(f"{parts.scheme}://{parts.netloc}") is not None
 
 
 def _lock_path_for_port(port: int) -> Path:
@@ -290,9 +303,13 @@ class _Handler(BaseHTTPRequestHandler):
         """도메인 → Chrome이 저장해 둔 아이콘 PNG.
 
         recorder가 기록한 도메인(sites 테이블)만 받는다 — 임의의 도메인에 대한 아이콘 조회가
-        브라우저 기록을 더듬는 통로가 되지 않게 한다. 요청은 이 PC의 파일만 읽고 외부로 나가지
-        않는다.
+        브라우저 기록을 더듬는 통로가 되지 않게 한다. UI가 아닌 페이지의 요청은 기록 여부를
+        드러내지 않도록 똑같이 거부한다(is_trusted_page). 요청은 이 PC의 파일만 읽고 외부로
+        나가지 않는다.
         """
+        if not self._is_from_trusted_page():
+            self._send_icon_denied()
+            return
         try:
             conn = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
             try:
@@ -318,7 +335,10 @@ class _Handler(BaseHTTPRequestHandler):
             )
             return
 
-        self._send_icon(self.site_icon_store.get(domain) if known else None)
+        self._send_icon(
+            self.site_icon_store.get(domain) if known else None,
+            SITE_ICON_TTL_SECONDS,
+        )
 
     def _get_process_usage(self, process_name: str, raw_query: str) -> None:
         """한 프로세스의 사용 시간을 edges가 나누는 칸별로 돌려준다(상세 화면용)."""
@@ -362,8 +382,12 @@ class _Handler(BaseHTTPRequestHandler):
         클라이언트가 경로를 주지 않고 이름만 준다 — 임의 경로의 파일을 열어 보는
         요청이 되지 않도록, 경로는 recorder가 기록해 둔 것만 쓴다. 아이콘이 없는
         경우에도 잠시 캐시하게 해서(브라우저가 같은 404를 계속 다시 묻지 않게)
-        차트가 15초마다 다시 그려져도 요청이 늘어나지 않는다.
+        차트가 15초마다 다시 그려져도 요청이 늘어나지 않는다. UI가 아닌 페이지의
+        요청은 기록 여부를 드러내지 않도록 거부한다(is_trusted_page).
         """
+        if not self._is_from_trusted_page():
+            self._send_icon_denied()
+            return
         try:
             conn = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
             try:
@@ -391,9 +415,24 @@ class _Handler(BaseHTTPRequestHandler):
             )
             return
 
-        self._send_icon(self.icon_store.get(row[0]) if row and row[0] else None)
+        self._send_icon(
+            self.icon_store.get(row[0]) if row and row[0] else None,
+            _ICON_MAX_AGE_SECONDS,
+        )
 
-    def _send_icon(self, icon: tuple[str, bytes] | None) -> None:
+    def _is_from_trusted_page(self) -> bool:
+        """이 요청이 우리 UI 페이지에서 온 것인지(Referer 기준 — is_trusted_page 참고)."""
+        return is_trusted_page(self.headers.get("Referer", ""))
+
+    def _send_icon_denied(self) -> None:
+        """UI가 아닌 곳의 아이콘 요청. "아이콘 없음"과 같은 모양의 404지만 캐시하지 않는다."""
+        self._send_json(
+            404,
+            api_error.error_body(api_error.NOT_FOUND, "icon not found"),
+            {"Cache-Control": "no-store"},
+        )
+
+    def _send_icon(self, icon: tuple[str, bytes] | None, max_age_seconds: int) -> None:
         """(키, PNG)를 캐시 헤더와 함께 보낸다. None이면 404(짧게 캐시)."""
         if icon is None:
             self._send_json(
@@ -407,7 +446,7 @@ class _Handler(BaseHTTPRequestHandler):
         etag = f'"{key}"'
         headers = {
             "ETag": etag,
-            "Cache-Control": f"private, max-age={_ICON_MAX_AGE_SECONDS}",
+            "Cache-Control": f"private, max-age={max_age_seconds}",
         }
         if self.headers.get("If-None-Match") == etag:
             self.send_response(304)
@@ -444,6 +483,9 @@ def main() -> None:
         sys.exit(EXIT_ALREADY_RUNNING)
 
     try:
+        # 이전 실행이 비정상 종료하며 남긴 즐겨찾기 아이콘 복사본(방문 주소가 들어 있다)을 지운다.
+        # 중복 실행 lock을 잡은 뒤, 이 프로세스가 작업 폴더를 만들기 전에 한 번만 한다.
+        remove_stale_work_dirs(WORK_DIR_PREFIX)
         _Handler.db_path = args.db_path
         logger.info("포트 %d에서 집계 API를 시작합니다. DB: %s", args.port, args.db_path)
         server = ThreadingHTTPServer(("127.0.0.1", args.port), _Handler)

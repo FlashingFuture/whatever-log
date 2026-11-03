@@ -6,23 +6,31 @@ Chromium 계열(Chrome, Edge, Brave, Vivaldi)을 지원한다. 브라우저 확�
 남긴다. 제목·경로·쿼리는 저장하지 않고 버린다(docs/data-handling.md).
 
 한계(추정이라는 점): 제목이 같은 서로 다른 사이트(새 탭 등)는 가장 최근 방문으로 고르고,
-방문 기록에 아직 안 남은 페이지나 제목만 바뀐 페이지는 못 찾는다(None). 시크릿 창은
-방문 기록이 없어 자연히 None이다.
+방문 기록에 아직 안 남은 페이지나 제목만 바뀐 페이지는 못 찾는다(None). 시크릿 창은 방문
+기록이 남지 않지만, 창 제목에는 시크릿 표시가 없어서 같은 제목의 페이지를 일반 창에서 방문한
+적이 있으면 그 도메인으로 기록될 수 있다 — 두 경우를 구분하지 못한다.
 
-브라우저는 History 파일을 쓰는 중이라 원본을 열지 않고 읽기 전용 복사본을 만들어 읽는다.
-복사는 원본이 바뀌었을 때만 한다.
+브라우저는 History 파일을 쓰는 중이라 원본을 열지 않고 읽기 전용 복사본을 만들어 읽는다(복사
+방식과 작업 폴더 규칙은 chromium.snapshot). 복사는 원본이 바뀌었을 때만 한다.
 """
 
 import logging
 import re
 import shutil
 import sqlite3
-import tempfile
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
 from chromium.browsers import BROWSER_BY_PROCESS, Browser
-from chromium.profiles import read_profile_names
+from chromium.profiles import profile_folders, read_profile_names
+from chromium.snapshot import (
+    Fingerprint,
+    create_work_dir,
+    fingerprint,
+    remove_stale_work_dirs,
+    snapshot_database,
+)
 from chromium.urls import domain_of
 
 logger = logging.getLogger("recorder")
@@ -95,26 +103,15 @@ def title_candidates(
     return candidates
 
 
-def remove_stale_work_dirs() -> None:
-    """recorder가 비정상 종료해 close()가 못 불린 복사본이 임시 폴더에 남아 있으면 지운다.
-
-    방문 기록의 사본이 디스크에 오래 남지 않게 하려는 것이다. recorder는 lock으로 한 번에
-    하나만 뜨므로(SiteTracker는 lock을 잡은 뒤에 만들어진다) 다른 실행의 폴더를 지울 염려가
-    없다. 브라우저마다 만드는 리졸버가 서로의 폴더를 지우지 않게, 추적기를 만들 때 한 번만 부른다.
-    """
-    for stale in Path(tempfile.gettempdir()).glob(f"{_WORK_DIR_PREFIX}*"):
-        shutil.rmtree(stale, ignore_errors=True)
-
-
 class BrowserSiteResolver:
     """한 브라우저의 창 제목으로 지금 보는 사이트의 도메인을 찾는다. 상태는 복사본 캐시뿐이다."""
 
     def __init__(self, browser: Browser, user_data_dir: Path | None = None) -> None:
         self._browser = browser
         self._user_data_dir = user_data_dir or browser.user_data_dir()
-        self._work_dir = Path(tempfile.mkdtemp(prefix=_WORK_DIR_PREFIX))
-        # 프로필 폴더 -> (원본 mtime_ns, size, 복사본 경로). 같으면 다시 복사하지 않는다.
-        self._copies: dict[str, tuple[int, int, Path]] = {}
+        self._work_dir = create_work_dir(_WORK_DIR_PREFIX)
+        # 프로필 폴더 -> (원본 fingerprint, 복사본 경로). 같으면 다시 복사하지 않는다.
+        self._copies: dict[str, tuple[Fingerprint, Path]] = {}
 
     def close(self) -> None:
         """복사본을 지운다. 방문 기록의 사본이 디스크에 남지 않게 종료 때 부른다."""
@@ -133,11 +130,16 @@ class BrowserSiteResolver:
         return None
 
     def _resolve_page(self, parsed: ParsedTitle, profiles: dict[str, str]) -> str | None:
-        folders = [
-            folder
-            for folder, name in profiles.items()
-            if parsed.profile is None or name == parsed.profile
-        ]
+        if profiles:
+            folders = [
+                folder
+                for folder, name in profiles.items()
+                if parsed.profile is None or name == parsed.profile
+            ]
+        else:
+            # Local State를 못 읽으면 프로필 이름을 모른다(parsed.profile도 None) — 폴더 이름으로
+            # 찾는다(아이콘 조회와 같은 규칙).
+            folders = profile_folders(self._user_data_dir)
         # 프로필을 모를 땐 여러 프로필을 다 찾아, 방문 시각이 가장 최근인 결과를 쓴다.
         best: tuple[int, str] | None = None
         for folder in folders:
@@ -151,19 +153,14 @@ class BrowserSiteResolver:
         if copy is None:
             return None
         try:
-            connection = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
+            with closing(sqlite3.connect(f"file:{copy.as_posix()}?mode=ro", uri=True)) as db:
+                rows = db.execute(
+                    "SELECT url, last_visit_time FROM urls WHERE title = ? "
+                    "ORDER BY last_visit_time DESC LIMIT 5",
+                    (page,),
+                ).fetchall()
         except sqlite3.Error:
             return None
-        try:
-            rows = connection.execute(
-                "SELECT url, last_visit_time FROM urls WHERE title = ? "
-                "ORDER BY last_visit_time DESC LIMIT 5",
-                (page,),
-            ).fetchall()
-        except sqlite3.Error:
-            return None
-        finally:
-            connection.close()
         for url, visited_at in rows:
             domain = domain_of(url)
             if domain:
@@ -172,21 +169,18 @@ class BrowserSiteResolver:
 
     def _history_copy(self, folder: str) -> Path | None:
         source = self._user_data_dir / folder / "History"
-        try:
-            stat = source.stat()
-        except OSError:
-            return None
-        if stat.st_size > MAX_HISTORY_BYTES:
+        current = fingerprint(source)
+        if current is None or current[0][1] > MAX_HISTORY_BYTES:
             return None
         cached = self._copies.get(folder)
-        if cached and cached[:2] == (stat.st_mtime_ns, stat.st_size):
-            return cached[2]
+        if cached and cached[0] == current:
+            return cached[1]
         target = self._work_dir / f"{folder.replace(' ', '_')}.db"
-        try:
-            shutil.copyfile(source, target)
-        except OSError:
+        if not snapshot_database(source, target):
+            # 복사에 실패하면 캐시에 남은 옛 복사본도 믿지 않는다(다음 틱에 다시 시도).
+            self._copies.pop(folder, None)
             return None
-        self._copies[folder] = (stat.st_mtime_ns, stat.st_size, target)
+        self._copies[folder] = (current, target)
         return target
 
 
@@ -200,7 +194,9 @@ class SiteTracker:
     """
 
     def __init__(self, resolvers: dict[str, BrowserSiteResolver] | None = None) -> None:
-        remove_stale_work_dirs()
+        # 이전 실행이 비정상 종료하며 남긴 방문 기록 복사본을 지운다. 리졸버가 작업 폴더를 만들기
+        # 전에 한 번만 한다(다른 프로세스의 살아 있는 폴더는 지우지 않는다 — chromium.snapshot).
+        remove_stale_work_dirs(_WORK_DIR_PREFIX)
         # 프로세스 이름 -> 리졸버. 테스트가 가짜 리졸버를 넣을 수 있게 열어 둔다.
         self._resolvers: dict[str, BrowserSiteResolver] = resolvers if resolvers is not None else {}
         self.browser_ticks = 0

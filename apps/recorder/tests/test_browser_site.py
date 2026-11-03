@@ -4,6 +4,7 @@ from pathlib import Path
 
 from chromium.browsers import BROWSER_BY_PROCESS
 
+import recorder.browser_site as recorder_browser_site
 from recorder.browser_site import (
     BrowserSiteResolver,
     ParsedTitle,
@@ -195,7 +196,7 @@ def test_resolver_copies_history_only_when_it_changed(tmp_path) -> None:
     resolver = BrowserSiteResolver(CHROME, tmp_path)
     try:
         assert resolver.resolve("뉴스 - Google Chrome") == "a.example.com"
-        first_copy = resolver._copies["Default"][2]
+        first_copy = resolver._copies["Default"][1]
         first_mtime = first_copy.stat().st_mtime_ns
 
         assert resolver.resolve("뉴스 - Google Chrome") == "a.example.com"
@@ -207,6 +208,66 @@ def test_resolver_copies_history_only_when_it_changed(tmp_path) -> None:
         conn.close()
 
         assert resolver.resolve("새 글 - Google Chrome") == "b.example.com"
+    finally:
+        resolver.close()
+
+
+def test_resolver_recopies_when_only_the_wal_changed(tmp_path, monkeypatch) -> None:
+    """WAL 모드에서는 새 방문이 한동안 -wal에만 있다 — 본 파일이 그대로여도 복사본을 새로 만든다."""
+    _write_browser(
+        tmp_path, {"Default": "개인"}, {"Default": [("뉴스", "https://a.example.com/", 1)]}
+    )
+    copies: list[Path] = []
+    original = recorder_browser_site.snapshot_database
+    monkeypatch.setattr(
+        recorder_browser_site,
+        "snapshot_database",
+        lambda source, target: (copies.append(target), original(source, target))[1],
+    )
+    resolver = BrowserSiteResolver(CHROME, tmp_path)
+    try:
+        resolver.resolve("뉴스 - Google Chrome")
+        resolver.resolve("뉴스 - Google Chrome")
+        assert len(copies) == 1
+
+        (tmp_path / "Default" / "History-wal").write_bytes(b"new visits")
+        resolver.resolve("뉴스 - Google Chrome")
+
+        assert len(copies) == 2
+    finally:
+        resolver.close()
+
+
+def test_a_failed_copy_drops_the_cached_copy_so_it_is_retried(tmp_path, monkeypatch) -> None:
+    _write_browser(
+        tmp_path, {"Default": "개인"}, {"Default": [("뉴스", "https://a.example.com/", 1)]}
+    )
+    resolver = BrowserSiteResolver(CHROME, tmp_path)
+    try:
+        assert resolver.resolve("뉴스 - Google Chrome") == "a.example.com"
+        assert "Default" in resolver._copies
+
+        monkeypatch.setattr(recorder_browser_site, "snapshot_database", lambda s, t: False)
+        conn = sqlite3.connect(tmp_path / "Default" / "History")
+        conn.execute("INSERT INTO urls VALUES ('https://b.example.com/', '새 글', 9)")
+        conn.commit()
+        conn.close()
+
+        assert resolver.resolve("새 글 - Google Chrome") is None
+        assert "Default" not in resolver._copies  # 옛 복사본을 믿고 계속 쓰지 않는다
+    finally:
+        resolver.close()
+
+
+def test_resolver_falls_back_to_profile_folders_when_local_state_is_unreadable(tmp_path) -> None:
+    """Local State가 없거나 깨져도 Default/Profile N 폴더의 방문 기록은 찾는다."""
+    _write_browser(
+        tmp_path, {"Default": "개인"}, {"Default": [("뉴스", "https://a.example.com/", 1)]}
+    )
+    (tmp_path / "Local State").write_text("not json", encoding="utf-8")
+    resolver = BrowserSiteResolver(CHROME, tmp_path)
+    try:
+        assert resolver.resolve("뉴스 - Google Chrome") == "a.example.com"
     finally:
         resolver.close()
 

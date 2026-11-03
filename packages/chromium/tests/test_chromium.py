@@ -35,6 +35,21 @@ def test_reads_profile_names_and_tolerates_a_missing_or_broken_file(tmp_path) ->
     assert read_profile_names(tmp_path) == {"Default": "개인"}
 
 
+@pytest.mark.parametrize(
+    "state",
+    [
+        {"profile": {"info_cache": ["not", "a", "dict"]}},
+        {"profile": {"info_cache": {"Default": "not a dict"}}},
+        {"profile": []},
+        [],
+    ],
+)
+def test_unexpected_local_state_shapes_are_treated_as_unreadable(tmp_path, state) -> None:
+    (tmp_path / "Local State").write_text(json.dumps(state), encoding="utf-8")
+
+    assert read_profile_names(tmp_path) == {}
+
+
 def test_profile_folders_prefers_local_state_and_falls_back_to_folder_names(tmp_path) -> None:
     for folder in ("Default", "Profile 1", "Crashpad", "Guest Profile"):
         (tmp_path / folder).mkdir()

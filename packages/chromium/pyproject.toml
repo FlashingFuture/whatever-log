@@ -3,7 +3,9 @@ name = "chromium"
 version = "0.1.0"
 description = "Chromium 계열 브라우저(Chrome·Edge·Brave·Vivaldi)의 프로필 위치와 URL 도메인 처리 — recorder(수집)와 hub(아이콘)가 함께 쓰는 범용 규칙"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "psutil>=6.1.0",
+]
 
 [build-system]
 requires = ["hatchling"]

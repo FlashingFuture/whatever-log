@@ -1,4 +1,5 @@
 import type { SiteRangeUsage } from "../api";
+import { maxOf } from "../stats";
 import { createSiteIcon } from "./ProcessIcon";
 import styles from "./SiteUsageList.module.css";
 import { createUsageRow } from "./UsageRow";
@@ -33,7 +34,7 @@ export function createSiteUsageList(usage: SiteRangeUsage): HTMLElement {
   }
 
   // 가장 오래 본 사이트를 기준으로 막대 폭을 정한다(다른 목록과 같은 방식).
-  const maxTotal = Math.max(...usage.by_site.map((site) => site.total_seconds));
+  const maxTotal = maxOf(usage.by_site, (site) => site.total_seconds);
   const list = document.createElement("div");
   list.className = styles.list;
   for (const site of usage.by_site) {
@@ -59,6 +60,14 @@ export function createSiteUsageList(usage: SiteRangeUsage): HTMLElement {
     list,
     note("창 제목으로 추정한 값이라, 알아내지 못한 시간은 포함되지 않습니다."),
   );
+  return section;
+}
+
+/** 사이트 정보를 아직 받는 중일 때의 자리. 칸별 차트를 먼저 보여 주고, 도착하면 이 자리를 바꾼다. */
+export function createSiteUsageLoading(): HTMLElement {
+  const section = document.createElement("section");
+  section.className = styles.section;
+  section.append(heading(), note("불러오는 중…"));
   return section;
 }
 
