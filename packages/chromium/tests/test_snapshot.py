@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import time
 
 from chromium.snapshot import (
     create_work_dir,
@@ -50,6 +51,27 @@ def test_snapshot_includes_records_that_only_exist_in_the_wal(tmp_path) -> None:
     finally:
         writer.close()
         reader.close()
+
+
+def test_snapshot_does_not_wait_forever_for_a_database_the_browser_keeps_locked(tmp_path) -> None:
+    """브라우저가 쓰는 중인 프로필의 파일은 계속 잠겨 있다 — backup()은 풀릴 때까지 무한히 재시도해
+    hub 요청과 recorder 틱 루프를 멈췄다. 기다리지 않고 파일 복사로 넘어가야 한다."""
+    source = tmp_path / "src.db"
+    _make_db(source, ("committed",))
+    holder = sqlite3.connect(source, isolation_level=None)
+    holder.execute("BEGIN EXCLUSIVE")  # 다른 연결이 읽지 못하게 잠근다(브라우저의 배타적 잠금처럼)
+    holder.execute("INSERT INTO t VALUES ('uncommitted')")
+    try:
+        started = time.monotonic()
+        copied = snapshot_database(source, tmp_path / "copy.db")
+        elapsed = time.monotonic() - started
+
+        assert copied
+        assert elapsed < 3, f"잠긴 파일에서 {elapsed:.1f}초 걸렸다(무한 재시도)"
+        assert (tmp_path / "copy.db").exists()
+    finally:
+        holder.rollback()
+        holder.close()
 
 
 def test_snapshot_returns_false_and_leaves_nothing_for_a_missing_source(tmp_path) -> None:

@@ -42,21 +42,38 @@ def fingerprint(source: Path) -> Fingerprint | None:
     return main, _stat_key(source.with_name(source.name + _WAL_SUFFIX))
 
 
+# sqlite3 상수: 원본이 다른 연결에 잠겨 있을 때 backup 한 단계가 돌려주는 상태.
+_SQLITE_BUSY = 5
+_SQLITE_LOCKED = 6
+
+
+def _abort_if_locked(status: int, remaining: int, total: int) -> None:
+    """backup 진행 콜백: 원본이 잠겨 있으면 중단한다.
+
+    backup()은 잠겨 있으면 기본적으로 풀릴 때까지 0.25초씩 쉬며 **무한히** 다시 시도한다. 브라우저가
+    계속 잠가 두는 파일(지금 쓰는 프로필)에서는 영영 안 끝나서 hub 요청이나 recorder의 틱 루프가
+    멈춘다. 예외를 던지면 backup이 중단되고 sqlite3.Error로 올라가 호출부가 파일 복사로 넘어간다.
+    """
+    if status in (_SQLITE_BUSY, _SQLITE_LOCKED):
+        raise sqlite3.OperationalError("source database is locked")
+
+
 def snapshot_database(source: Path, target: Path) -> bool:
     """source를 target에 복사한다. 성공하면 True.
 
-    SQLite backup API는 원본을 한 번의 읽기로 복사해서 복사본이 하나의 일관된 상태가 된다. 잠금
-    등으로 backup이 안 되면 파일 복사로 대신한다(쓰는 도중이면 덜 일관될 수 있다). 둘 다 안 되면
-    반쯤 만들어진 target을 지우고 False — 호출부가 부분 복사본을 쓰지 않게 한다.
+    SQLite backup API는 원본을 한 번의 읽기로 복사해서 복사본이 하나의 일관된 상태가 된다. 브라우저가
+    지금 쓰는 중인 프로필의 파일은 브라우저가 잠가 두어(배타적 잠금) backup이 안 된다 — 이때는 기다리지
+    않고(아래 _abort_if_locked) 바로 파일 복사로 대신한다(쓰는 도중이면 덜 일관될 수 있다). 둘 다
+    안 되면 반쯤 만들어진 target을 지우고 False — 호출부가 부분 복사본을 쓰지 않게 한다.
     """
     try:
         with (
             contextlib.closing(
-                sqlite3.connect(f"file:{source.as_posix()}?mode=ro", uri=True, timeout=1)
+                sqlite3.connect(f"file:{source.as_posix()}?mode=ro", uri=True, timeout=0.1)
             ) as src,
             contextlib.closing(sqlite3.connect(target)) as dst,
         ):
-            src.backup(dst)
+            src.backup(dst, progress=_abort_if_locked)
         return True
     except sqlite3.Error:
         pass
