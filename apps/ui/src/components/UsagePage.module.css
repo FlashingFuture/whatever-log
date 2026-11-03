@@ -1,0 +1,21 @@
+/* 왼쪽 요약 + 오른쪽 차트. 좁은 창에서는 요약이 위, 차트가 아래로 쌓인다. */
+.dashboard {
+  display: grid;
+  grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr);
+  gap: var(--space-8);
+  align-items: start;
+}
+/* 차트가 길어져 페이지가 세로로 스크롤돼도 요약은 화면 위쪽에 남는다. */
+.side {
+  position: sticky;
+  top: var(--space-4);
+}
+@media (max-width: 640px) {
+  .dashboard {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-6);
+  }
+  .side {
+    position: static;
+  }
+}
