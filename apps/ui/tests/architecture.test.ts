@@ -9,31 +9,20 @@ import { fileURLToPath } from "node:url";
  * 생기면 실패한다 — 폴더 구조가 시간이 지나며 슬금슬금 뒤엉키지 않게 하려는 것이다
  * (예: lib가 api를 알게 되거나, 컴포넌트가 화면(pages)을 가져다 쓰는 일).
  *
- * 아래쪽 층일수록 위를 모른다: lib < api·domain < router < components < layouts·pages < main.
+ * 아래쪽 층일수록 위를 모른다: lib·api < router < components < layouts·pages < main.
  */
 const ALLOWED: Record<string, string[]> = {
-  // DOM·hub를 모르는 순수 유틸
+  // DOM·hub를 모르는 순수 로직(시간 형식, 로컬 시간 구간 계산 등)
   lib: [],
   // hub 통신
   api: [],
-  // 앱 개념 로직(구간·요약·브라우저 목록). 응답 타입만 api에서 가져온다
-  domain: ["lib", "api"],
   // 주소 ↔ 화면 대응, 스크롤 복원
   router: [],
-  components: ["lib", "api", "domain", "router", "components"],
+  components: ["lib", "api", "router", "components"],
   layouts: ["components", "router", "lib"],
-  pages: ["lib", "api", "domain", "router", "components"],
+  pages: ["lib", "api", "router", "components"],
   // 진입점은 전부 엮는다
-  ".": [
-    "lib",
-    "api",
-    "domain",
-    "router",
-    "components",
-    "layouts",
-    "pages",
-    "styles",
-  ],
+  ".": ["lib", "api", "router", "components", "layouts", "pages", "styles"],
 };
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), "..", "src");

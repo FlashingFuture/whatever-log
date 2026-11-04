@@ -1,4 +1,8 @@
-import { fetchProcessUsage, fetchSiteUsage } from "../api";
+import {
+  fetchProcessUsage,
+  fetchSiteUsage,
+  isSiteTrackingBrowser,
+} from "../api";
 import { createPeriodView } from "../components/period/PeriodView";
 import { createBucketChart } from "../components/usage/BucketChart";
 import { createProcessIcon } from "../components/usage/ProcessIcon";
@@ -7,8 +11,7 @@ import {
   createSiteUsageLoading,
   createSiteUsageUnavailable,
 } from "../components/usage/SiteUsageList";
-import { isBrowserProcess } from "../domain/browsers";
-import { bucketsOf } from "../domain/period";
+import { bucketsOf } from "../lib/period";
 import { settleWithin } from "../lib/settle";
 import styles from "./ProcessPage.module.css";
 
@@ -38,7 +41,7 @@ export function mountProcessPage(
       const buckets = bucketsOf(period);
       // 사이트 목록은 덤이다: 칸별 차트와 같이 요청하되, 못 불러와도(옛 hub 등) 차트는 그대로
       // 보여 주고, 느려도 차트는 최대 SITES_GRACE_MS만 늦춰진다. 이 promise는 거부되지 않는다.
-      const sitesPromise = isBrowserProcess(process)
+      const sitesPromise = (await isSiteTrackingBrowser(process))
         ? fetchSiteUsage(process, period.start, period.end).then(
             createSiteUsageList,
             createSiteUsageUnavailable,

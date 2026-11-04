@@ -8,7 +8,7 @@ import {
   periodContaining,
   shiftPeriod,
   WEEKDAYS_FROM_MONDAY,
-} from "../../domain/period";
+} from "../../lib/period";
 import { createStepper } from "../common/Stepper";
 import styles from "./CalendarPicker.module.css";
 

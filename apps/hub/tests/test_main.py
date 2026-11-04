@@ -349,3 +349,28 @@ def test_icon_requests_from_other_pages_get_the_same_answer_whether_or_not_it_wa
     assert exc_info.value.code == 404
     assert exc_info.value.headers["Cache-Control"] == "no-store"
     assert json.loads(exc_info.value.read())["error"]["code"] == "not_found"
+
+
+def test_usage_endpoint_includes_the_range_summary(running_server) -> None:
+    """화면의 "총 사용 시간"·"가장 많이 사용한 프로그램"이 서버가 계산한 요약을 그대로 쓴다."""
+    start = _TICK_AT - timedelta(minutes=1)
+    end = _TICK_AT + timedelta(minutes=1)
+
+    with urllib.request.urlopen(_usage_url(running_server, start, end), timeout=2) as response:
+        payload = json.loads(response.read())
+
+    assert payload["summary"] == {
+        "active_seconds": 15.0,
+        "idle_seconds": 0.0,
+        "top": {"process": "chrome.exe", "active_seconds": 15.0},
+    }
+
+
+def test_browsers_endpoint_lists_the_supported_browser_processes(running_server) -> None:
+    from chromium.browsers import BROWSERS
+
+    with urllib.request.urlopen(f"{running_server}/api/browsers", timeout=2) as response:
+        payload = json.loads(response.read())
+
+    assert payload == {"browsers": [browser.process_name for browser in BROWSERS]}
+    assert "chrome.exe" in payload["browsers"] and "msedge.exe" in payload["browsers"]

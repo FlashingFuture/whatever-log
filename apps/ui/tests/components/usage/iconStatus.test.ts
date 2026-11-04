@@ -5,7 +5,7 @@ import {
   IconStatusCache,
   MISSING_TTL_MS,
   TRANSIENT_TTL_MS,
-} from "../../src/domain/iconStatus.ts";
+} from "../../../src/components/usage/iconStatus.ts";
 
 test("없음은 5분, 일시적 실패는 30초 동안만 기억한다", () => {
   const cache = new IconStatusCache();

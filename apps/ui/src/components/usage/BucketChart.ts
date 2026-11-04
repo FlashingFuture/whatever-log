@@ -1,10 +1,10 @@
 import type { ProcessSeries } from "../../api";
+import { formatDuration } from "../../lib/format";
 import {
   type Bucket,
   formatBucketLabel,
   type PeriodUnit,
-} from "../../domain/period";
-import { formatDuration } from "../../lib/format";
+} from "../../lib/period";
 import { maxOf } from "../../lib/stats";
 import styles from "./BucketChart.module.css";
 import { createUsageLegend } from "./UsageLegend";

@@ -1,5 +1,5 @@
 import { iconUrl, siteIconUrl } from "../../api";
-import { IconStatusCache } from "../../domain/iconStatus";
+import { IconStatusCache } from "./iconStatus";
 import styles from "./ProcessIcon.module.css";
 
 // 아이콘이 없다고 확인되었거나(404) 일시적으로 실패한 프로세스의 기억. 15초마다 차트를 다시
