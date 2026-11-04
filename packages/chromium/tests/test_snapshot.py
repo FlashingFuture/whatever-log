@@ -5,11 +5,13 @@ from contextlib import closing
 
 import pytest
 
+import chromium.snapshot as snapshot_module
 from chromium.snapshot import (
     create_work_dir,
     fingerprint,
     open_readonly,
     remove_stale_work_dirs,
+    remove_work_dir,
     snapshot_database,
 )
 
@@ -93,6 +95,59 @@ def test_snapshot_does_not_wait_forever_for_a_database_the_browser_keeps_locked(
     finally:
         holder.rollback()
         holder.close()
+
+
+def test_a_copy_taken_while_the_source_kept_changing_is_not_used(tmp_path, monkeypatch) -> None:
+    """파일 복사로 대신할 때 복사하는 동안 원본이 바뀌면 어중간한 상태일 수 있다 — 쓰지 않는다."""
+    source = tmp_path / "src.db"
+    source.write_bytes(b"not a database")  # backup이 안 되는 파일이라 파일 복사로 넘어간다
+    real_copy = snapshot_module.shutil.copyfile
+
+    def copy_then_change(src, dst):
+        result = real_copy(src, dst)
+        with open(src, "ab") as f:
+            f.write(b"x")  # 복사 직후 브라우저가 계속 쓴다
+        return result
+
+    monkeypatch.setattr(snapshot_module.shutil, "copyfile", copy_then_change)
+
+    assert not snapshot_database(source, tmp_path / "copy.db")
+    assert not (tmp_path / "copy.db").exists()
+
+
+def test_a_copy_is_retried_once_when_the_source_changed_during_the_first_try(
+    tmp_path, monkeypatch
+) -> None:
+    source = tmp_path / "src.db"
+    source.write_bytes(b"not a database")
+    real_copy = snapshot_module.shutil.copyfile
+    attempts = []
+
+    def change_only_the_first_time(src, dst):
+        result = real_copy(src, dst)
+        attempts.append(1)
+        if len(attempts) == 1:
+            with open(src, "ab") as f:
+                f.write(b"x")
+        return result
+
+    monkeypatch.setattr(snapshot_module.shutil, "copyfile", change_only_the_first_time)
+
+    assert snapshot_database(source, tmp_path / "copy.db")
+    assert len(attempts) == 2
+    assert (tmp_path / "copy.db").read_bytes() == source.read_bytes()
+
+
+def test_remove_work_dir_reports_whether_the_folder_is_gone(tmp_path, monkeypatch) -> None:
+    folder = tmp_path / "work"
+    folder.mkdir()
+    (folder / "x").write_bytes(b"1")
+    assert remove_work_dir(folder) and not folder.exists()
+
+    stuck = tmp_path / "stuck"
+    stuck.mkdir()
+    monkeypatch.setattr(snapshot_module.shutil, "rmtree", lambda *a, **k: None)  # 지워지지 않는다
+    assert not remove_work_dir(stuck)
 
 
 def test_snapshot_returns_false_and_leaves_nothing_for_a_missing_source(tmp_path) -> None:

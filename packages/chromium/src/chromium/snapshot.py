@@ -42,6 +42,9 @@ def fingerprint(source: Path) -> Fingerprint | None:
     return main, _stat_key(source.with_name(source.name + _WAL_SUFFIX))
 
 
+# 잠긴 원본을 파일 복사로 대신할 때, 복사하는 동안 원본이 바뀌었으면 다시 해 보는 횟수.
+_COPY_ATTEMPTS = 2
+
 # sqlite3 상수: 원본이 다른 연결에 잠겨 있을 때 backup 한 단계가 돌려주는 상태.
 _SQLITE_BUSY = 5
 _SQLITE_LOCKED = 6
@@ -73,8 +76,11 @@ def snapshot_database(source: Path, target: Path) -> bool:
 
     SQLite backup API는 원본을 한 번의 읽기로 복사해서 복사본이 하나의 일관된 상태가 된다. 브라우저가
     지금 쓰는 중인 프로필의 파일은 브라우저가 잠가 두어(배타적 잠금) backup이 안 된다 — 이때는 기다리지
-    않고(아래 _abort_if_locked) 바로 파일 복사로 대신한다(쓰는 도중이면 덜 일관될 수 있다). 둘 다
-    안 되면 반쯤 만들어진 target을 지우고 False — 호출부가 부분 복사본을 쓰지 않게 한다.
+    않고(아래 _abort_if_locked) 파일 복사로 대신하되, 복사하는 동안 원본이 바뀌었으면(쓰는 도중의
+    어중간한 상태일 수 있다) 한 번 더 해 보고, 그래도 안정적이지 않으면 False다. 복사본이 일관된
+    상태라고 확인되지 않으면 쓰지 않는다 — 호출부가 부분 복사본을 읽지 않게, 실패하면 반쯤 만들어진
+    target은 지운다. (-wal을 본 파일과 따로 복사해 일관성을 가정하지 않는다. 원본이 바뀌었는지가 두 파일
+    모두를 보는 fingerprint로 확인되기 때문이다.)
     """
     try:
         with (
@@ -85,12 +91,23 @@ def snapshot_database(source: Path, target: Path) -> bool:
         return True
     except sqlite3.Error:
         pass
-    try:
-        shutil.copyfile(source, target)
-        return True
-    except OSError:
-        target.unlink(missing_ok=True)
-        return False
+    for _ in range(_COPY_ATTEMPTS):
+        before = fingerprint(source)
+        try:
+            shutil.copyfile(source, target)
+        except OSError:
+            break
+        if before is not None and fingerprint(source) == before:
+            return True
+    target.unlink(missing_ok=True)
+    return False
+
+
+def remove_work_dir(path: Path) -> bool:
+    """작업 폴더를 지운다. 지워졌으면 True. 안 지워지면(파일이 잠겨 있는 등) False — 호출부가 기억해 두었다가
+    다시 시도한다(복사본에는 방문 주소가 들어 있어서 조용히 남겨 두면 안 된다)."""
+    shutil.rmtree(path, ignore_errors=True)
+    return not path.exists()
 
 
 _PID_PART = re.compile(r"(\d+)-")

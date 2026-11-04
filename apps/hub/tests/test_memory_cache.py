@@ -56,6 +56,18 @@ def test_a_miss_is_remembered_until_it_expires_and_a_hit_clears_it() -> None:
     assert not cache.is_missing("k")
 
 
+def test_expired_missing_records_are_pruned_when_new_ones_are_added() -> None:
+    clock = _Clock()
+    cache = ImageMemoryCache(missing_ttl_seconds=30, clock=clock)
+    for index in range(50):
+        cache.mark_missing(f"old{index}")  # 한 번 물어보고 다시 안 오는 키들
+
+    clock.now += 31
+    cache.mark_missing("new")
+
+    assert list(cache._missing_until) == ["new"]
+
+
 def _race(cache: ImageMemoryCache, key: str, load, count: int = 6) -> list:
     results: list = []
     threads = [

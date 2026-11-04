@@ -14,6 +14,7 @@ from recorder.sampling import TickSample
 from recorder.storage import open_db, save_tick
 
 from hub.__main__ import _Handler
+import hub.site_icons as site_icons_module
 from hub.memory_cache import ImageMemoryCache
 from hub.site_icons import (
     SITE_ICON_TTL_SECONDS,
@@ -207,7 +208,9 @@ def test_concurrent_requests_for_one_domain_read_the_browser_files_once(
     assert all(result is not None for result in results)
 
 
-def test_reads_each_bitmap_once_even_when_many_pages_share_an_icon(tmp_path) -> None:
+def test_reads_each_bitmap_once_even_when_many_pages_share_an_icon(
+    tmp_path, monkeypatch
+) -> None:
     """같은 아이콘을 쓰는 페이지가 수천 개여도 비트맵 행이 페이지 수만큼 반복 적재되면 안 된다."""
     (tmp_path / "Default").mkdir()
     conn = sqlite3.connect(tmp_path / "Default" / "Favicons")
@@ -228,12 +231,16 @@ def test_reads_each_bitmap_once_even_when_many_pages_share_an_icon(tmp_path) -> 
     conn.commit()
     conn.close()
     store = SiteIconStore([tmp_path])
-    seen = []
-    original = store._query_profile
-    store._query_profile = lambda source, patterns: (seen.append(original(source, patterns)), seen[-1])[1]
+    rows_read = []
+    original = site_icons_module._best_candidate
+
+    def counting(rows):
+        return original(row for row in rows if rows_read.append(1) is None)
+
+    monkeypatch.setattr(site_icons_module, "_best_candidate", counting)
 
     assert store.get("news.example.com")[1] == _png("shared")
-    assert [len(rows) for rows in seen] == [1]
+    assert len(rows_read) == 1
 
 
 def test_copies_for_different_domains_are_limited_to_a_few_at_a_time(tmp_path, monkeypatch) -> None:
@@ -469,3 +476,104 @@ def test_reads_icons_from_every_installed_browser(tmp_path) -> None:
 
     assert store.get("a.example.com")[1] == _png("from-chrome")
     assert store.get("b.example.com")[1] == _png("from-edge")
+
+
+# --- 일시적 실패와 "없음"의 구분, 프로필별 실패, 스트리밍, 정리 ---
+
+
+def test_a_temporary_read_failure_is_not_remembered_as_no_icon(tmp_path, monkeypatch) -> None:
+    """복사가 한 번 실패해도(파일 잠금 등) 곧 복구되면 다음 요청에서 아이콘이 나와야 한다."""
+    _write_favicons(tmp_path, "Default", [("https://news.example.com/", "x", 32, 1)])
+    store = SiteIconStore([tmp_path])
+    real_snapshot = site_icons_module.snapshot_database
+    monkeypatch.setattr(site_icons_module, "snapshot_database", lambda s, t: False)
+
+    assert store.get("news.example.com") is None  # 이번엔 못 읽었다
+
+    monkeypatch.setattr(site_icons_module, "snapshot_database", real_snapshot)
+    assert store.get("news.example.com")[1] == _png("x")  # 5분 기다리지 않고 바로 복구
+
+
+def test_no_icon_is_remembered_but_a_profile_without_a_favicons_file_is_not_a_failure(
+    tmp_path,
+) -> None:
+    """Favicons 파일이 없는 프로필(Local State에만 있음)은 실패가 아니라 "여기엔 없음"이다."""
+    _write_favicons(tmp_path, "Default", [("https://other.example.com/", "x", 32, 1)])
+    (tmp_path / "Profile 1").mkdir()
+    (tmp_path / "Local State").write_text(
+        json.dumps({"profile": {"info_cache": {"Default": {}, "Profile 1": {}}}}), encoding="utf-8"
+    )
+    store = SiteIconStore([tmp_path])
+    reads = []
+    original = store._read_from_browsers
+    store._read_from_browsers = lambda d: (reads.append(d), original(d))[1]
+
+    assert store.get("news.example.com") is None
+    assert store.get("news.example.com") is None
+
+    assert reads == ["news.example.com"]  # 확인된 "없음"은 기억해서 다시 읽지 않는다
+
+
+def test_one_broken_profile_does_not_hide_the_icon_in_another_profile(tmp_path) -> None:
+    (tmp_path / "Default").mkdir()
+    (tmp_path / "Default" / "Favicons").write_bytes(b"not a sqlite file")
+    _write_favicons(tmp_path, "Profile 1", [("https://news.example.com/", "good", 32, 1)])
+    store = SiteIconStore([tmp_path])
+
+    assert store.get("news.example.com")[1] == _png("good")
+
+
+def test_a_failing_profile_is_skipped_even_when_it_raises_unexpectedly(tmp_path, monkeypatch) -> None:
+    _write_favicons(tmp_path, "Default", [("https://news.example.com/", "a", 32, 1)])
+    _write_favicons(tmp_path, "Profile 1", [("https://news.example.com/", "b", 32, 9)])
+    store = SiteIconStore([tmp_path])
+    original = store._query_profile
+
+    def flaky(source, patterns):
+        if source.parent.name == "Profile 1":
+            raise RuntimeError("boom")
+        return original(source, patterns)
+
+    monkeypatch.setattr(store, "_query_profile", flaky)
+
+    assert store.get("news.example.com")[1] == _png("a")
+
+
+def test_best_candidate_streams_rows_without_building_a_list() -> None:
+    """행을 한 줄씩 소비하고(제너레이터), 선호 크기 → 최근 갱신 순으로 고른다."""
+    consumed = []
+
+    def rows():
+        for row in [(_png("small"), 16, 9), (_png("big-old"), 32, 1), (_png("big-new"), 32, 5)]:
+            consumed.append(row[0])
+            yield row
+
+    assert _pick_best(rows()) == _png("big-new")
+    assert len(consumed) == 3
+
+
+def test_a_temp_folder_that_cannot_be_removed_is_logged_and_retried(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    _write_favicons(tmp_path, "Default", [("https://news.example.com/", "x", 32, 1)])
+    store = SiteIconStore([tmp_path])
+    real_remove = site_icons_module.remove_work_dir
+    stuck = []
+
+    def fail_once(path):
+        if not stuck:
+            stuck.append(path)
+            return False  # 파일이 잠겨 못 지웠다
+        return real_remove(path)
+
+    monkeypatch.setattr(site_icons_module, "remove_work_dir", fail_once)
+    with caplog.at_level("WARNING", logger="hub"):
+        assert store.get("news.example.com") is not None
+
+    assert any("지우지 못했습니다" in record.message for record in caplog.records)
+    assert "news.example.com" not in caplog.text  # 도메인은 로그에 남기지 않는다
+    assert store._leftover_dirs == stuck
+
+    real_remove(stuck[0])  # 폴더 정리는 실제로 해 두고
+    assert store.get("other.example.com") is None  # 다음 복사 때 남은 폴더를 다시 지워 본다
+    assert store._leftover_dirs == []

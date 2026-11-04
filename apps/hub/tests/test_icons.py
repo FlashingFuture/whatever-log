@@ -115,13 +115,20 @@ def test_concurrent_failed_extractions_run_once(tmp_path) -> None:
         return None
 
     store = IconStore(tmp_path / "icons", failing_extract)
-    threads = [threading.Thread(target=store.get, args=(str(exe),)) for _ in range(6)]
+    results = []
+
+    def collect() -> None:
+        results.append(store.get(str(exe)))
+
+    threads = [threading.Thread(target=collect) for _ in range(6)]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
 
     assert len(calls) == 1
+    # 워커 스레드의 예외는 join()으로 전파되지 않는다 — 여섯 호출이 모두 값을 돌려줬는지 본다.
+    assert results == [None] * 6
 
 
 def test_store_extracts_once_then_serves_from_memory_and_disk(tmp_path) -> None:

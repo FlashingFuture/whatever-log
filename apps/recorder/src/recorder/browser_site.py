@@ -17,7 +17,6 @@ Chromium 계열(Chrome, Edge, Brave, Vivaldi)을 지원한다. 브라우저 확�
 import hashlib
 import logging
 import re
-import shutil
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
@@ -31,6 +30,7 @@ from chromium.snapshot import (
     fingerprint,
     open_readonly,
     remove_stale_work_dirs,
+    remove_work_dir,
     snapshot_database,
 )
 from chromium.urls import domain_of
@@ -117,7 +117,9 @@ class BrowserSiteResolver:
 
     def close(self) -> None:
         """복사본을 지운다. 방문 기록의 사본이 디스크에 남지 않게 종료 때 부른다."""
-        shutil.rmtree(self._work_dir, ignore_errors=True)
+        if not remove_work_dir(self._work_dir):
+            # 지우지 못해도 다음 시작 때 remove_stale_work_dirs가 지운다(pid가 죽은 폴더라서).
+            logger.warning("방문 기록 복사본 폴더를 지우지 못했습니다: %s", self._work_dir)
         self._copies.clear()
 
     def resolve(self, window_title: str) -> str | None:

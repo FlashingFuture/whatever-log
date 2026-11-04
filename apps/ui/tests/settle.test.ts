@@ -29,12 +29,18 @@ test("제한 시간이 지나면 undefined를 돌려주고, 원래 promise는 �
 test("먼저 끝나면 시간 제한 타이머를 정리한다", async () => {
   mock.timers.enable({ apis: ["setTimeout"] });
   try {
+    const scheduled = mock.method(globalThis, "setTimeout");
     const cleared = mock.method(globalThis, "clearTimeout");
 
     await settleWithin(Promise.resolve(1), 300);
 
-    // 정리하지 않으면 끝난 요청마다 300ms짜리 타이머가 남는다.
+    // 정리하지 않으면 끝난 요청마다 300ms짜리 타이머가 남는다. 호출 횟수뿐 아니라 방금 만든 바로
+    // 그 타이머를 정리하는지 본다(clearTimeout(undefined)는 아무것도 지우지 못한다).
     assert.equal(cleared.mock.callCount(), 1);
+    assert.equal(
+      cleared.mock.calls[0].arguments[0],
+      scheduled.mock.calls[0].result,
+    );
   } finally {
     mock.restoreAll();
     mock.timers.reset();

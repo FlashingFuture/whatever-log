@@ -88,9 +88,16 @@ class ImageMemoryCache:
             return True
 
     def mark_missing(self, key: str) -> None:
-        """찾아봤지만 없었다고 잠시 기억한다."""
+        """찾아봤지만 없었다고 잠시 기억한다. 새로 기록할 때 만료된 기억을 함께 지운다.
+
+        한 번만 물어보고 다시 안 오는 키(방문한 사이트마다 하나)의 기억이 만료돼도 is_missing으로
+        다시 확인되기 전에는 남아 있으므로, 기록할 때 같이 정리해 키가 늘어도 쌓이지 않게 한다.
+        """
         with self._guard:
-            self._missing_until[key] = self._clock() + self._missing_ttl_seconds
+            now = self._clock()
+            for expired in [k for k, until in self._missing_until.items() if now >= until]:
+                del self._missing_until[expired]
+            self._missing_until[key] = now + self._missing_ttl_seconds
 
     def get_or_load(self, key: str, load: Callable[[], bytes | None]) -> bytes | None:
         """캐시에 있으면 그것을, 없으면 load()로 만들어 넣고 돌려준다. 못 만들면 None.
