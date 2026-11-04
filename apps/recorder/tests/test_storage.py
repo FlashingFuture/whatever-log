@@ -144,3 +144,50 @@ def test_open_db_adds_exe_path_to_existing_database(tmp_path) -> None:
     conn = open_db(path)
 
     assert conn.execute("SELECT name, exe_path FROM processes").fetchall() == [("chrome.exe", None)]
+
+
+def test_save_tick_records_the_foreground_site(tmp_path) -> None:
+    """사이트 도메인은 sites에 한 번만 만들어지고, 틱이 그 id를 가리킨다."""
+    conn = open_db(tmp_path / "test.db")
+    for second, site in ((0, "news.example.com"), (15, "news.example.com"), (30, None)):
+        save_tick(
+            conn,
+            TickSample(
+                sampled_at=datetime(2026, 1, 1, 0, 0, second, tzinfo=UTC),
+                foreground_process="chrome.exe",
+                windowed_processes=frozenset({"chrome.exe"}),
+                seconds_since_last_input=0.0,
+                foreground_site=site,
+            ),
+        )
+
+    assert conn.execute("SELECT domain FROM sites").fetchall() == [("news.example.com",)]
+    domains = [
+        row[0]
+        for row in conn.execute(
+            "SELECT s.domain FROM ticks t LEFT JOIN sites s ON s.id = t.foreground_site_id "
+            "ORDER BY t.id"
+        )
+    ]
+    assert domains == ["news.example.com", "news.example.com", None]
+
+
+def test_open_db_adds_foreground_site_id_to_existing_ticks(tmp_path) -> None:
+    """foreground_site_id가 없던 예전 ticks 테이블에도 컬럼이 추가되고 기존 행이 보존된다."""
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.execute("CREATE TABLE processes (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, exe_path TEXT)")
+    old.execute(
+        "CREATE TABLE ticks (id INTEGER PRIMARY KEY, sampled_at TEXT NOT NULL, "
+        "foreground_process_id INTEGER REFERENCES processes(id), "
+        "seconds_since_last_input REAL NOT NULL)"
+    )
+    old.execute("INSERT INTO ticks (sampled_at, seconds_since_last_input) VALUES ('2026-01-01', 1.0)")
+    old.commit()
+    old.close()
+
+    conn = open_db(path)
+
+    assert conn.execute("SELECT sampled_at, foreground_site_id FROM ticks").fetchall() == [
+        ("2026-01-01", None)
+    ]

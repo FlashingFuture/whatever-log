@@ -46,6 +46,11 @@ CREATE TABLE IF NOT EXISTS tick_windowed_processes (
     PRIMARY KEY (tick_id, process_id)
 );
 
+CREATE TABLE IF NOT EXISTS sites (
+    id INTEGER PRIMARY KEY,
+    domain TEXT NOT NULL UNIQUE
+);
+
 CREATE INDEX IF NOT EXISTS idx_ticks_sampled_at ON ticks(sampled_at);
 CREATE INDEX IF NOT EXISTS idx_ticks_foreground_process_id ON ticks(foreground_process_id);
 CREATE INDEX IF NOT EXISTS idx_tick_windowed_processes_process_id
@@ -77,6 +82,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(processes)")}
     if "exe_path" not in columns:
         conn.execute("ALTER TABLE processes ADD COLUMN exe_path TEXT")
+    tick_columns = {row[1] for row in conn.execute("PRAGMA table_info(ticks)")}
+    if "foreground_site_id" not in tick_columns:
+        conn.execute(
+            "ALTER TABLE ticks ADD COLUMN foreground_site_id INTEGER REFERENCES sites(id)"
+        )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ticks_foreground_site_id ON ticks(foreground_site_id)"
+    )
 
 
 def _get_or_create_process_id(conn: sqlite3.Connection, name: str) -> int:
@@ -95,6 +108,17 @@ def _get_or_create_process_id(conn: sqlite3.Connection, name: str) -> int:
     return row[0]
 
 
+def _get_or_create_site_id(conn: sqlite3.Connection, domain: str) -> int:
+    """사이트 도메인으로 id를 가져온다. 없으면 만든다(_get_or_create_process_id와 같은 방식)."""
+    row = conn.execute(
+        "INSERT INTO sites (domain) VALUES (?) "
+        "ON CONFLICT(domain) DO UPDATE SET domain = domain "
+        "RETURNING id",
+        (domain,),
+    ).fetchone()
+    return row[0]
+
+
 def save_tick(conn: sqlite3.Connection, sample: TickSample) -> None:
     """한 틱을 하나의 트랜잭션으로 저장한다. 실패하면 전부 롤백한다."""
     conn.execute("BEGIN")
@@ -105,13 +129,21 @@ def save_tick(conn: sqlite3.Connection, sample: TickSample) -> None:
             else None
         )
 
+        foreground_site_id = (
+            _get_or_create_site_id(conn, sample.foreground_site)
+            if sample.foreground_site is not None
+            else None
+        )
+
         cursor = conn.execute(
-            "INSERT INTO ticks (sampled_at, foreground_process_id, seconds_since_last_input) "
-            "VALUES (?, ?, ?)",
+            "INSERT INTO ticks "
+            "(sampled_at, foreground_process_id, seconds_since_last_input, foreground_site_id) "
+            "VALUES (?, ?, ?, ?)",
             (
                 sample.sampled_at.isoformat(),
                 foreground_process_id,
                 sample.seconds_since_last_input,
+                foreground_site_id,
             ),
         )
         tick_id = cursor.lastrowid

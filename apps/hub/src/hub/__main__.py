@@ -23,12 +23,18 @@ import sys
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse, urlsplit
 
-from aggregation.range import process_usage_by_bucket, usage_by_range
+from aggregation.range import (
+    process_usage_by_bucket,
+    site_usage_by_range,
+    usage_by_range,
+)
 from common import api_error
+from chromium.snapshot import remove_stale_work_dirs
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
 from hub.icons import IconStore
+from hub.site_icons import SITE_ICON_TTL_SECONDS, WORK_DIR_PREFIX, SiteIconStore
 from recorder.__main__ import DEFAULT_DB_PATH
 from supervision.lock import AlreadyRunningError, acquire_lock
 from supervision.log_setup import configure_logging
@@ -50,6 +56,18 @@ logger = logging.getLogger("hub")
 # 때만 그 origin을 그대로 돌려줘서 허용한다 — desktop이 서빙하는 UI(임의
 # 포트)와 Vite dev server(5173) 둘 다 이 패턴에 맞는다.
 _ALLOWED_ORIGIN = re.compile(r"http://(127\.0\.0\.1|localhost)(:\d+)?")
+
+
+def is_trusted_page(referer: str) -> bool:
+    """아이콘 요청을 보낸 페이지(Referer)가 우리 UI인지.
+
+    아이콘은 <img>로 불려서 CORS 검사를 받지 않는다. 방문 중인 아무 웹페이지가 이 주소들을
+    <img>로 불러 보고 onload/onerror로 "기록된 프로세스·사이트인지"를 알아낼 수 있다. 그래서
+    UI(허용된 origin)가 보낸 요청에만 응답하고, 그 밖에는 기록 여부와 무관하게 똑같은 답(404)을
+    준다. Referer는 다른 사이트가 꾸며 낼 수 없고, 빼 버리면 거부될 뿐이라 정보가 새지 않는다.
+    """
+    parts = urlsplit(referer)
+    return _ALLOWED_ORIGIN.fullmatch(f"{parts.scheme}://{parts.netloc}") is not None
 
 
 def _lock_path_for_port(port: int) -> Path:
@@ -142,6 +160,7 @@ def _usage_edges(query: dict[str, list[str]]) -> list[datetime]:
 _PROCESS_PATH_PREFIX = "/api/processes/"
 _PROCESS_USAGE_SUFFIX = "/usage"
 _ICON_PATH_PREFIX = "/api/icons/"
+_SITE_ICON_PATH_PREFIX = "/api/site-icons/"
 # 아이콘은 키(경로+수정시각)가 바뀌어야 내용이 바뀐다 — 캐시 키가 ETag라 오래
 # 캐시해도 안전하고, 만료돼도 If-None-Match로 304만 받으면 된다.
 _ICON_MAX_AGE_SECONDS = 24 * 60 * 60
@@ -149,11 +168,18 @@ _ICON_MAX_AGE_SECONDS = 24 * 60 * 60
 _ICON_MISSING_MAX_AGE_SECONDS = 5 * 60
 
 
+def _is_missing_site_schema(error: sqlite3.OperationalError) -> bool:
+    """사이트 테이블/컬럼이 생기기 전의 옛 DB에서 난 오류인지(다른 DB 오류와 구분)."""
+    message = str(error)
+    return "no such table: sites" in message or "foreground_site_id" in message
+
+
 class _Handler(BaseHTTPRequestHandler):
     """/api/* 요청을 집계 함수로 넘기고 JSON으로 응답한다."""
 
     db_path: Path = DEFAULT_DB_PATH
     icon_store: IconStore = IconStore(DEFAULT_ICON_CACHE_DIR)
+    site_icon_store: SiteIconStore = SiteIconStore()
 
     def _send_json(
         self, status: int, payload: dict, extra_headers: dict[str, str] | None = None
@@ -175,11 +201,16 @@ class _Handler(BaseHTTPRequestHandler):
         """경로별로 처리 함수에 나눠 준다.
 
         /api/usage는 전체 집계, /api/processes/<이름>/usage는 한 프로세스의 칸별
-        집계, /api/icons/<이름>은 아이콘 PNG다.
+        집계, /api/icons/<이름>은 아이콘 PNG, /api/sites는 사이트(도메인)별 집계,
+        /api/site-icons/<도메인>은 사이트 아이콘 PNG다.
         """
         parsed = urlparse(self.path)
         if parsed.path == "/api/usage":
             self._get_usage(parsed.query)
+        elif parsed.path == "/api/sites":
+            self._get_site_usage(parsed.query)
+        elif parsed.path.startswith(_SITE_ICON_PATH_PREFIX):
+            self._get_site_icon(unquote(parsed.path[len(_SITE_ICON_PATH_PREFIX) :]))
         elif parsed.path.startswith(_PROCESS_PATH_PREFIX) and parsed.path.endswith(
             _PROCESS_USAGE_SUFFIX
         ):
@@ -219,6 +250,95 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         self._send_json(200, payload)
+
+    def _get_site_usage(self, raw_query: str) -> None:
+        """구간의 사이트(도메인)별 사용 시간(브라우저 상세 화면의 사이트 목록용).
+
+        process 쿼리 파라미터가 어느 브라우저의 사용 시간인지 정한다.
+
+        사이트 컬럼이 생기기 전의 옛 DB는 hub가 고치지 않고(읽기 전용) 빈 목록으로 답한다.
+        """
+        query = parse_qs(raw_query)
+        try:
+            start, end = _usage_bounds(query)
+            process = query.get("process", [""])[0]
+            if not process:
+                raise ValueError("process가 필요합니다.")
+        except ValueError as exc:
+            self._send_json(
+                400, api_error.error_body(api_error.INVALID_REQUEST, str(exc))
+            )
+            return
+
+        try:
+            conn = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
+            try:
+                payload = site_usage_by_range(conn, process, start, end)
+            finally:
+                conn.close()
+        except sqlite3.OperationalError as exc:
+            if not _is_missing_site_schema(exc):
+                logger.exception("집계 DB를 읽지 못했습니다: %s", self.db_path)
+                self._send_json(
+                    503,
+                    api_error.error_body(api_error.UNAVAILABLE, "database unavailable"),
+                )
+                return
+            payload = {
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "by_site": [],
+            }
+        except sqlite3.Error:
+            logger.exception("집계 DB를 읽지 못했습니다: %s", self.db_path)
+            self._send_json(
+                503,
+                api_error.error_body(api_error.UNAVAILABLE, "database unavailable"),
+            )
+            return
+
+        self._send_json(200, payload)
+
+    def _get_site_icon(self, domain: str) -> None:
+        """도메인 → Chrome이 저장해 둔 아이콘 PNG.
+
+        recorder가 기록한 도메인(sites 테이블)만 받는다 — 임의의 도메인에 대한 아이콘 조회가
+        브라우저 기록을 더듬는 통로가 되지 않게 한다. UI가 아닌 페이지의 요청은 기록 여부를
+        드러내지 않도록 똑같이 거부한다(is_trusted_page). 요청은 이 PC의 파일만 읽고 외부로
+        나가지 않는다.
+        """
+        if not self._is_from_trusted_page():
+            self._send_icon_denied()
+            return
+        try:
+            conn = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
+            try:
+                known = conn.execute(
+                    "SELECT 1 FROM sites WHERE domain = ?", (domain,)
+                ).fetchone()
+            finally:
+                conn.close()
+        except sqlite3.OperationalError as exc:
+            if not _is_missing_site_schema(exc):
+                logger.exception("집계 DB를 읽지 못했습니다: %s", self.db_path)
+                self._send_json(
+                    503,
+                    api_error.error_body(api_error.UNAVAILABLE, "database unavailable"),
+                )
+                return
+            known = None
+        except sqlite3.Error:
+            logger.exception("집계 DB를 읽지 못했습니다: %s", self.db_path)
+            self._send_json(
+                503,
+                api_error.error_body(api_error.UNAVAILABLE, "database unavailable"),
+            )
+            return
+
+        self._send_icon(
+            self.site_icon_store.get(domain) if known else None,
+            SITE_ICON_TTL_SECONDS,
+        )
 
     def _get_process_usage(self, process_name: str, raw_query: str) -> None:
         """한 프로세스의 사용 시간을 edges가 나누는 칸별로 돌려준다(상세 화면용)."""
@@ -262,8 +382,12 @@ class _Handler(BaseHTTPRequestHandler):
         클라이언트가 경로를 주지 않고 이름만 준다 — 임의 경로의 파일을 열어 보는
         요청이 되지 않도록, 경로는 recorder가 기록해 둔 것만 쓴다. 아이콘이 없는
         경우에도 잠시 캐시하게 해서(브라우저가 같은 404를 계속 다시 묻지 않게)
-        차트가 15초마다 다시 그려져도 요청이 늘어나지 않는다.
+        차트가 15초마다 다시 그려져도 요청이 늘어나지 않는다. UI가 아닌 페이지의
+        요청은 기록 여부를 드러내지 않도록 거부한다(is_trusted_page).
         """
+        if not self._is_from_trusted_page():
+            self._send_icon_denied()
+            return
         try:
             conn = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
             try:
@@ -291,7 +415,25 @@ class _Handler(BaseHTTPRequestHandler):
             )
             return
 
-        icon = self.icon_store.get(row[0]) if row and row[0] else None
+        self._send_icon(
+            self.icon_store.get(row[0]) if row and row[0] else None,
+            _ICON_MAX_AGE_SECONDS,
+        )
+
+    def _is_from_trusted_page(self) -> bool:
+        """이 요청이 우리 UI 페이지에서 온 것인지(Referer 기준 — is_trusted_page 참고)."""
+        return is_trusted_page(self.headers.get("Referer", ""))
+
+    def _send_icon_denied(self) -> None:
+        """UI가 아닌 곳의 아이콘 요청. "아이콘 없음"과 같은 모양의 404지만 캐시하지 않는다."""
+        self._send_json(
+            404,
+            api_error.error_body(api_error.NOT_FOUND, "icon not found"),
+            {"Cache-Control": "no-store"},
+        )
+
+    def _send_icon(self, icon: tuple[str, bytes] | None, max_age_seconds: int) -> None:
+        """(키, PNG)를 캐시 헤더와 함께 보낸다. None이면 404(짧게 캐시)."""
         if icon is None:
             self._send_json(
                 404,
@@ -304,7 +446,7 @@ class _Handler(BaseHTTPRequestHandler):
         etag = f'"{key}"'
         headers = {
             "ETag": etag,
-            "Cache-Control": f"private, max-age={_ICON_MAX_AGE_SECONDS}",
+            "Cache-Control": f"private, max-age={max_age_seconds}",
         }
         if self.headers.get("If-None-Match") == etag:
             self.send_response(304)
@@ -341,6 +483,9 @@ def main() -> None:
         sys.exit(EXIT_ALREADY_RUNNING)
 
     try:
+        # 이전 실행이 비정상 종료하며 남긴 즐겨찾기 아이콘 복사본(방문 주소가 들어 있다)을 지운다.
+        # 중복 실행 lock을 잡은 뒤, 이 프로세스가 작업 폴더를 만들기 전에 한 번만 한다.
+        remove_stale_work_dirs(WORK_DIR_PREFIX)
         _Handler.db_path = args.db_path
         logger.info("포트 %d에서 집계 API를 시작합니다. DB: %s", args.port, args.db_path)
         server = ThreadingHTTPServer(("127.0.0.1", args.port), _Handler)

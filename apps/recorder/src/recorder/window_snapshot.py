@@ -58,6 +58,23 @@ def get_foreground_process_name() -> str | None:
     return _hwnd_to_process_name(hwnd)
 
 
+def get_foreground_window_title() -> str | None:
+    """현재 활성 창의 제목. 사이트 추적이 Chrome 창 제목에서 페이지를 알아내는 데 쓴다."""
+    if sys.platform != "win32":
+        raise NotImplementedError(f"{sys.platform}은 아직 지원하지 않습니다.")
+
+    user32 = ctypes.windll.user32
+    hwnd = user32.GetForegroundWindow()
+    if not hwnd:
+        return None
+    length = user32.GetWindowTextLengthW(hwnd)
+    if length == 0:
+        return None
+    buffer = ctypes.create_unicode_buffer(length + 1)
+    user32.GetWindowTextW(hwnd, buffer, length + 1)
+    return buffer.value or None
+
+
 def get_windowed_process_names() -> set[str]:
     """보이는 최상위 창을 가진 프로세스 이름 전체 (foreground도 포함됨)."""
     if sys.platform != "win32":

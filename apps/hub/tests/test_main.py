@@ -15,7 +15,7 @@ from supervision.lock import acquire_lock
 
 import hub.__main__ as hub_main
 from common.exit_codes import EXIT_ALREADY_RUNNING
-from hub.__main__ import _Handler, _lock_path_for_port, main
+from hub.__main__ import _Handler, _lock_path_for_port, is_trusted_page, main
 from hub.icons import IconStore
 
 # fixture가 넣는 틱 시각. 두 틱이 15초 간격이라 chrome.exe가 active 15초가 된다.
@@ -187,8 +187,10 @@ def test_main_exits_with_already_running_code_when_lock_is_held(tmp_path, monkey
     assert exc_info.value.code == EXIT_ALREADY_RUNNING
 
 
-def test_icon_endpoint_serves_png_with_cache_headers(running_server) -> None:
-    with urllib.request.urlopen(f"{running_server}/api/icons/chrome.exe", timeout=2) as response:
+def test_icon_endpoint_serves_png_with_cache_headers(running_server, ui_request) -> None:
+    with urllib.request.urlopen(
+        ui_request(f"{running_server}/api/icons/chrome.exe"), timeout=2
+    ) as response:
         body = response.read()
         headers = response.headers
 
@@ -198,19 +200,21 @@ def test_icon_endpoint_serves_png_with_cache_headers(running_server) -> None:
     assert headers["ETag"]
 
 
-def test_icon_endpoint_returns_304_for_matching_etag(running_server) -> None:
+def test_icon_endpoint_returns_304_for_matching_etag(running_server, ui_request) -> None:
     url = f"{running_server}/api/icons/chrome.exe"
-    with urllib.request.urlopen(url, timeout=2) as response:
+    with urllib.request.urlopen(ui_request(url), timeout=2) as response:
         etag = response.headers["ETag"]
 
-    request = urllib.request.Request(url, headers={"If-None-Match": etag})
+    request = ui_request(url, **{"If-None-Match": etag})
     with pytest.raises(urllib.error.HTTPError) as exc_info:
         urllib.request.urlopen(request, timeout=2)
 
     assert exc_info.value.code == 304
 
 
-def test_icon_endpoint_treats_a_pre_migration_database_as_no_icon(tmp_path) -> None:
+def test_icon_endpoint_treats_a_pre_migration_database_as_no_icon(
+    tmp_path, ui_request
+) -> None:
     """exe_path 컬럼이 아직 없는 옛 DB는 503이 아니라 아이콘 없음(404)이어야 하고,
     recorder가 컬럼과 경로를 채우면 같은 서버에서 바로 아이콘(200)이 나와야 한다."""
     old_db = tmp_path / "old.db"
@@ -230,7 +234,7 @@ def test_icon_endpoint_treats_a_pre_migration_database_as_no_icon(tmp_path) -> N
     url = f"http://127.0.0.1:{server.server_port}/api/icons/chrome.exe"
     try:
         with pytest.raises(urllib.error.HTTPError) as exc_info:
-            urllib.request.urlopen(url, timeout=2)
+            urllib.request.urlopen(ui_request(url), timeout=2)
         assert exc_info.value.code == 404
 
         # recorder가 새 코드로 떠서 컬럼을 추가하고 경로를 기록한 상황.
@@ -240,7 +244,7 @@ def test_icon_endpoint_treats_a_pre_migration_database_as_no_icon(tmp_path) -> N
         conn.commit()
         conn.close()
 
-        with urllib.request.urlopen(url, timeout=2) as response:
+        with urllib.request.urlopen(ui_request(url), timeout=2) as response:
             assert response.status == 200
             assert response.read() == b"PNG-fake"
     finally:
@@ -249,11 +253,11 @@ def test_icon_endpoint_treats_a_pre_migration_database_as_no_icon(tmp_path) -> N
 
 @pytest.mark.parametrize("name", ["unknown.exe", "..%2F..%2Fwindows%2Fsystem32%2Fnotepad.exe"])
 def test_icon_endpoint_404_for_unknown_process_and_never_opens_arbitrary_paths(
-    running_server, name
+    running_server, ui_request, name
 ) -> None:
     """이름은 DB에 기록된 프로세스만 허용한다 — 경로처럼 생긴 값으로 파일을 읽을 수 없다."""
     with pytest.raises(urllib.error.HTTPError) as exc_info:
-        urllib.request.urlopen(f"{running_server}/api/icons/{name}", timeout=2)
+        urllib.request.urlopen(ui_request(f"{running_server}/api/icons/{name}"), timeout=2)
 
     assert exc_info.value.code == 404
     assert json.loads(exc_info.value.read())["error"]["code"] == "not_found"
@@ -309,3 +313,39 @@ def test_process_usage_endpoint_rejects_invalid_edges(running_server, edges) -> 
 
     assert exc_info.value.code == 400
     assert json.loads(exc_info.value.read())["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.parametrize(
+    ("referer", "trusted"),
+    [
+        ("http://127.0.0.1:8787/", True),
+        ("http://localhost:5173/some/page?x=1", True),
+        ("http://127.0.0.1/", True),
+        ("", False),
+        ("https://evil.example/", False),
+        ("http://127.0.0.1.evil.example/", False),
+        ("http://127.0.0.1@evil.example/", False),
+        ("https://127.0.0.1:8787/", False),
+        ("not a url", False),
+    ],
+)
+def test_is_trusted_page_accepts_only_the_local_ui_origins(referer: str, trusted: bool) -> None:
+    assert is_trusted_page(referer) is trusted
+
+
+@pytest.mark.parametrize("path", ["/api/icons/chrome.exe", "/api/icons/unknown.exe"])
+@pytest.mark.parametrize("referer", [None, "https://evil.example/", "http://127.0.0.1@evil.example/"])
+def test_icon_requests_from_other_pages_get_the_same_answer_whether_or_not_it_was_recorded(
+    running_server, path, referer
+) -> None:
+    """다른 웹페이지가 <img>로 아이콘을 불러 보고 기록된 프로세스를 알아내지 못해야 한다 —
+    기록된 것(chrome.exe)과 아닌 것(unknown.exe)이 똑같이 캐시되지 않는 404여야 한다."""
+    headers = {"Referer": referer} if referer else {}
+    request = urllib.request.Request(f"{running_server}{path}", headers=headers)
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(request, timeout=2)
+
+    assert exc_info.value.code == 404
+    assert exc_info.value.headers["Cache-Control"] == "no-store"
+    assert json.loads(exc_info.value.read())["error"]["code"] == "not_found"

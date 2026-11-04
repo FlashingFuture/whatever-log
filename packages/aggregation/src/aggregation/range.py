@@ -38,12 +38,43 @@ class ProcessUsage(TypedDict):
     """위 세 값의 합."""
 
 
+class SiteUsage(TypedDict):
+    """사이트(도메인) 하나의 구간 내 사용 시간. 사이트는 foreground일 때만 알 수 있어서
+    background가 없고, active_seconds + idle_seconds == total_seconds다."""
+
+    domain: str
+    active_seconds: float
+    idle_seconds: float
+    total_seconds: float
+
+
+class SiteRangeUsage(TypedDict):
+    """site_usage_by_range()의 반환 모양."""
+
+    start: str
+    end: str
+    by_site: list[SiteUsage]
+
+
 class RangeUsage(TypedDict):
     """usage_by_range()의 반환 모양."""
 
     start: str
     end: str
     by_process: list[ProcessUsage]
+
+
+def _gap_seconds(sampled_at: str, next_sampled_at: str) -> float | None:
+    """한 틱이 대표하는 구간의 길이(다음 틱까지). 절전·중단으로 보이는 긴 간격은 None."""
+    gap = (
+        datetime.fromisoformat(next_sampled_at) - datetime.fromisoformat(sampled_at)
+    ).total_seconds()
+    return None if gap > _MAX_GAP_SECONDS else gap
+
+
+def _foreground_kind(since_last_input: float, idle_threshold_seconds: float) -> str:
+    """foreground였던 구간이 active인지 idle인지."""
+    return "active" if since_last_input < idle_threshold_seconds else "idle"
 
 
 def _intervals(
@@ -96,10 +127,10 @@ def _intervals(
     for (tick_id, sampled_at, fg_name, since_last_input), (_, next_sampled_at, _, _) in zip(
         ticks, ticks[1:]
     ):
-        started = datetime.fromisoformat(sampled_at)
-        gap = (datetime.fromisoformat(next_sampled_at) - started).total_seconds()
-        if gap > _MAX_GAP_SECONDS:
+        gap = _gap_seconds(sampled_at, next_sampled_at)
+        if gap is None:
             continue
+        started = datetime.fromisoformat(sampled_at)
 
         # get_foreground_process_name()과 get_windowed_process_names()는
         # 서로 독립적으로 조회된다(window_snapshot.py) — 제목 없는 foreground
@@ -115,10 +146,8 @@ def _intervals(
                 continue
             if name != fg_name:
                 kind = "background"
-            elif since_last_input < idle_threshold_seconds:
-                kind = "active"
             else:
-                kind = "idle"
+                kind = _foreground_kind(since_last_input, idle_threshold_seconds)
             yield started, name, kind, gap
 
 
@@ -190,6 +219,73 @@ def usage_by_range(
     )
 
     return {"start": start_iso, "end": end_iso, "by_process": by_process}
+
+
+def site_usage_by_range(
+    conn: sqlite3.Connection,
+    process: str,
+    start: datetime,
+    end: datetime,
+    *,
+    idle_threshold_seconds: float = IDLE_THRESHOLD_SECONDS,
+) -> SiteRangeUsage:
+    """[start, end) 구간에서 process(브라우저)가 foreground였던 시간을 사이트(도메인)별
+    active/idle로 집계한다.
+
+    recorder가 틱에 사이트를 적어 둔 경우(브라우저가 foreground일 때)만 센다. 같은 사이트라도
+    브라우저가 다르면 따로 집계한다 — 호출부가 어느 브라우저인지 고른다. 간격 상한과
+    active/idle 판정은 usage_by_range와 같은 규칙이다(_gap_seconds, _foreground_kind).
+    사이트를 알아내지 못한 틱의 시간은 어느 사이트에도 들어가지 않으므로 사이트 합은 그
+    브라우저의 foreground 시간보다 작거나 같다. 집중 시간 내림차순, 같으면 전체 시간,
+    그래도 같으면 이름순이다.
+    """
+    start_iso = start.astimezone(UTC).isoformat()
+    end_iso = end.astimezone(UTC).isoformat()
+    # 틱이 한 달에 수백만 개일 수 있어 파이썬 리스트에 올리지 않는다. 다음 틱 시각은 LEAD로
+    # 구하고(간격 계산에는 구간 안의 모든 틱이 필요하다), 이 브라우저의 사이트 있는 틱만 바깥
+    # 쿼리에서 걸러 한 줄씩 흘려 읽는다. 구간 안의 마지막 틱은 다음 틱이 없어 빠진다.
+    rows = conn.execute(
+        "SELECT sampled_at, next_sampled_at, domain, since_last_input FROM ("
+        "  SELECT ticks.sampled_at AS sampled_at, "
+        "         LEAD(ticks.sampled_at) OVER (ORDER BY ticks.sampled_at) AS next_sampled_at, "
+        "         sites.domain AS domain, "
+        "         ticks.seconds_since_last_input AS since_last_input, "
+        "         processes.name AS process_name "
+        "  FROM ticks "
+        "  LEFT JOIN sites ON sites.id = ticks.foreground_site_id "
+        "  LEFT JOIN processes ON processes.id = ticks.foreground_process_id "
+        "  WHERE ticks.sampled_at >= ? AND ticks.sampled_at < ?"
+        ") WHERE process_name = ? AND domain IS NOT NULL AND next_sampled_at IS NOT NULL",
+        (start_iso, end_iso, process),
+    )
+
+    totals: dict[str, dict[str, float]] = {}
+    for sampled_at, next_sampled_at, domain, since_last_input in rows:
+        gap = _gap_seconds(sampled_at, next_sampled_at)
+        if gap is None:
+            continue
+        kind = _foreground_kind(since_last_input, idle_threshold_seconds)
+        parts = totals.setdefault(domain, {"active": 0.0, "idle": 0.0})
+        parts[kind] += gap
+
+    by_site: list[SiteUsage] = [
+        {
+            "domain": domain,
+            "active_seconds": parts["active"],
+            "idle_seconds": parts["idle"],
+            "total_seconds": parts["active"] + parts["idle"],
+        }
+        for domain, parts in totals.items()
+    ]
+    # 밀리초로 반올림해 비교한다(float 합 오차로 동률 판정이 깨지지 않게 — usage_by_range와 같다).
+    by_site.sort(
+        key=lambda row: (
+            -round(row["active_seconds"], 3),
+            -round(row["total_seconds"], 3),
+            row["domain"],
+        )
+    )
+    return {"start": start_iso, "end": end_iso, "by_site": by_site}
 
 
 class BucketUsage(TypedDict):

@@ -1,6 +1,7 @@
 import type { ProcessSeries } from "../api";
 import { formatDuration } from "../format";
 import { type Bucket, formatBucketLabel, type PeriodUnit } from "../period";
+import { maxOf } from "../stats";
 import styles from "./BucketChart.module.css";
 import { createUsageLegend } from "./UsageLegend";
 import { createUsageRow } from "./UsageRow";
@@ -38,7 +39,7 @@ export function createBucketChart(
   summary.textContent = `이 구간 합계 — 활성 ${formatDuration(sum(series, "active_seconds"))} / 총 ${formatDuration(total)}`;
 
   // 가장 많이 쓴 칸을 기준으로 막대 폭을 정한다(칸 길이 전체가 기준이면 대부분 짤막하다).
-  const maxTotal = Math.max(...series.buckets.map((b) => b.total_seconds));
+  const maxTotal = maxOf(series.buckets, (b) => b.total_seconds);
 
   const chart = document.createElement("div");
   chart.className = styles.chart;
