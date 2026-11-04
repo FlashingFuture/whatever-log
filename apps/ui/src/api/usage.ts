@@ -1,4 +1,4 @@
-import { getJson, requestTimeoutMs } from "./client";
+import { getJson, requestTimeoutMs } from "./client.ts";
 import type { ProcessSeries, RangeUsage, SiteRangeUsage } from "./types";
 
 export function fetchUsage(start: Date, end: Date): Promise<RangeUsage> {
@@ -8,10 +8,24 @@ export function fetchUsage(start: Date, end: Date): Promise<RangeUsage> {
     start: start.toISOString(),
     end: end.toISOString(),
   });
-  return getJson(
+  return getJson<RangeUsage>(
     `/api/usage?${query}`,
     requestTimeoutMs(end.getTime() - start.getTime()),
-  );
+  ).then(requireSummary);
+}
+
+/**
+ * 구간 요약(summary)이 없는 응답을 알아보기 쉬운 오류로 바꾼다. 요약은 서버가 계산해 내려 주는데,
+ * 앱보다 오래된 hub(앱만 새로 띄우고 이미 떠 있던 hub를 그대로 쓰는 경우)는 이 필드가 없다 —
+ * 그대로 두면 화면이 "Cannot destructure property …" 같은 알 수 없는 오류로 깨진다.
+ */
+function requireSummary(usage: RangeUsage): RangeUsage {
+  if (!usage.summary) {
+    throw new Error(
+      "hub가 이 앱보다 오래된 버전이라 구간 요약을 받을 수 없습니다. 앱을 완전히 종료했다가 다시 실행해 주세요.",
+    );
+  }
+  return usage;
 }
 
 /** 구간의 사이트(도메인)별 사용 시간(그 브라우저가 foreground였던 시간 기준). */
