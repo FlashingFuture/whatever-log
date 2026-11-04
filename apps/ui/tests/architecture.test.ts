@@ -105,22 +105,59 @@ test("src의 모든 폴더는 층 규칙에 등록돼 있다", () => {
   }
 });
 
-test("import는 허용된 층만 가리킨다", () => {
-  const violations: string[] = [];
-  for (const file of sourceFiles(SRC)) {
-    const layer = layerOf(file);
-    const allowed = new Set([layer, ...(ALLOWED[layer] ?? []), ...ANY_LAYER]);
-    for (const specifier of importsOf(file)) {
-      // 루트의 파일(main.ts)도 층이다("."): 아래 층이 진입점을 가져다 쓰면 위반이다.
-      const target = layerOf(resolve(dirname(file), specifier));
-      if (!allowed.has(target)) {
-        violations.push(
+/** 한 파일이 가져오는 경로(specifiers) 중 층 규칙을 어기는 것들의 설명. 위반이 없으면 빈 목록. */
+function layerViolations(file: string, specifiers: string[]): string[] {
+  const layer = layerOf(file);
+  const allowed = new Set([layer, ...(ALLOWED[layer] ?? []), ...ANY_LAYER]);
+  return specifiers.flatMap((specifier) => {
+    // 루트의 파일(main.ts)도 층이다("."): 아래 층이 진입점을 가져다 쓰면 위반이다.
+    const target = layerOf(resolve(dirname(file), specifier));
+    return allowed.has(target)
+      ? []
+      : [
           `${relative(SRC, file)} → ${specifier} (${layer}/가 ${target}/를 가져다 쓰면 안 된다)`,
-        );
-      }
-    }
-  }
+        ];
+  });
+}
+
+test("import는 허용된 층만 가리킨다", () => {
+  const violations = [...sourceFiles(SRC)].flatMap((file) =>
+    layerViolations(file, importsOf(file)),
+  );
   assert.deepEqual(violations, []);
+});
+
+test("층 규칙은 위반을 실제로 잡는다(실제 src에 위반이 없어도 규칙이 느슨해지지 않게)", () => {
+  const cases: [string, string, number][] = [
+    // 아래 층이 진입점(main.ts)을 가져다 쓴다
+    ["pages/Fake.ts", 'import { main } from "../main";', 1],
+    ["lib/Fake.ts", 'import "../main";', 1],
+    // 아래 층이 위 층을 가져다 쓴다
+    ["lib/Fake.ts", 'import { f } from "../api";', 1],
+    [
+      "components/usage/Fake.ts",
+      'import { p } from "../../pages/UsagePage";',
+      1,
+    ],
+    [
+      "components/usage/Fake.ts",
+      'import { l } from "../../layouts/Layouts";',
+      1,
+    ],
+    // 허용되는 방향은 통과한다
+    ["pages/Fake.ts", 'import { c } from "../components/usage/UsageRow";', 0],
+    ["pages/Fake.ts", 'import { f } from "../lib/format";', 0],
+    ["components/usage/Fake.ts", 'import s from "./Fake.module.css";', 0],
+    ["main.ts", 'import { p } from "./pages/UsagePage";', 0],
+  ];
+
+  for (const [file, source, expected] of cases) {
+    assert.equal(
+      layerViolations(join(SRC, file), relativeImports(source)).length,
+      expected,
+      `${file}: ${source}`,
+    );
+  }
 });
 
 test("api 바깥에서는 api/index.ts(`../api`)만 가져다 쓴다", () => {
