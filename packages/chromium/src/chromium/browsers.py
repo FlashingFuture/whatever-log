@@ -3,7 +3,7 @@
 이 브라우저들은 같은 엔진이라 방문 기록(`History`)·아이콘(`Favicons`)·프로필 목록(`Local State`)의
 형식이 같다. 달라지는 건 프로세스 이름, 창 제목 끝에 붙는 브라우저 이름, 사용자 데이터 폴더뿐이라
 이 표 하나로 묶는다. 브라우저를 더하려면 여기에 한 줄 추가하면 된다(화면 쪽
-`apps/ui/src/browsers.ts`의 프로세스 목록도 같이 맞춘다).
+`apps/ui/src/domain/browsers.ts`의 프로세스 목록도 같이 맞춘다).
 
 Firefox(places.sqlite)와 Opera(프로필 폴더 구조가 다름)는 형식이 달라 포함하지 않는다.
 """

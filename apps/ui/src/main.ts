@@ -1,6 +1,6 @@
-import { mountLayout } from "./components/Layouts";
-import { mountProcessPage } from "./components/ProcessPage";
-import { mountUsagePage } from "./components/UsagePage";
+import { mountLayout } from "./layouts/Layouts";
+import { mountProcessPage } from "./pages/ProcessPage";
+import { mountUsagePage } from "./pages/UsagePage";
 import {
   currentRoute,
   goBack,
@@ -9,9 +9,9 @@ import {
   type Route,
   savedScroll,
   saveScroll,
-} from "./router";
-import { type LayoutName, layoutOf } from "./routes";
-import { restoreScroll, trackScroll } from "./scroll";
+} from "./router/router";
+import { type LayoutName, layoutOf } from "./router/routes";
+import { restoreScroll, trackScroll } from "./router/scroll";
 import "./styles/global.css";
 
 /** 라우트에 맞는 화면을 content에 그리고, 그 화면을 정리하는 함수를 돌려준다. */
