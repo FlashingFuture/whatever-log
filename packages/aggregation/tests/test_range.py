@@ -376,3 +376,47 @@ def test_site_usage_counts_only_the_requested_browser(tmp_path) -> None:
         ("b.example.com", 15.0),
     ]
     assert none["by_site"] == []
+
+
+def test_summary_totals_active_and_idle_and_names_the_top_process(tmp_path) -> None:
+    """총 사용 시간은 집중 시간의 합(겹쳐 떠 있는 프로세스의 total 합이 아니다), top은 집중이 가장 긴 것."""
+    conn = open_db(tmp_path / "recorder.db")
+    t0 = datetime(2026, 10, 28, 3, 0, tzinfo=UTC)
+    # a: 30초 active + 15초 idle, b: 15초 active. 둘 다 항상 창이 떠 있어(background 포함) total 합은 부풀려진다.
+    save_tick(conn, _tick(t0, "a.exe", {"a.exe", "b.exe"}))
+    save_tick(conn, _tick(t0 + timedelta(seconds=15), "a.exe", {"a.exe", "b.exe"}))
+    save_tick(conn, _tick(t0 + timedelta(seconds=30), "a.exe", {"a.exe", "b.exe"}, idle_seconds=100.0))
+    save_tick(conn, _tick(t0 + timedelta(seconds=45), "b.exe", {"a.exe", "b.exe"}))
+    save_tick(conn, _tick(t0 + timedelta(seconds=60), None, set()))
+
+    summary = usage_by_range(conn, t0, t0 + timedelta(minutes=5))["summary"]
+
+    assert summary["active_seconds"] == 45.0
+    assert summary["idle_seconds"] == 15.0
+    assert summary["top"] == {"process": "a.exe", "active_seconds": 30.0}
+
+
+def test_summary_has_no_top_process_without_active_time(tmp_path) -> None:
+    conn = open_db(tmp_path / "recorder.db")
+    t0 = datetime(2026, 10, 28, 3, 0, tzinfo=UTC)
+    save_tick(conn, _tick(t0, "a.exe", {"a.exe"}, idle_seconds=100.0))
+    save_tick(conn, _tick(t0 + timedelta(seconds=15), None, set()))
+
+    summary = usage_by_range(conn, t0, t0 + timedelta(minutes=1))["summary"]
+
+    assert summary == {"active_seconds": 0.0, "idle_seconds": 15.0, "top": None}
+    empty = usage_by_range(conn, t0 + timedelta(days=1), t0 + timedelta(days=2))["summary"]
+    assert empty == {"active_seconds": 0.0, "idle_seconds": 0.0, "top": None}
+
+
+def test_summary_top_follows_the_same_order_as_the_list(tmp_path) -> None:
+    """동률이면 목록의 첫 줄(전체 시간이 긴 쪽)이 top이라 화면의 1등과 요약이 어긋나지 않는다."""
+    conn = open_db(tmp_path / "recorder.db")
+    t0 = datetime(2026, 10, 28, 3, 0, tzinfo=UTC)
+    save_tick(conn, _tick(t0, "b.exe", {"a.exe", "b.exe"}))
+    save_tick(conn, _tick(t0 + timedelta(seconds=15), "a.exe", {"a.exe", "b.exe"}))
+    save_tick(conn, _tick(t0 + timedelta(seconds=30), None, set()))
+
+    result = usage_by_range(conn, t0, t0 + timedelta(minutes=1))
+
+    assert result["summary"]["top"]["process"] == result["by_process"][0]["process"]

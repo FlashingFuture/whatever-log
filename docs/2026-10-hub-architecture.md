@@ -187,43 +187,72 @@ hub는 지금 `range=24h`(최근 24시간, rolling) 하나만 지원하고(`/api
 
 ## apps/ui를 컴포넌트로 구조화
 
-`apps/ui/src`를 한 파일(`main.ts`)에 다 때려넣는 대신 역할별로 나눴다:
+`apps/ui/src`를 한 파일(`main.ts`)에 다 때려넣는 대신 역할별로 나눴다. 폴더는 **층(layer)**이고,
+아래쪽 층일수록 위를 모른다(`lib`·`api` < `router` < `components` < `layouts`·`pages` < `main`).
+프레임워크 없이 DOM을 직접 만드는 바닐라 TS라서 React의 hooks·context 같은 폴더는 없다 — 상태는
+`PeriodView`처럼 컴포넌트가 들고, 순수 로직은 `lib`에 둬서 DOM 없이 테스트한다.
 
 ```
 apps/ui/src/
-├─ api.ts                     # hub fetch + 타입(RangeUsage, ProcessSeries, ApiError)
-├─ period.ts                  # 일/주/월 구간 계산(순수 함수, DOM 없음)
-├─ format.ts                  # 사용 시간 글자(1분 미만은 초 단위, 순수 함수)
-├─ scroll.ts                  # 뒤로 가기 때 스크롤 위치 복원
-├─ styles/
-│  ├─ tokens.css              # 디자인 토큰(색·간격·모서리·글자 크기·포커스 링)
-│  ├─ global.css              # body 등 전역(토큰 import)
-│  └─ shared.module.css       # 여러 컴포넌트가 composes로 쓰는 공통 스타일
-├─ router.ts                  # 해시 라우터(#/ , #/process/<이름>) + 앱 안 이동 깊이
-├─ routes.ts                  # 라우트 → 레이아웃(plain/back) 대응(순수 데이터)
-├─ components/
-│  ├─ Layouts.ts              # 레이아웃 이름 → 틀(plain / back) + 화면 자리
-│  ├─ BackBar.ts              # 돌아가기 버튼(어디로 가는지 모름, 콜백만 받음)
-│  ├─ UsagePage.ts            # 홈 화면: 왼쪽 요약(UsageSummary) + 오른쪽 차트(UsageChart), PeriodView 안에
-│  ├─ ProcessPage.ts          # 상세 화면: 아이콘+이름 + 칸별 사용량(PeriodView + BucketChart)
-│  ├─ PeriodView.ts           # 단위 선택 + 구간 이동 + 내용(상태·갱신·키보드). 홈/상세 공용
-│  ├─ Stepper.ts              # "← 라벨 →" 붙은 버튼 묶음(라벨을 누르면 팝업)
-│  ├─ SegmentedControl.ts     # 여러 값 중 하나 고르기(값 종류와 무관)
-│  ├─ Button.ts               # 버튼 + 붙은 버튼 묶음(createButtonGroup)
-│  ├─ Popover.ts              # 버튼 아래 팝업(바깥 클릭/Esc 닫기, 포커스 복귀)
-│  ├─ CalendarPicker.ts       # 일 단위: 월 달력
-│  ├─ PeriodListPicker.ts     # 주/월 단위: 한 해의 목록 + ‹ 연도 ›
-│  ├─ UsageRow.ts             # "라벨 | 3색 막대 | 활성 / 총" 한 줄(홈·상세 공용)
-│  ├─ UsageLegend.ts          # 막대 색 범례
-│  ├─ UsageSummary.ts         # 홈 왼쪽 요약: 총 사용 시간 + 가장 많이 쓴 프로그램(계산은 summary.ts)
-│  ├─ UsageChart.ts           # 홈 차트: 범례 + 프로세스 칸 한 줄(옆으로 스크롤, 집중 시간순)
-│  ├─ ProcessColumn.ts        # 홈의 프로세스 한 칸(세로 막대 + 아이콘 + 이름, 누르면 상세로)
-│  ├─ BucketChart.ts          # 상세 차트: 합계 + 범례 + 칸(시간/날짜) 줄 목록
-│  ├─ ProcessIcon.ts          # 프로세스 아이콘(없으면 이름 첫 글자)
-│  └─ ErrorView.ts            # 에러 + 다시 시도 버튼
-└─ main.ts                    # 진입점: 전역 스타일 + 라우트별 레이아웃·화면 마운트
-apps/ui/tests/               # period/router 테스트(Node 내장 러너, `pnpm --filter ui test`)
+├─ main.ts                      # 진입점: 전역 스타일 + 라우트별 레이아웃·화면 마운트
+├─ api/                         # hub 통신. 바깥에서는 `../api`(index.ts)만 가져다 쓴다
+│  ├─ index.ts                  # 공개 목록(안쪽 구조를 숨기는 단일 진입점)
+│  ├─ client.ts                 # 주소·ApiError·제한 시간·getJson(무엇을 요청하는지는 모름)
+│  ├─ usage.ts                  # fetchUsage / fetchProcessUsage / fetchSiteUsage
+│  ├─ browsers.ts               # 사이트를 기록하는 브라우저인지(서버 목록을 한 번만 받아 기억)
+│  ├─ icons.ts                  # 프로세스·사이트 아이콘 주소
+│  └─ types.ts                  # 응답 타입(RangeUsage·RangeSummary, ProcessSeries, SiteUsage …)
+├─ lib/                         # DOM·hub를 모르는 순수 로직
+│  ├─ format.ts                 # 사용 시간 글자(1분 미만은 초 단위), 이름 줄이기
+│  ├─ period.ts                 # 일/주/월 구간 계산·라벨(브라우저의 로컬 시간, 달력·일광절약시간)
+│  ├─ stats.ts                  # maxOf(목록이 길어도 RangeError 없음)
+│  └─ settle.ts                 # settleWithin(제한 시간 안에 끝나면 값, 아니면 undefined)
+├─ router/                      # 주소 ↔ 화면
+│  ├─ router.ts                 # 해시 라우터(#/ , #/process/<이름>) + 앱 안 이동 깊이
+│  ├─ routes.ts                 # 라우트 → 레이아웃(plain/back) 대응(순수 데이터)
+│  └─ scroll.ts                 # 뒤로 가기 때 스크롤 위치 복원
+├─ components/                  # 재사용 UI 조각(어느 화면인지 모른다)
+│  ├─ common/                   # "사용 현황"을 모르는 범용 조각: 라벨·콜백만 받는다
+│  │  ├─ Button.ts · Popover.ts · SegmentedControl.ts · Stepper.ts · ErrorView.ts
+│  ├─ period/                   # 구간 탐색: PeriodView(단위 선택 + 이동 + 내용, 상태·갱신·키보드),
+│  │  │                         #   CalendarPicker(일), PeriodListPicker(주/월)
+│  └─ usage/                    # 사용량을 그리는 조각
+│     ├─ UsageRow.ts · UsageLegend.ts · UsageChart.ts · ProcessColumn.ts
+│     ├─ UsageSummary.ts · BucketChart.ts · SiteUsageList.ts · ProcessIcon.ts
+│     └─ iconStatus.ts          # 아이콘 없음/일시 실패 기억(ProcessIcon 전용, 시계를 주입해 테스트)
+├─ layouts/                     # 화면 틀: Layouts(plain/back + 화면 자리), BackBar
+├─ pages/                       # 화면: UsagePage(홈), ProcessPage(상세) — "무엇을 보여줄지"를 정한다
+└─ styles/                      # tokens.css(디자인 토큰) · global.css · shared.module.css(composes 공용)
+apps/ui/tests/                  # src와 같은 폴더 구조(api/ lib/ router/ components/), Node 내장 러너
 ```
+
+CSS Modules(`Foo.module.css`)는 컴포넌트·화면·레이아웃 파일 바로 옆에 둔다.
+
+### 어느 코드가 화면(ui)에 있어야 하나: `domain/` 폴더를 없앤 이유
+
+처음에는 "앱 개념 로직"이라는 이름으로 `domain/`(period·summary·browsers·iconStatus)을 두었는데,
+이름 자체가 "이 로직은 화면의 것이 아니다"라고 말하고 있었다. 하나씩 따져 보니 화면에 있어야 할 것과
+아닌 것이 섞여 있어서 책임에 맞게 나눴다. 기준은 이렇다: **화면은 보여 주기만 하고, 숫자의 뜻(정의)과
+지원 범위는 데이터를 아는 쪽(서버·패키지)이 한 곳에서 정한다.** 목표 달성률·AI 보고서도 같은 숫자를
+써야 하는데, 클라이언트마다 정의를 다시 계산하면 갈라진다(CLAUDE.md: 수집·저장·집계·요약·UI는 서로의
+내부 구현을 몰라도 동작해야 한다).
+
+| 코드 | 판정 | 이유 |
+| --- | --- | --- |
+| `period.ts` (구간 경계·라벨·달력) | **ui에 남긴다**(`lib/`로) | 경계는 사용자의 **로컬 시간대·일광절약시간**으로 계산해 hub에 넘기는 게 설계다(hub는 달력을 모른다). 라벨·달력 목록은 순수한 표시 규칙이다. DOM을 안 쓰므로 `lib`에 두고 Node에서 테스트한다 |
+| `iconStatus.ts` (아이콘 없음/일시 실패 기억) | **ui 안에서 위치만 바꿈**(`components/usage/`) | 브라우저가 이미지를 다시 요청하지 않게 하는 **캐시 정책**이라 순수한 화면 관심사지만 "앱 개념"은 아니다. 쓰는 곳이 `ProcessIcon` 하나라 그 옆에 둔다 |
+| `summary.ts` (총 사용 시간 = 집중 시간의 합, 가장 많이 쓴 프로그램) | **서버로 옮김**(`aggregation`의 `RangeSummary`) | "총 사용 시간이 무엇의 합인가"는 **숫자의 정의**다. 목표 달성률·보고서가 같은 정의를 써야 해서 집계 패키지에 한 곳으로 두고, `/api/usage`가 `summary`로 내려 준다. 화면은 그대로 표시한다. top은 목록 정렬(집중 시간순)과 같은 기준이라 첫 줄과 어긋나지 않는다 |
+| `browsers.ts` (사이트를 기록하는 브라우저 프로세스 목록) | **서버에서 받아 쓴다**(`/api/browsers`) | 같은 목록이 Python(`chromium.browsers`, recorder·hub가 씀)에도 있어서 **두 곳을 같이 고쳐야** 했다. 원본은 서버 표 하나로 하고 화면은 한 번 받아 기억한다. 못 받으면 사이트 목록만 빠지고 화면은 동작한다 |
+
+결과적으로 `domain/` 층이 사라지고(`lib`·`api` < `router` < `components` …), 층 규칙 테스트에서도 뺐다.
+
+**층 규칙은 테스트가 지킨다**(`tests/architecture.test.ts`): 폴더별로 가져다 써도 되는 폴더를 정해
+두고 어기는 import가 있으면 실패한다 — `lib`가 `api`를 알게 되거나 컴포넌트가 `pages`를 가져다
+쓰는 일, `api` 안쪽 파일을 바깥에서 직접 가져다 쓰는 일, 아래 층이 진입점(`main.ts`)을 가져다 쓰는 일을
+막는다. import는 정규식이 아니라 TypeScript의 import 스캐너(`ts.preProcessFile`)로 읽어서 주석·문자열 속
+예시는 세지 않고 여러 줄 import도 정확히 잡는다. 새 폴더를 만들면 이 테스트의
+`ALLOWED`에 등록해야 한다. 파일을 옮길 때는 import 경로만 바뀌고 동작은 같다(옮기기 전후로 같은
+테스트·빌드·브라우저 확인을 통과).
 
 `Stepper`/`SegmentedControl`/`Button`/`Popover`/`BackBar`/`UsageRow`는 "사용 현황"이라는 걸 모른다 — 라벨과
 콜백만 받는다. "무엇을 보여줄지"는 화면(`UsagePage`/`ProcessPage`)이, 구간 상태는 `PeriodView`가 갖는다.
@@ -260,7 +289,7 @@ apps/ui/tests/               # period/router 테스트(Node 내장 러너, `pnpm
 한다(로컬 자정, 월요일 시작, 1일).
 
 예전에 로컬 경계를 피했던 건 Python에서 타임존/일광절약시간을 계산하다 버그를
-냈기 때문이다. 그래서 경계 계산 자체를 `apps/ui/src/period.ts`(브라우저)로 옮겼다 —
+냈기 때문이다. 그래서 경계 계산 자체를 `apps/ui/src/lib/period.ts`(브라우저)로 옮겼다 —
 `new Date(y, m, d)`가 로컬 자정을 만들고 일광절약시간 전환도 처리한다. hub는 계산된
 경계를 받기만 한다:
 
@@ -423,8 +452,8 @@ API: `GET /api/processes/<이름>/usage?edges=<ISO 경계,…>` — 경계 목�
 
 - **지원 브라우저는 Chromium 계열 한 표**(`packages/chromium`의 `browsers.py`): Chrome, Edge,
   Brave, Vivaldi. 같은 엔진이라 `History`·`Favicons`·`Local State`의 형식이 같고, 달라지는 건
-  프로세스 이름, 창 제목 끝의 브라우저 이름, 사용자 데이터 폴더뿐이라 표 한 줄로 더한다(화면
-  쪽 `apps/ui/src/browsers.ts`의 프로세스 목록도 같이 맞춘다). Edge는 제목의 "Microsoft Edge"
+  프로세스 이름, 창 제목 끝의 브라우저 이름, 사용자 데이터 폴더뿐이라 표 한 줄로 더한다(화면은 이 목록을 hub의
+  `/api/browsers`로 받아 쓴다 — 화면이 자기 목록을 따로 들고 있지 않다). Edge는 제목의 "Microsoft Edge"
   안에 보이지 않는 글자(zero-width space)를 넣어서 비교 전에 걷어 낸다. 탭이 여럿이면 제목 뒤에
   "외 페이지 N개"(영어는 "and N more pages")를 붙이고, 프로필 이름도 Local State에 적힌 이름과 다르게
   ("개인") 보여 주므로, 이 접미사를 떼고 마지막 " - " 조각을 모르는 프로필 이름으로 보고 뗀 후보를
