@@ -17,7 +17,7 @@ import {
   periodContaining,
   periodsInYear,
   shiftPeriod,
-} from "../../src/domain/period.ts";
+} from "../../src/lib/period.ts";
 
 const originalTz = process.env.TZ;
 

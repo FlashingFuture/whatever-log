@@ -31,6 +31,7 @@ from aggregation.range import (
     usage_by_range,
 )
 from common import api_error
+from chromium.browsers import BROWSERS
 from chromium.snapshot import remove_stale_work_dirs
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
 from hub.icons import IconStore
@@ -200,13 +201,15 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         """경로별로 처리 함수에 나눠 준다.
 
-        /api/usage는 전체 집계, /api/processes/<이름>/usage는 한 프로세스의 칸별
+        /api/usage는 전체 집계(요약 포함), /api/browsers는 사이트를 기록하는 브라우저 목록, /api/processes/<이름>/usage는 한 프로세스의 칸별
         집계, /api/icons/<이름>은 아이콘 PNG, /api/sites는 사이트(도메인)별 집계,
         /api/site-icons/<도메인>은 사이트 아이콘 PNG다.
         """
         parsed = urlparse(self.path)
         if parsed.path == "/api/usage":
             self._get_usage(parsed.query)
+        elif parsed.path == "/api/browsers":
+            self._get_browsers()
         elif parsed.path == "/api/sites":
             self._get_site_usage(parsed.query)
         elif parsed.path.startswith(_SITE_ICON_PATH_PREFIX):
@@ -250,6 +253,16 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         self._send_json(200, payload)
+
+    def _get_browsers(self) -> None:
+        """사이트(도메인)를 기록하는 브라우저 프로세스 이름 목록.
+
+        화면이 어느 프로세스의 상세에 사이트 목록을 붙일지 알려고 쓴다. 목록의 원본은
+        chromium.browsers(recorder가 쓰는 것과 같은 표)라서, 화면이 자기 목록을 따로 들고 있다가
+        서로 어긋나는 일이 없다. 기록된 데이터가 아니라 지원 범위라 DB를 읽지 않고, 민감하지 않아
+        아이콘처럼 요청한 페이지를 따지지 않는다.
+        """
+        self._send_json(200, {"browsers": [browser.process_name for browser in BROWSERS]})
 
     def _get_site_usage(self, raw_query: str) -> None:
         """구간의 사이트(도메인)별 사용 시간(브라우저 상세 화면의 사이트 목록용).

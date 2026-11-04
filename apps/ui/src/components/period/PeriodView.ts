@@ -7,7 +7,7 @@ import {
   type PeriodUnit,
   periodContaining,
   shiftPeriod,
-} from "../../domain/period";
+} from "../../lib/period";
 import { createErrorView } from "../common/ErrorView";
 import { closePopover, isPopoverOpen, togglePopover } from "../common/Popover";
 import { createSegmentedControl } from "../common/SegmentedControl";

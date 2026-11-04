@@ -7,7 +7,7 @@ import {
   listYearOf,
   type Period,
   periodsInYear,
-} from "../../domain/period";
+} from "../../lib/period";
 import { createStepper } from "../common/Stepper";
 import styles from "./PeriodListPicker.module.css";
 

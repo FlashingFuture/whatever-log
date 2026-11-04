@@ -22,10 +22,23 @@ export interface SiteRangeUsage {
   by_site: SiteUsage[];
 }
 
+/**
+ * 구간 전체의 요약. 서버(packages/aggregation)가 계산한 값을 그대로 보여 준다 — "총 사용 시간"이
+ * 무엇의 합인지 같은 정의를 화면이 다시 계산하면 목표 달성률·보고서와 갈라질 수 있다.
+ */
+export interface RangeSummary {
+  /** 집중(active) 시간의 합. */
+  active_seconds: number;
+  idle_seconds: number;
+  /** 집중 시간이 가장 긴 프로세스(전부 0이면 null). */
+  top: { process: string; active_seconds: number } | null;
+}
+
 export interface RangeUsage {
   start: string;
   end: string;
   by_process: ProcessUsage[];
+  summary: RangeSummary;
 }
 
 /** 한 프로세스의 칸 하나(시간 하나, 날짜 하나)의 사용 시간. */

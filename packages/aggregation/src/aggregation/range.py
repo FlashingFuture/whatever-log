@@ -56,12 +56,36 @@ class SiteRangeUsage(TypedDict):
     by_site: list[SiteUsage]
 
 
+class TopProcess(TypedDict):
+    """구간에서 가장 많이 쓴(집중 시간이 가장 긴) 프로세스."""
+
+    process: str
+    active_seconds: float
+
+
+class RangeSummary(TypedDict):
+    """구간 전체의 요약. 화면의 "총 사용 시간"과 "가장 많이 사용한 프로그램"이 이 값을 그대로 쓴다.
+
+    정의를 한곳(여기)에 두는 이유: 이 숫자들은 화면뿐 아니라 목표 달성률·AI 보고서도 같은 뜻으로
+    써야 한다. 클라이언트마다 다시 계산하면 정의가 갈라진다.
+    """
+
+    active_seconds: float
+    """집중(active) 시간의 합. 프로세스는 겹쳐서 떠 있을 수 있어 전체(total)를 더하면 구간 길이를 넘지만,
+    집중 시간은 한 순간에 하나뿐이라 합이 실제로 쓴 시간이 된다."""
+    idle_seconds: float
+    """유휴(idle) 시간의 합(foreground였지만 입력이 없던 시간)."""
+    top: TopProcess | None
+    """집중 시간이 가장 긴 프로세스. 집중 시간이 전부 0이면(또는 기록이 없으면) None."""
+
+
 class RangeUsage(TypedDict):
     """usage_by_range()의 반환 모양."""
 
     start: str
     end: str
     by_process: list[ProcessUsage]
+    summary: RangeSummary
 
 
 def _gap_seconds(sampled_at: str, next_sampled_at: str) -> float | None:
@@ -218,7 +242,22 @@ def usage_by_range(
         )
     )
 
-    return {"start": start_iso, "end": end_iso, "by_process": by_process}
+    return {
+        "start": start_iso,
+        "end": end_iso,
+        "by_process": by_process,
+        "summary": _summarize(by_process),
+    }
+
+
+def _summarize(by_process: list[ProcessUsage]) -> RangeSummary:
+    """정렬된(집중 시간 내림차순) by_process로 구간 요약을 만든다."""
+    top = by_process[0] if by_process and by_process[0]["active_seconds"] > 0 else None
+    return {
+        "active_seconds": sum(row["active_seconds"] for row in by_process),
+        "idle_seconds": sum(row["idle_seconds"] for row in by_process),
+        "top": None if top is None else {"process": top["process"], "active_seconds": top["active_seconds"]},
+    }
 
 
 def site_usage_by_range(
