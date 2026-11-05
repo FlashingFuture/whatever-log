@@ -158,10 +158,10 @@ def test_process_names_must_be_valid_exe_file_names(name, code) -> None:
     assert _errors(processes=[name]) == {"processes[0]": code}
 
 
-def test_processes_must_be_a_non_empty_list_within_the_limit() -> None:
+def test_processes_must_be_a_list_within_the_limit() -> None:
     assert _errors(processes="chrome.exe") == {"processes": "type"}
     assert _errors(processes=None) == {"processes": "type"}
-    assert _errors(processes=[]) == {"processes": "empty"}
+    assert _valid(processes=[]).processes == ()  # 아직 연결한 프로세스가 없는 목표도 만들 수 있다
     too_many = [f"app{i}.exe" for i in range(MAX_PROCESSES_PER_GOAL + 1)]
     assert _errors(processes=too_many) == {"processes": "too_many"}
     at_limit = [f"app{i}.exe" for i in range(MAX_PROCESSES_PER_GOAL)]

@@ -153,16 +153,21 @@ def _process_name_problem(name: str) -> tuple[str, str] | None:
     return None
 
 
+def is_valid_process_name(name: object) -> bool:
+    """연결할 수 있는 프로세스 이름인지(올바른 `*.exe` 파일 이름). 화면이 고를 수 있는 목록을 거를 때 쓴다 —
+    검증과 같은 규칙이라 "목록에는 있는데 연결하면 거부되는" 일이 없다."""
+    return isinstance(name, str) and _process_name_problem(name) is None
+
+
 def _check_processes(
     value: Any, known_processes: Collection[str] | None, errors: list[FieldError]
 ) -> tuple[tuple[str, str], ...] | None:
-    """연결 프로세스 칸을 검사해 통과하면 (이름, 키) 쌍을 키 순으로, 아니면 errors를 더하고 None."""
+    """연결 프로세스 칸(0~20개)을 검사해 통과하면 (이름, 키) 쌍을 키 순으로, 아니면 errors를 더하고 None."""
     if not isinstance(value, (list, tuple)):
         errors.append(FieldError("processes", "type", "연결할 프로세스는 목록이어야 합니다."))
         return None
-    if not value:
-        errors.append(FieldError("processes", "empty", "연결할 프로세스를 하나 이상 골라야 합니다."))
-        return None
+    # 비어 있어도 된다: 목표를 먼저 만들고 프로세스를 나중에 연결하는 흐름(연결한 프로세스가 없는 목표는
+    # 수행 시간이 0일 뿐이다)과, 연결을 하나씩 자유롭게 풀 수 있는 화면을 위해서다.
     if len(value) > MAX_PROCESSES_PER_GOAL:
         errors.append(
             FieldError("processes", "too_many", f"한 목표에는 프로세스를 {MAX_PROCESSES_PER_GOAL}개까지 연결할 수 있습니다.")

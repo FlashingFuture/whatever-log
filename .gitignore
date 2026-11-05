@@ -11,6 +11,9 @@ recorder.db
 recorder.db-wal
 recorder.db-shm
 recorder.db.lock
+goals.db
+goals.db-wal
+goals.db-shm
 recorder.lock
 hub-*.lock
 icon-cache/

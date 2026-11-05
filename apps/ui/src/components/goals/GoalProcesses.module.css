@@ -1,0 +1,106 @@
+.root {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-4);
+}
+.panel {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.heading {
+  margin: 0;
+  font-size: var(--text-md);
+}
+.hint {
+  composes: muted from "../../styles/shared.module.css";
+  margin: 0;
+  font-size: var(--text-xs);
+}
+.list {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-1);
+  min-height: 8rem;
+  max-height: 16rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+}
+.panel[data-over="true"] .list {
+  border-color: var(--color-link);
+  background: var(--color-track);
+}
+.empty {
+  composes: muted from "../../styles/shared.module.css";
+  padding: var(--space-2);
+  font-size: var(--text-sm);
+}
+.item {
+  cursor: grab;
+}
+.itemButton {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: inherit;
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.itemButton:hover:not(:disabled) {
+  background: var(--color-track);
+}
+.itemButton:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+.itemButton:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.itemName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.others {
+  grid-column: 1 / -1;
+}
+.othersList {
+  list-style: none;
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.otherItem {
+  display: inline-flex;
+  gap: var(--space-2);
+  max-width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-track);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+.owner {
+  white-space: nowrap;
+}
+@media (max-width: 520px) {
+  .root {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

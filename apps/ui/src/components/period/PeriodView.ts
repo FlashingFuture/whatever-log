@@ -39,6 +39,8 @@ export interface PeriodViewProps {
 
 export interface PeriodView {
   element: HTMLElement;
+  /** 화면을 가리지 않고 조용히 다시 불러온다(목표가 바뀐 뒤 등). */
+  refresh: () => void;
   /** 타이머·키보드 리스너·열린 팝업을 정리한다. 화면을 떠날 때 부른다. */
   destroy: () => void;
 }
@@ -222,6 +224,9 @@ export function createPeriodView(props: PeriodViewProps): PeriodView {
 
   return {
     element,
+    refresh() {
+      load({ isBackgroundRefresh: true });
+    },
     destroy() {
       destroyed = true;
       clearInterval(timer);

@@ -15,6 +15,9 @@
   --color-active: #9ec5fb;
   --color-idle: #b5b5b5;
   --color-background-segment: #e2e2e2;
+  --color-link: #1a5fd0;
+  --color-danger: #c62828;
+  --color-danger-bg: #fdecec;
 
   --space-1: 0.25rem;
   --space-2: 0.5rem;
@@ -34,5 +37,6 @@
 
   --focus-ring: 2px solid var(--color-active);
   --shadow-popover: 0 6px 20px rgba(0, 0, 0, 0.08);
+  --shadow-modal: 0 12px 40px rgba(0, 0, 0, 0.2);
   --z-popover: 10;
 }

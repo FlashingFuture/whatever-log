@@ -1,0 +1,25 @@
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.button:hover {
+  background: var(--color-track);
+  color: var(--color-text);
+}
+.button:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+.danger:hover {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}

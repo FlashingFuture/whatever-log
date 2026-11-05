@@ -206,6 +206,7 @@ apps/ui/src/
 │  ├─ format.ts                 # 사용 시간 글자(1분 미만은 초 단위), 이름 줄이기
 │  ├─ period.ts                 # 일/주/월 구간 계산·라벨(브라우저의 로컬 시간, 달력·일광절약시간)
 │  ├─ stats.ts                  # maxOf(목록이 길어도 RangeError 없음)
+│  ├─ goalText.ts · goalSummary.ts · processPick.ts  # 목표 글자 표기 · 홈 최장 프로세스 블록 선택 · 연결 목록 분할(순수)
 │  └─ settle.ts                 # settleWithin(제한 시간 안에 끝나면 값, 아니면 undefined)
 ├─ router/                      # 주소 ↔ 화면
 │  ├─ router.ts                 # 해시 라우터(#/ , #/process/<이름>) + 앱 안 이동 깊이
@@ -214,6 +215,10 @@ apps/ui/src/
 ├─ components/                  # 재사용 UI 조각(어느 화면인지 모른다)
 │  ├─ common/                   # "사용 현황"을 모르는 범용 조각: 라벨·콜백만 받는다
 │  │  ├─ Button.ts · Popover.ts · SegmentedControl.ts · Stepper.ts · ErrorView.ts
+│  │  └─ Modal.ts(<dialog> 기반, 장면 교체) · IconButton.ts · Icon.ts(SVG 선 아이콘)
+│  ├─ goals/                    # 목표 관리 모달: GoalManager(목록 → 상세/편집/삭제 확인 장면 전환),
+│  │                            #   GoalList(hover/포커스/우클릭 시 수정·삭제 아이콘), GoalForm(서버 칸별 오류 표시),
+│  │                            #   GoalProcesses(연결/추적 두 칸, 클릭·드래그앤드롭으로 즉시 저장)
 │  ├─ period/                   # 구간 탐색: PeriodView(단위 선택 + 이동 + 내용, 상태·갱신·키보드),
 │  │  │                         #   CalendarPicker(일), PeriodListPicker(주/월)
 │  └─ usage/                    # 사용량을 그리는 조각

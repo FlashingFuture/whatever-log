@@ -34,6 +34,23 @@ from common import api_error
 from chromium.browsers import BROWSERS
 from chromium.snapshot import remove_stale_work_dirs
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
+from goals import (
+    GoalNotFoundError,
+    GoalStore,
+    GoalValidationError,
+    SchemaVersionError,
+    is_valid_process_name,
+)
+from hub.goals_service import (
+    BadRequest,
+    check_write_origin,
+    goal_fields,
+    goal_json,
+    is_local_host,
+    progress_payload,
+    read_json_object,
+    validation_error_body,
+)
 from hub.icons import IconStore
 from hub.site_icons import SITE_ICON_TTL_SECONDS, WORK_DIR_PREFIX, SiteIconStore
 from recorder.__main__ import DEFAULT_DB_PATH
@@ -45,6 +62,8 @@ DEFAULT_PORT = 8787
 _APP_DIR = Path(__file__).resolve().parent.parent.parent
 DEFAULT_LOG_PATH = _APP_DIR / "hub.log"
 DEFAULT_ICON_CACHE_DIR = _APP_DIR / "icon-cache"
+# 사용자의 목표 설정. recorder.db와 파일을 나눈다(쓰기 주체가 섞이지 않게 — docs/goals-design.md).
+DEFAULT_GOALS_DB_PATH = _APP_DIR / "goals.db"
 
 logger = logging.getLogger("hub")
 
@@ -159,6 +178,7 @@ def _usage_edges(query: dict[str, list[str]]) -> list[datetime]:
 
 
 _PROCESS_PATH_PREFIX = "/api/processes/"
+_GOAL_PATH = re.compile(r"/api/goals/(\d{1,9})")
 _PROCESS_USAGE_SUFFIX = "/usage"
 _ICON_PATH_PREFIX = "/api/icons/"
 _SITE_ICON_PATH_PREFIX = "/api/site-icons/"
@@ -179,6 +199,7 @@ class _Handler(BaseHTTPRequestHandler):
     """/api/* 요청을 집계 함수로 넘기고 JSON으로 응답한다."""
 
     db_path: Path = DEFAULT_DB_PATH
+    goals_db_path: Path = DEFAULT_GOALS_DB_PATH
     icon_store: IconStore = IconStore(DEFAULT_ICON_CACHE_DIR)
     site_icon_store: SiteIconStore = SiteIconStore()
 
@@ -198,6 +219,84 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_empty(self, status: int) -> None:
+        """본문 없는 응답(삭제 성공 등). CORS 헤더는 _send_json과 같은 규칙이다."""
+        self.send_response(status)
+        origin = self.headers.get("Origin", "")
+        if _ALLOWED_ORIGIN.fullmatch(origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _host_is_local(self) -> bool:
+        """Host 헤더가 로컬 주소가 아니면 403으로 거부한다(모든 요청에 적용 — DNS 리바인딩 방어)."""
+        if is_local_host(self.headers.get("Host", "")):
+            return True
+        self._send_json(
+            403, api_error.error_body(api_error.FORBIDDEN, "허용되지 않은 호스트입니다.")
+        )
+        return False
+
+    def _send_bad_request(self, error: BadRequest) -> None:
+        """BadRequest를 api_error 응답으로."""
+        self._send_json(error.status, api_error.error_body(error.code, error.message))
+
+    def _send_unavailable(self, what: str, error: Exception) -> None:
+        """DB를 못 읽거나 쓸 때 503. 원인은 로그에만 남긴다."""
+        logger.error("%s를 열지 못했습니다: %s", what, error)
+        self._send_json(
+            503, api_error.error_body(api_error.UNAVAILABLE, "database unavailable")
+        )
+
+    def do_OPTIONS(self) -> None:
+        """CORS 사전 요청(preflight). 허용된 UI의 Origin에만 쓰기 메서드를 허용한다고 답한다."""
+        if not self._host_is_local():
+            return
+        origin = self.headers.get("Origin", "")
+        if not _ALLOWED_ORIGIN.fullmatch(origin):
+            self._send_json(
+                403, api_error.error_body(api_error.FORBIDDEN, "허용되지 않은 출처입니다.")
+            )
+            return
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Vary", "Origin")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Max-Age", "600")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_POST(self) -> None:
+        """POST /api/goals — 목표를 만든다."""
+        if not self._host_is_local():
+            return
+        if urlparse(self.path).path == "/api/goals":
+            self._write_goal(None)
+        else:
+            self._send_json(404, api_error.error_body(api_error.NOT_FOUND, "not found"))
+
+    def do_PUT(self) -> None:
+        """PUT /api/goals/<id> — 목표를 통째로 바꾼다."""
+        if not self._host_is_local():
+            return
+        match = _GOAL_PATH.fullmatch(urlparse(self.path).path)
+        if match:
+            self._write_goal(int(match.group(1)))
+        else:
+            self._send_json(404, api_error.error_body(api_error.NOT_FOUND, "not found"))
+
+    def do_DELETE(self) -> None:
+        """DELETE /api/goals/<id> — 목표를 지운다."""
+        if not self._host_is_local():
+            return
+        match = _GOAL_PATH.fullmatch(urlparse(self.path).path)
+        if match:
+            self._delete_goal(int(match.group(1)))
+        else:
+            self._send_json(404, api_error.error_body(api_error.NOT_FOUND, "not found"))
+
     def do_GET(self) -> None:
         """경로별로 처리 함수에 나눠 준다.
 
@@ -205,9 +304,17 @@ class _Handler(BaseHTTPRequestHandler):
         집계, /api/icons/<이름>은 아이콘 PNG, /api/sites는 사이트(도메인)별 집계,
         /api/site-icons/<도메인>은 사이트 아이콘 PNG다.
         """
+        if not self._host_is_local():
+            return
         parsed = urlparse(self.path)
         if parsed.path == "/api/usage":
             self._get_usage(parsed.query)
+        elif parsed.path == "/api/goals":
+            self._get_goals()
+        elif parsed.path == "/api/goals/progress":
+            self._get_goal_progress(parsed.query)
+        elif parsed.path == "/api/processes":
+            self._get_tracked_processes()
         elif parsed.path == "/api/browsers":
             self._get_browsers()
         elif parsed.path == "/api/sites":
@@ -223,6 +330,116 @@ class _Handler(BaseHTTPRequestHandler):
             self._get_icon(unquote(parsed.path[len(_ICON_PATH_PREFIX) :]))
         else:
             self._send_json(404, api_error.error_body(api_error.NOT_FOUND, "not found"))
+
+    def _recorded_process_names(self) -> list[str] | None:
+        """recorder가 기록한 프로세스 이름들. DB를 못 읽으면 503을 보내고 None."""
+        try:
+            conn = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
+            try:
+                return [row[0] for row in conn.execute("SELECT name FROM processes")]
+            finally:
+                conn.close()
+        except sqlite3.Error as error:
+            self._send_unavailable("집계 DB", error)
+            return None
+
+    def _get_tracked_processes(self) -> None:
+        """추적된(기록된) 프로세스 중 목표에 연결할 수 있는 이름들 — 연결 화면의 선택 목록.
+
+        목표 입력 검증과 같은 규칙(is_valid_process_name)으로 거르므로, 목록에 있는 이름은 연결하면 거부되지
+        않는다(설치 도구의 `.tmp` 같은 것은 빠진다).
+        """
+        names = self._recorded_process_names()
+        if names is None:
+            return
+        linkable = sorted((n for n in names if is_valid_process_name(n)), key=str.casefold)
+        self._send_json(200, {"processes": linkable})
+
+    def _get_goals(self) -> None:
+        """저장된 목표 목록."""
+        try:
+            with GoalStore(self.goals_db_path) as store:
+                goals = store.list_goals()
+        except (sqlite3.Error, SchemaVersionError) as error:
+            self._send_unavailable("목표 DB", error)
+            return
+        self._send_json(200, {"goals": [goal_json(goal) for goal in goals]})
+
+    def _get_goal_progress(self, raw_query: str) -> None:
+        """구간의 목표별 수행 시간과 요약(홈 왼쪽 요약용). 수행 시간 = 연결 프로세스의 활성 시간 합."""
+        try:
+            start, end = _usage_bounds(parse_qs(raw_query))
+        except ValueError as exc:
+            self._send_json(
+                400, api_error.error_body(api_error.INVALID_REQUEST, str(exc))
+            )
+            return
+        try:
+            with GoalStore(self.goals_db_path) as store:
+                goals = store.list_goals()
+        except (sqlite3.Error, SchemaVersionError) as error:
+            self._send_unavailable("목표 DB", error)
+            return
+        try:
+            conn = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
+            try:
+                usage = usage_by_range(conn, start, end)
+            finally:
+                conn.close()
+        except sqlite3.Error as error:
+            self._send_unavailable("집계 DB", error)
+            return
+        self._send_json(200, progress_payload(goals, usage))
+
+    def _write_goal(self, goal_id: int | None) -> None:
+        """목표 생성(goal_id가 None)·교체. 출처·본문 형식을 먼저 검사하고, 입력은 goals가 엄격하게 검증한다.
+
+        연결할 프로세스는 recorder가 기록한 이름이어야 한다(기록된 적 없는 이름을 연결해 수행 시간이
+        영원히 0이 되는 일을 막는다).
+        """
+        try:
+            check_write_origin(self.headers.get("Origin"), _ALLOWED_ORIGIN)
+            fields = goal_fields(read_json_object(self.headers, self.rfile))
+        except BadRequest as error:
+            self._send_bad_request(error)
+            return
+        recorded = self._recorded_process_names()
+        if recorded is None:
+            return
+        try:
+            with GoalStore(self.goals_db_path) as store:
+                if goal_id is None:
+                    goal = store.create(**fields, known_processes=recorded)
+                else:
+                    goal = store.update(goal_id, **fields, known_processes=recorded)
+        except GoalValidationError as error:
+            self._send_json(400, validation_error_body(error))
+            return
+        except GoalNotFoundError:
+            self._send_json(404, api_error.error_body(api_error.NOT_FOUND, "goal not found"))
+            return
+        except (sqlite3.Error, SchemaVersionError) as error:
+            self._send_unavailable("목표 DB", error)
+            return
+        self._send_json(201 if goal_id is None else 200, goal_json(goal))
+
+    def _delete_goal(self, goal_id: int) -> None:
+        """목표를 지운다(연결 정보도 같이). 출처를 검사하고, 지난 날의 스냅샷은 남는다."""
+        try:
+            check_write_origin(self.headers.get("Origin"), _ALLOWED_ORIGIN)
+        except BadRequest as error:
+            self._send_bad_request(error)
+            return
+        try:
+            with GoalStore(self.goals_db_path) as store:
+                store.delete(goal_id)
+        except GoalNotFoundError:
+            self._send_json(404, api_error.error_body(api_error.NOT_FOUND, "goal not found"))
+            return
+        except (sqlite3.Error, SchemaVersionError) as error:
+            self._send_unavailable("목표 DB", error)
+            return
+        self._send_empty(204)
 
     def _get_usage(self, raw_query: str) -> None:
         """읽기 전용(mode=ro)으로 연다 — hub는 조회만 하는 쪽이라 쓰기 가능한
@@ -485,6 +702,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="whatever.log 집계 API 서버")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--db-path", type=Path, default=DEFAULT_DB_PATH)
+    parser.add_argument("--goals-db-path", type=Path, default=DEFAULT_GOALS_DB_PATH)
     args = parser.parse_args()
 
     configure_logging(logger, DEFAULT_LOG_PATH)
@@ -500,6 +718,7 @@ def main() -> None:
         # 중복 실행 lock을 잡은 뒤, 이 프로세스가 작업 폴더를 만들기 전에 한 번만 한다.
         remove_stale_work_dirs(WORK_DIR_PREFIX)
         _Handler.db_path = args.db_path
+        _Handler.goals_db_path = args.goals_db_path
         logger.info("포트 %d에서 집계 API를 시작합니다. DB: %s", args.port, args.db_path)
         server = ThreadingHTTPServer(("127.0.0.1", args.port), _Handler)
         server.serve_forever()
