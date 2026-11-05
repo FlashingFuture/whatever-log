@@ -16,6 +16,7 @@ class GoalValidationError(ValueError):
     """입력이 규칙에 맞지 않는다. 고칠 수 있게 모든 칸의 오류를 한꺼번에 담는다(첫 오류만 알리지 않는다)."""
 
     def __init__(self, errors: list[FieldError]) -> None:
+        """칸별 오류 목록을 담고, 예외 메시지는 그 요약으로 만든다."""
         self.errors = tuple(errors)
         super().__init__("; ".join(f"{error.field}: {error.message}" for error in self.errors))
 

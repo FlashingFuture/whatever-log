@@ -94,6 +94,7 @@ class GoalStore:
     """
 
     def __init__(self, path: Path, *, now: Callable[[], datetime] = lambda: datetime.now(UTC)) -> None:
+        """path의 goals.db를 열고(없으면 만들고) 스키마와 버전을 확인한다."""
         self._now = now
         self._conn = sqlite3.connect(path, isolation_level=None, timeout=5.0)
         try:
