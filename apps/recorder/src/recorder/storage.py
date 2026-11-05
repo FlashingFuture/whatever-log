@@ -90,6 +90,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_ticks_foreground_site_id ON ticks(foreground_site_id)"
     )
+    # (사이트, 프로세스) 쌍을 틱 테이블 본문을 읽지 않고 인덱스만으로 훑게 한다 — hub가 "어느 브라우저에서
+    # 어느 사이트가 기록됐는지"를 목표 연결 목록·검증에 쓰는데, 틱이 수백만 개여도 빨라야 한다.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ticks_site_process "
+        "ON ticks(foreground_site_id, foreground_process_id)"
+    )
 
 
 def _get_or_create_process_id(conn: sqlite3.Connection, name: str) -> int:

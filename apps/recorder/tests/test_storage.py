@@ -191,3 +191,20 @@ def test_open_db_adds_foreground_site_id_to_existing_ticks(tmp_path) -> None:
     assert conn.execute("SELECT sampled_at, foreground_site_id FROM ticks").fetchall() == [
         ("2026-01-01", None)
     ]
+
+
+def test_open_db_creates_the_site_process_index_and_the_hub_query_uses_it(tmp_path) -> None:
+    """hub가 (프로세스, 사이트) 쌍을 틱 전체를 훑지 않고 인덱스만으로 읽을 수 있어야 한다."""
+    conn = open_db(tmp_path / "t.db")
+    indexes = {row[1] for row in conn.execute("PRAGMA index_list(ticks)")}
+    assert "idx_ticks_site_process" in indexes
+
+    plan = " ".join(
+        row[3]
+        for row in conn.execute(
+            "EXPLAIN QUERY PLAN SELECT DISTINCT foreground_process_id, foreground_site_id FROM ticks "
+            "WHERE foreground_site_id IS NOT NULL AND foreground_process_id IS NOT NULL"
+        )
+    )
+    assert "COVERING INDEX" in plan.upper()
+    conn.close()

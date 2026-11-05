@@ -92,11 +92,15 @@
   `{browser, domain}`, 지원하는 브라우저·유효한 도메인만). 목표 본문은 `name`, `daily_target_minutes`, `weekdays`,
   `processes`, `sites` 다섯 칸이 모두 필요하다.
 - 오류는 `{"error":{"code","message","fields?"}}` — 입력 오류는 칸별(`fields`)로 돌려준다.
-- 쓰기(POST/PUT/DELETE)는 Host가 로컬이고, Origin이 허용 목록(`127.0.0.1`/`localhost`)이며,
-  `Content-Type: application/json`, 본문 32KB 이하, 모르는 필드 없음일 때만 받는다(CSRF·DNS 리바인딩 방어).
-  본문이 `Content-Length`보다 짧거나 JSON이 아니거나 너무 깊게 중첩돼도 400이다. `DELETE`는 반대로 본문이나
-  `Content-Type`이 있으면 400으로 거부한다. 요청을 읽는 소켓에는 15초 제한 시간이 있다. 연결할 프로세스·사이트가
-  없는 목표는 기록 DB를 읽지 않고 저장한다.
+- 쓰기(POST/PUT/DELETE)는 공통으로 Host가 로컬이고 Origin이 허용된 UI의 origin과 **정확히** 같을 때만 받는다
+  (CSRF·DNS 리바인딩 방어). 허용 origin은 hub를 띄우는 쪽이 `--allowed-origin`으로 알려 준다: desktop은 자기가
+  서빙하는 UI의 실제 origin(임의 포트)을, 따로 띄울 때 기본값은 Vite dev server(`http://localhost:5173`,
+  `http://127.0.0.1:5173`)다. 그래서 이 PC의 다른 로컬 웹 서버(다른 포트)는 읽기·쓰기 모두 못 한다.
+  읽기(CORS)·CORS preflight·아이콘 Referer 검사도 같은 목록을 쓴다.
+- **POST/PUT**은 추가로 `Content-Type: application/json`, 본문 32KB 이하, 모르는 필드 없음이어야 한다. 본문이
+  `Content-Length`보다 짧거나 JSON이 아니거나 너무 깊게 중첩돼도 400이다.
+- **DELETE**는 반대로 본문이나 `Content-Type`이 있으면 400으로 거부한다.
+- 요청을 읽는 소켓에는 15초 제한 시간이 있다. 연결할 프로세스·사이트가 없는 목표는 기록 DB를 읽지 않고 저장한다.
   CORS preflight는 허용된 Origin에만 응답한다.
 
 ## UI

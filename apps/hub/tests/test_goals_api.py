@@ -1,3 +1,4 @@
+import argparse
 import http.client
 import io
 import json
@@ -12,7 +13,7 @@ import pytest
 from recorder.sampling import TickSample
 from recorder.storage import open_db, save_tick
 
-from hub.__main__ import _ALLOWED_ORIGIN, _Handler
+from hub.__main__ import DEFAULT_ALLOWED_ORIGINS, _Handler, parse_origin
 from hub.goals_service import (
     BadRequest,
     check_write_origin,
@@ -338,10 +339,10 @@ def test_is_local_host(host: str, expected: bool) -> None:
 
 
 def test_check_write_origin_requires_an_allowed_origin() -> None:
-    check_write_origin(UI_ORIGIN, _ALLOWED_ORIGIN)
+    check_write_origin(UI_ORIGIN, DEFAULT_ALLOWED_ORIGINS)
     for bad in (None, "", "https://127.0.0.1", "http://evil.example"):
         with pytest.raises(BadRequest) as exc_info:
-            check_write_origin(bad, _ALLOWED_ORIGIN)
+            check_write_origin(bad, DEFAULT_ALLOWED_ORIGINS)
         assert exc_info.value.status == 403
 
 
@@ -407,3 +408,50 @@ def test_a_goal_without_links_is_saved_even_if_the_recorder_db_is_unreadable(goa
 
     assert _call(goals_server, "POST", "/api/goals", body)[0] == 201
     assert _call(goals_server, "POST", "/api/goals", {**GOAL, "name": "다른"})[0] == 503  # 연결이 있으면 확인이 필요하다
+
+
+# --- 허용 origin은 정확히 일치해야 한다(아무 localhost 포트가 아니라) ---
+
+
+@pytest.mark.parametrize(
+    "origin", ["http://127.0.0.1:9999", "http://localhost:3000", "http://127.0.0.1", "http://localhost:5173/"]
+)
+def test_another_local_web_server_cannot_read_or_write_goals(goals_server, origin) -> None:
+    created = _call(goals_server, "POST", "/api/goals", {**GOAL, "processes": []})[1]
+
+    for method, path, body in (
+        ("POST", "/api/goals", GOAL),
+        ("PUT", f"/api/goals/{created['id']}", {**GOAL, "name": "바뀜"}),
+        ("DELETE", f"/api/goals/{created['id']}", None),
+    ):
+        status, payload, _ = _call(goals_server, method, path, body, origin=origin)
+        assert status == 403 and payload["error"]["code"] == "forbidden", (method, origin)
+
+    status, _, headers = _call(goals_server, "GET", "/api/goals", origin=origin)  # 읽기도 CORS 헤더가 없어 브라우저가 막는다
+    assert status == 200 and "Access-Control-Allow-Origin" not in headers
+    options = urllib.request.Request(f"{goals_server}/api/goals", method="OPTIONS", headers={"Origin": origin})
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        urllib.request.urlopen(options, timeout=3)
+    assert caught.value.code == 403
+
+
+def test_the_origin_given_by_the_launcher_is_the_one_that_is_allowed(goals_server, monkeypatch) -> None:
+    desktop_ui = "http://127.0.0.1:53412"  # desktop이 서빙하는 UI의 임의 포트
+    monkeypatch.setattr(_Handler, "allowed_origins", frozenset({desktop_ui}))
+
+    assert _call(goals_server, "POST", "/api/goals", {**GOAL, "processes": []}, origin=desktop_ui)[0] == 201
+    status, payload, _ = _call(goals_server, "POST", "/api/goals", {**GOAL, "name": "다른", "processes": []}, origin=UI_ORIGIN)
+    assert status == 403 and payload["error"]["code"] == "forbidden"  # 기본값이던 5173은 더 이상 허용되지 않는다
+
+
+@pytest.mark.parametrize("text", ["http://localhost:5173", "http://127.0.0.1:53412"])
+def test_parse_origin_accepts_local_origins(text) -> None:
+    assert parse_origin(text) == text
+
+
+@pytest.mark.parametrize(
+    "text", ["", "*", "https://localhost:5173", "http://evil.example:5173", "http://localhost", "http://localhost:5173/", "http://localhost:99999x"]
+)
+def test_parse_origin_rejects_everything_else(text) -> None:
+    with pytest.raises(argparse.ArgumentTypeError):
+        parse_origin(text)

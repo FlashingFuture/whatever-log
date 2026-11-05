@@ -13,7 +13,7 @@
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from typing import Any, BinaryIO
 
 from aggregation.range import RangeUsage
@@ -49,9 +49,9 @@ def is_local_host(host: str) -> bool:
     return _LOCAL_HOST.fullmatch(host) is not None
 
 
-def check_write_origin(origin: str | None, allowed_origin: re.Pattern[str]) -> None:
-    """쓰기 요청의 Origin이 허용된 UI인지. 아니면(없는 경우 포함) BadRequest(403)."""
-    if origin is None or allowed_origin.fullmatch(origin) is None:
+def check_write_origin(origin: str | None, allowed_origins: Collection[str]) -> None:
+    """쓰기 요청의 Origin이 허용된 UI(정확히 그 origin)인지. 아니면(없는 경우 포함) BadRequest(403)."""
+    if origin is None or origin not in allowed_origins:
         raise BadRequest(403, api_error.FORBIDDEN, "이 요청은 허용되지 않은 출처에서 왔습니다.")
 
 

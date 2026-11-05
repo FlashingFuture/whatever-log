@@ -52,9 +52,12 @@ file:// 이슈와는 다른, 진짜로 적용되는 CORS 사례).
 바인딩했으니 안전하다"는 잘못된 가정이었다 — 와일드카드를 열면 사용자가 띄워둔
 **아무 웹사이트나** 이 API를 fetch해서 프로세스별 사용 시간(개인 활동 정보)을
 읽어갈 수 있다. 브라우저의 로컬 네트워크 접근 제한에 기대는 것도 위험하다. 지금은
-요청의 `Origin`이 `http://(127.0.0.1|localhost)(:포트)?` 패턴일 때만 그 origin을
-그대로 반사하고 `Vary: Origin`을 같이 보낸다 — desktop이 서빙하는 UI(임의 포트)와
-Vite dev server(5173) 둘 다 이 패턴에 맞는다.
+요청의 `Origin`이 허용 목록에 **정확히** 있을 때만 그 origin을 그대로 반사하고 `Vary: Origin`을
+같이 보낸다. 처음엔 "아무 localhost 포트"를 허용했지만, 그러면 이 PC에서 도는 다른 로컬 웹 서버의
+페이지도 읽기·쓰기(목표 생성·삭제)를 할 수 있어서 좁혔다. 허용 목록은 hub를 띄우는 쪽이
+`--allowed-origin`으로 알려 준다 — desktop은 UI를 먼저 서빙해 실제 origin(임의 포트)을 알아낸 뒤 그걸 넘겨
+hub를 띄우고, 따로 띄울 때 기본값은 Vite dev server(5173)다. CORS 응답·preflight·쓰기 Origin 검사·아이콘
+Referer 검사가 모두 같은 목록을 쓴다.
 
 ## uv workspace로 전환
 
