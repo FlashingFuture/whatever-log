@@ -10,7 +10,7 @@
 """
 
 import unicodedata
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,8 +26,16 @@ MAX_PROCESSES_PER_GOAL = 20
 
 # Windows 파일 이름에 쓸 수 없는 글자. 프로세스 이름은 exe 파일 이름이라 이것들이 들어갈 수 없다.
 _FORBIDDEN_IN_PROCESS_NAME = frozenset('\\/:*?"<>|')
-PROCESS_NAME_MAX_CHARS = 255
+# NTFS의 파일 이름 한 칸 제한은 255 "UTF-16 코드 단위"다. 파이썬의 글자 수(코드 포인트)와 달리 이모지 같은
+# 기본 다국어 평면(BMP) 밖 글자는 두 단위를 차지해서, 글자 수로 재면 제한을 넘는 이름이 통과한다.
+PROCESS_NAME_MAX_UTF16_UNITS = 255
 _PROCESS_SUFFIX = ".exe"
+# 확장자가 있어도(`CON.exe`) 파일 이름으로 쓸 수 없는 Windows 예약 장치 이름.
+_RESERVED_DEVICE_NAMES = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{n}" for n in range(1, 10)}
+    | {f"lpt{n}" for n in range(1, 10)}
+)
 
 
 @dataclass(frozen=True)
@@ -40,6 +48,11 @@ class GoalSpec:
     weekdays: frozenset[int]
     # (이름, 비교 키) — 대소문자를 구분하지 않는 키 순서로 정렬돼 같은 입력은 항상 같은 순서다.
     processes: tuple[tuple[str, str], ...]
+
+
+def _utf16_units(text: str) -> int:
+    """글자열이 차지하는 UTF-16 코드 단위 수(NTFS 파일 이름 길이 제한의 단위)."""
+    return len(text.encode("utf-16-le")) // 2
 
 
 def process_key(name: str) -> str:
@@ -57,16 +70,19 @@ def name_key(name: str) -> str:
 
 
 def _is_plain_int(value: object) -> bool:
+    """값이 진짜 정수인지(True/False 같은 bool은 제외)."""
     # bool은 int의 하위 타입이라 isinstance만으로는 True/False가 숫자로 통과한다.
     return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _has_control_character(text: str) -> bool:
+    """제어·서식 문자가 하나라도 있는지."""
     # 제어 문자와 서식 문자(줄바꿈, 탭, 폭 없는 공백 등)는 눈에 안 보여 구분이 안 되므로 받지 않는다.
     return any(unicodedata.category(char).startswith("C") for char in text)
 
 
 def _check_name(value: Any, errors: list[FieldError]) -> str | None:
+    """이름 칸을 검사해 통과하면 정규화된 이름, 아니면 errors에 한 건을 더하고 None."""
     if not isinstance(value, str):
         errors.append(FieldError("name", "type", "이름은 문자열이어야 합니다."))
         return None
@@ -83,6 +99,7 @@ def _check_name(value: Any, errors: list[FieldError]) -> str | None:
 
 
 def _check_target_minutes(value: Any, errors: list[FieldError]) -> int | None:
+    """목표 시간 칸을 검사해 통과하면 정수, 아니면 errors에 한 건을 더하고 None."""
     if not _is_plain_int(value):
         errors.append(FieldError("daily_target_minutes", "type", "목표 시간은 정수(분)여야 합니다."))
         return None
@@ -99,6 +116,7 @@ def _check_target_minutes(value: Any, errors: list[FieldError]) -> int | None:
 
 
 def _check_weekdays(value: Any, errors: list[FieldError]) -> frozenset[int] | None:
+    """요일 칸을 검사해 통과하면 요일 집합, 아니면 errors에 한 건을 더하고 None."""
     if not isinstance(value, (list, tuple)):
         errors.append(FieldError("weekdays", "type", "요일은 목록(월=0 … 일=6)이어야 합니다."))
         return None
@@ -125,16 +143,20 @@ def _process_name_problem(name: str) -> tuple[str, str] | None:
         return "invalid_characters", '파일 이름에 쓸 수 없는 글자(\\ / : * ? " < > |)가 있습니다.'
     if name != name.strip():
         return "whitespace_edges", "앞뒤에 공백이 있으면 안 됩니다."
-    if not 1 <= len(name) <= PROCESS_NAME_MAX_CHARS:
-        return "length", f"1~{PROCESS_NAME_MAX_CHARS}자여야 합니다."
+    if not 1 <= _utf16_units(name) <= PROCESS_NAME_MAX_UTF16_UNITS:
+        return "length", f"{PROCESS_NAME_MAX_UTF16_UNITS}자(UTF-16 기준) 이하여야 합니다."
     if not name.casefold().endswith(_PROCESS_SUFFIX) or not name[: -len(_PROCESS_SUFFIX)].strip(" ."):
         return "not_exe", "프로세스 이름은 `이름.exe` 꼴이어야 합니다."
+    # Windows는 첫 점 앞의 이름이 예약어면 확장자와 상관없이 파일 이름으로 쓰지 못한다.
+    if name.split(".", 1)[0].rstrip(" ").casefold() in _RESERVED_DEVICE_NAMES:
+        return "reserved_name", "Windows 예약 이름(CON, PRN, AUX, NUL, COM1~9, LPT1~9)은 쓸 수 없습니다."
     return None
 
 
 def _check_processes(
     value: Any, known_processes: Collection[str] | None, errors: list[FieldError]
 ) -> tuple[tuple[str, str], ...] | None:
+    """연결 프로세스 칸을 검사해 통과하면 (이름, 키) 쌍을 키 순으로, 아니면 errors를 더하고 None."""
     if not isinstance(value, (list, tuple)):
         errors.append(FieldError("processes", "type", "연결할 프로세스는 목록이어야 합니다."))
         return None
@@ -169,6 +191,25 @@ def _check_processes(
     if len(errors) > problems_before:
         return None
     return tuple(sorted(((item, process_key(item)) for item in value), key=lambda pair: pair[1]))
+
+
+def usable_keys(
+    name: Any, processes: Any, errors: Sequence[FieldError]
+) -> tuple[str | None, list[tuple[str, str]]]:
+    """검증에 실패한 입력에서도 다른 목표와 겹치는지 확인할 수 있는 부분(이름 키, (프로세스 이름, 키) 쌍)을 꺼낸다.
+
+    저장소가 "형식 오류"와 "다른 목표와의 충돌"을 한 번에 알리려고 쓴다 — 이름이 형식은 맞는데 이미
+    있는 이름이면, 다른 칸이 틀렸어도 그 충돌까지 같이 알려 사용자가 한 번에 고칠 수 있다. errors에
+    오류가 난 칸(이름 전체, 프로세스 개별 항목)은 믿을 수 없어 뺀다.
+    """
+    failed = {error.field for error in errors}
+    key = name_key(name) if isinstance(name, str) and "name" not in failed else None
+    pairs: list[tuple[str, str]] = []
+    if isinstance(processes, (list, tuple)) and "processes" not in failed:
+        for index, item in enumerate(processes):
+            if isinstance(item, str) and f"processes[{index}]" not in failed:
+                pairs.append((item, process_key(item)))
+    return key, pairs
 
 
 def validate_goal(

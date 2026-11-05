@@ -1,3 +1,5 @@
+import unicodedata
+
 import pytest
 
 from goals import GoalValidationError, process_key, validate_goal
@@ -33,7 +35,8 @@ def test_a_valid_input_is_normalized_and_sorted() -> None:
 
 
 def test_the_name_is_normalized_to_nfc_and_keyed_case_insensitively() -> None:
-    decomposed = "공부"  # 한글 자모가 풀어져 있는 표현
+    decomposed = unicodedata.normalize("NFD", "공부")  # 한글 자모가 풀어져 있는 표현
+    assert decomposed != "공부"  # 입력이 실제로 NFC와 다르다 — 정규화가 일하는 경로를 확인한다
     spec = _valid(name=decomposed)
 
     assert spec.name == "공부"
@@ -111,6 +114,10 @@ def test_weekdays_must_be_a_non_empty_list_of_unique_days(weekdays, code) -> Non
         "Arknights_KR_Gamelauncher.exe",
         "CHROME.EXE",
         "메모장.exe",
+        "console.exe",  # 예약어로 "시작"할 뿐 예약어가 아니다
+        "COM10.exe",  # COM1~9만 예약이다
+        "😀" * 125 + ".exe",  # 254 UTF-16 단위(경계 안쪽)
+        "가" * 251 + ".exe",  # 255 단위 정확히 경계
     ],
 )
 def test_real_world_process_names_are_accepted(name) -> None:
@@ -138,6 +145,13 @@ def test_real_world_process_names_are_accepted(name) -> None:
         ("a\x00b.exe", "invalid_characters"),
         ("a\nb.exe", "invalid_characters"),
         ("가" * 252 + ".exe", "length"),
+        ("😀" * 126 + ".exe", "length"),  # 256 UTF-16 단위 — 글자 수는 130이라 글자 수로 재면 통과해 버린다
+        ("CON.exe", "reserved_name"),
+        ("nul.exe", "reserved_name"),
+        ("Aux.exe", "reserved_name"),
+        ("COM1.exe", "reserved_name"),
+        ("lpt9.exe", "reserved_name"),
+        ("con.tmp.exe", "reserved_name"),  # 첫 점 앞이 예약어면 확장자와 상관없이 쓸 수 없다
     ],
 )
 def test_process_names_must_be_valid_exe_file_names(name, code) -> None:
