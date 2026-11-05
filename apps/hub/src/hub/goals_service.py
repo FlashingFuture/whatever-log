@@ -1,4 +1,4 @@
-"""목표 API(/api/goals, /api/processes)의 HTTP와 무관한 부분 — 요청 검사, 본문 해석, 응답 만들기.
+"""목표 API(/api/goals, /api/processes, /api/tracked-sites)의 HTTP와 무관한 부분 — 요청 검사, 본문 해석, 응답 만들기.
 
 핸들러(`hub.__main__._Handler`)는 얇게 두고, 규칙은 여기 순수 함수로 둔다(소켓 없이 테스트한다). 목표가
 무엇이고 무엇이 올바른 입력인지는 packages/goals가 정하고, 여기는 그것을 HTTP 요청·응답 모양으로
@@ -17,12 +17,12 @@ from collections.abc import Mapping
 from typing import Any, BinaryIO
 
 from aggregation.range import RangeUsage
-from goals import Goal, GoalProgress, GoalValidationError, ProgressSummary, compute_progress
+from goals import Goal, GoalProgress, GoalValidationError, ProgressSummary, TopTarget, compute_progress
 
 from common import api_error
 
-# 목표 입력의 모든 칸은 이 네 개뿐이다 — 모르는 칸이 있으면 오타나 다른 API의 본문일 수 있어 거부한다.
-GOAL_FIELDS = ("name", "daily_target_minutes", "weekdays", "processes")
+# 목표 입력의 모든 칸은 이 다섯 개뿐이다 — 모르는 칸이 있으면 오타나 다른 API의 본문일 수 있어 거부한다.
+GOAL_FIELDS = ("name", "daily_target_minutes", "weekdays", "processes", "sites")
 MAX_BODY_BYTES = 32 * 1024
 
 _LOCAL_HOST = re.compile(r"(127\.0\.0\.1|localhost)(:\d+)?")
@@ -80,7 +80,7 @@ def read_json_object(headers: Mapping[str, str], body: BinaryIO) -> dict[str, An
 
 
 def goal_fields(body: dict[str, Any]) -> dict[str, Any]:
-    """본문에서 목표 입력 네 칸을 꺼낸다. 모르는 칸이 있으면 BadRequest. 빠진 칸은 None으로 두어
+    """본문에서 목표 입력 다섯 칸을 꺼낸다. 모르는 칸이 있으면 BadRequest. 빠진 칸은 None으로 두어
     goals.validate_goal이 "형식이 틀렸다"고 칸별로 알리게 한다."""
     unknown = sorted(set(body) - set(GOAL_FIELDS))
     if unknown:
@@ -96,6 +96,7 @@ def goal_json(goal: Goal) -> dict[str, Any]:
         "daily_target_minutes": goal.daily_target_minutes,
         "weekdays": sorted(goal.weekdays),
         "processes": list(goal.processes),
+        "sites": [{"browser": site.browser, "domain": site.domain} for site in goal.sites],
         "created_at": goal.created_at,
         "updated_at": goal.updated_at,
     }
@@ -116,17 +117,43 @@ def _process_time_json(time: Any) -> dict[str, Any]:
     return {"process": time.process, "active_seconds": time.active_seconds}
 
 
+def _site_time_json(time: Any) -> dict[str, Any]:
+    return {"browser": time.browser, "domain": time.domain, "active_seconds": time.active_seconds}
+
+
+def _top_json(top: TopTarget) -> dict[str, Any]:
+    """가장 길게 수행한 대상. 사이트면 site에 도메인이 있고 process는 그 사이트를 본 브라우저다."""
+    return {"process": top.process, "active_seconds": top.active_seconds, "site": top.site}
+
+
+def browsers_with_sites(goals: list[Goal]) -> list[str]:
+    """목표들에 사이트가 연결된 브라우저 프로세스 이름들(중복 없이, 대소문자 무시) — 사이트 집계를 어느 브라우저에 돌릴지."""
+    seen: dict[str, str] = {}
+    for goal in goals:
+        for site in goal.sites:
+            seen.setdefault(site.browser.casefold(), site.browser)
+    return list(seen.values())
+
+
 def progress_payload(
-    goals: list[Goal], usage: RangeUsage
+    goals: list[Goal],
+    usage: RangeUsage,
+    site_usage: Mapping[str, list[Any]] | None = None,
 ) -> dict[str, Any]:
     """구간의 사용량(usage_by_range 결과)과 목표들로 목표별 수행 시간과 요약을 만든다.
 
-    수행 시간의 정의(연결 프로세스의 활성 시간 합)는 goals.compute_progress가 갖고 있다.
+    site_usage는 브라우저 이름 → 그 브라우저의 사이트별 집계(site_usage_by_range의 by_site)다. 수행 시간의
+    정의(연결한 프로세스·사이트의 활성 시간 합)는 goals.compute_progress가 갖고 있다.
     """
     active = {row["process"]: row["active_seconds"] for row in usage["by_process"]}
+    active_sites = {
+        (browser, row["domain"]): row["active_seconds"]
+        for browser, rows in (site_usage or {}).items()
+        for row in rows
+    }
     progress: list[GoalProgress]
     summary: ProgressSummary
-    progress, summary = compute_progress(goals, active)
+    progress, summary = compute_progress(goals, active, active_sites)
     return {
         "start": usage["start"],
         "end": usage["end"],
@@ -136,11 +163,12 @@ def progress_payload(
                 "name": item.name,
                 "active_seconds": item.active_seconds,
                 "processes": [_process_time_json(time) for time in item.processes],
+                "sites": [_site_time_json(time) for time in item.sites],
             }
             for item in progress
         ],
         "summary": {
             "active_seconds": summary.active_seconds,
-            "top": None if summary.top is None else _process_time_json(summary.top),
+            "top": None if summary.top is None else _top_json(summary.top),
         },
     }

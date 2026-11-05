@@ -12,11 +12,14 @@ export interface GoalListProps {
 }
 
 function describe(goal: Goal): string {
-  const count = goal.processes.length;
+  const links = [
+    goal.processes.length > 0 ? `프로세스 ${goal.processes.length}개` : "",
+    goal.sites.length > 0 ? `사이트 ${goal.sites.length}개` : "",
+  ].filter(Boolean);
   return [
     `하루 ${formatTarget(goal.daily_target_minutes)}`,
     formatWeekdays(goal.weekdays),
-    count === 0 ? "연결된 프로세스 없음" : `프로세스 ${count}개`,
+    links.length === 0 ? "연결된 프로세스 없음" : links.join(" · "),
   ].join(" · ");
 }
 

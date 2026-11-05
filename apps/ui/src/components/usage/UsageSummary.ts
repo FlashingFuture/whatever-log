@@ -1,8 +1,8 @@
-import type { GoalProgressResponse, ProcessTime, RangeUsage } from "../../api";
+import type { GoalProgressResponse, RangeUsage } from "../../api";
 import { formatDuration } from "../../lib/format";
-import { chooseTopBlocks } from "../../lib/goalSummary";
+import { chooseTopBlocks, type TopProcess } from "../../lib/goalSummary";
 import { createRouteLink } from "../../router/router";
-import { createProcessIcon } from "./ProcessIcon";
+import { createProcessIcon, createSiteIcon } from "./ProcessIcon";
 import styles from "./UsageSummary.module.css";
 
 export interface UsageSummaryProps {
@@ -41,18 +41,29 @@ function text(value: string): HTMLSpanElement {
   return span;
 }
 
-function processStat(label: string, top: ProcessTime | null): HTMLElement {
+function processStat(label: string, top: TopProcess | null): HTMLElement {
   if (top === null) {
     return stat(label, text("-"));
   }
+  // 사이트면 도메인을 이름으로, 그 사이트를 본 브라우저는 시간 옆에 덧붙인다. 눌러서 가는 곳은 브라우저 상세다.
+  const shown = top.site ?? top.process;
   const link = createRouteLink({ name: "process", process: top.process });
   link.className = styles.top;
-  link.title = top.process;
+  link.title = top.site ? `${top.site} · ${top.process}` : top.process;
   const name = document.createElement("span");
   name.className = styles.topName;
-  name.textContent = top.process; // OS에서 온 값이라 textContent로 넣는다
-  link.append(createProcessIcon(top.process), name);
-  return stat(label, link, formatDuration(top.active_seconds));
+  name.textContent = shown; // OS·웹에서 온 값이라 textContent로 넣는다
+  link.append(
+    top.site ? createSiteIcon(top.site) : createProcessIcon(top.process),
+    name,
+  );
+  return stat(
+    label,
+    link,
+    top.site
+      ? `${formatDuration(top.active_seconds)} · ${top.process}`
+      : formatDuration(top.active_seconds),
+  );
 }
 
 /**

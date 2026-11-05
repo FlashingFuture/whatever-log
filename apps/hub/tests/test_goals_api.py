@@ -28,12 +28,13 @@ GOAL = {
     "daily_target_minutes": 120,
     "weekdays": [0, 1, 2, 3, 4],
     "processes": ["chrome.exe"],
+    "sites": [],
 }
 
 
 @pytest.fixture
 def goals_server(tmp_path):
-    """recorder.db(chrome.exe 15초 활성, Code.exe·Setup.tmp는 창만)와 빈 goals.db를 가리키는 실제 서버."""
+    """recorder.db(chrome.exe 15초 활성 — 그동안 youtube.com을 봄, Code.exe·Setup.tmp는 창만)와 빈 goals.db를 가리키는 실제 서버."""
     db_path = tmp_path / "recorder.db"
     conn = open_db(db_path)
     for offset in (0, 15):
@@ -44,6 +45,7 @@ def goals_server(tmp_path):
                 foreground_process="chrome.exe",
                 windowed_processes=frozenset({"chrome.exe", "Code.exe", "Setup.tmp"}),
                 seconds_since_last_input=0.0,
+                foreground_site="youtube.com",
             ),
         )
     conn.close()
@@ -110,7 +112,7 @@ def test_input_errors_come_back_per_field(goals_server) -> None:
         goals_server,
         "POST",
         "/api/goals",
-        {"name": "", "daily_target_minutes": "120", "weekdays": [], "processes": ["chrome.exe", "nope.exe"]},
+        {"name": "", "daily_target_minutes": "120", "weekdays": [], "processes": ["chrome.exe", "nope.exe"], "sites": []},
     )
 
     assert status == 400 and payload["error"]["code"] == "invalid_request"
@@ -174,12 +176,63 @@ def test_progress_sums_the_active_time_of_linked_processes(goals_server) -> None
             "name": "공부",
             "active_seconds": 15.0,
             "processes": [{"process": "chrome.exe", "active_seconds": 15.0}],
+            "sites": [],
         }
     ]
     assert payload["summary"] == {
         "active_seconds": 15.0,
-        "top": {"process": "chrome.exe", "active_seconds": 15.0},
+        "top": {"process": "chrome.exe", "active_seconds": 15.0, "site": None},
     }
+
+
+# --- 브라우저의 사이트(세부 페이지) ---
+
+SITE = {"browser": "chrome.exe", "domain": "youtube.com"}
+
+
+def test_tracked_sites_lists_recorded_browser_sites(goals_server) -> None:
+    assert _call(goals_server, "GET", "/api/tracked-sites", origin=None)[:2] == (200, {"sites": [SITE]})
+
+
+def test_a_site_can_be_linked_and_counts_only_its_own_time(goals_server) -> None:
+    status, created, _ = _call(goals_server, "POST", "/api/goals", {**GOAL, "processes": [], "sites": [SITE]})
+    assert status == 201 and created["sites"] == [SITE]
+    query = urllib.parse.urlencode(
+        {"start": _TICK_AT.isoformat(), "end": (_TICK_AT + timedelta(hours=1)).isoformat()}
+    )
+
+    _, payload, _ = _call(goals_server, "GET", f"/api/goals/progress?{query}", origin=None)
+
+    assert payload["goals"][0]["active_seconds"] == 15.0
+    assert payload["goals"][0]["sites"] == [{**SITE, "active_seconds": 15.0}]
+    assert payload["summary"]["top"] == {"process": "chrome.exe", "active_seconds": 15.0, "site": "youtube.com"}
+
+
+def test_unrecorded_sites_and_overlaps_are_rejected_per_item(goals_server) -> None:
+    status, payload, _ = _call(
+        goals_server,
+        "POST",
+        "/api/goals",
+        {**GOAL, "processes": [], "sites": [{"browser": "chrome.exe", "domain": "never.com"}, {"browser": "Code.exe", "domain": "a.com"}]},
+    )
+    assert status == 400 and _error_fields(payload) == {"sites[0]": "unknown_site", "sites[1]": "unknown_browser"}
+
+    status, payload, _ = _call(goals_server, "POST", "/api/goals", {**GOAL, "sites": [SITE]})  # chrome.exe 전체 + 그 안의 사이트
+    assert status == 400 and _error_fields(payload) == {"sites[0]": "overlaps_process"}
+
+
+def test_a_site_already_linked_elsewhere_is_rejected(goals_server) -> None:
+    _call(goals_server, "POST", "/api/goals", {**GOAL, "processes": [], "sites": [SITE]})
+
+    status, payload, _ = _call(goals_server, "POST", "/api/goals", {**GOAL, "name": "운동", "processes": [], "sites": [SITE]})
+
+    assert status == 400 and _error_fields(payload) == {"sites": "already_linked"}
+
+
+def test_sites_is_required_like_every_other_field(goals_server) -> None:
+    body = {key: value for key, value in GOAL.items() if key != "sites"}
+    status, payload, _ = _call(goals_server, "POST", "/api/goals", body)
+    assert status == 400 and _error_fields(payload) == {"sites": "type"}
 
 
 def test_progress_requires_valid_bounds(goals_server) -> None:
@@ -313,6 +366,7 @@ def test_goal_fields_rejects_unknown_keys_and_fills_missing_ones_with_none() -> 
         "daily_target_minutes": None,
         "weekdays": None,
         "processes": None,
+        "sites": None,
     }
     with pytest.raises(BadRequest):
         goal_fields({"name": "a", "extra": 1})

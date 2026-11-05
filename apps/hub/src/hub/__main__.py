@@ -39,10 +39,12 @@ from goals import (
     GoalStore,
     GoalValidationError,
     SchemaVersionError,
+    is_valid_domain,
     is_valid_process_name,
 )
 from hub.goals_service import (
     BadRequest,
+    browsers_with_sites,
     check_write_origin,
     goal_fields,
     goal_json,
@@ -315,6 +317,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._get_goal_progress(parsed.query)
         elif parsed.path == "/api/processes":
             self._get_tracked_processes()
+        elif parsed.path == "/api/tracked-sites":
+            self._get_tracked_sites()
         elif parsed.path == "/api/browsers":
             self._get_browsers()
         elif parsed.path == "/api/sites":
@@ -355,6 +359,52 @@ class _Handler(BaseHTTPRequestHandler):
         linkable = sorted((n for n in names if is_valid_process_name(n)), key=str.casefold)
         self._send_json(200, {"processes": linkable})
 
+    def _recorded_sites(self) -> set[tuple[str, str]] | None:
+        """recorder가 기록한 (브라우저 프로세스 이름, 도메인) 쌍들. DB를 못 읽으면 503을 보내고 None.
+
+        사이트 컬럼이 생기기 전의 옛 DB는 hub가 고치지 않고(읽기 전용) 빈 집합으로 본다.
+        """
+        try:
+            conn = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
+            try:
+                rows = conn.execute(
+                    "SELECT DISTINCT p.name, s.domain FROM ticks t "
+                    "JOIN sites s ON s.id = t.foreground_site_id "
+                    "JOIN processes p ON p.id = t.foreground_process_id"
+                ).fetchall()
+            finally:
+                conn.close()
+        except sqlite3.OperationalError as error:
+            if _is_missing_site_schema(error):
+                return set()
+            self._send_unavailable("집계 DB", error)
+            return None
+        except sqlite3.Error as error:
+            self._send_unavailable("집계 DB", error)
+            return None
+        return {(browser, domain) for browser, domain in rows}
+
+    def _get_tracked_sites(self) -> None:
+        """추적된 브라우저 사이트 중 목표에 연결할 수 있는 (브라우저, 도메인)들 — 연결 화면의 선택 목록.
+
+        목표 입력 검증과 같은 규칙으로 거른다(지원하는 브라우저, 올바른 도메인). 브라우저 이름 순, 그 안에서 도메인 순이다.
+        """
+        recorded = self._recorded_sites()
+        if recorded is None:
+            return
+        browsers = {browser.process_name for browser in BROWSERS}
+        linkable = sorted(
+            (
+                (browser, domain)
+                for browser, domain in recorded
+                if browser in browsers and is_valid_domain(domain)
+            ),
+            key=lambda pair: (pair[0].casefold(), pair[1]),
+        )
+        self._send_json(
+            200, {"sites": [{"browser": browser, "domain": domain} for browser, domain in linkable]}
+        )
+
     def _get_goals(self) -> None:
         """저장된 목표 목록."""
         try:
@@ -384,12 +434,20 @@ class _Handler(BaseHTTPRequestHandler):
             conn = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
             try:
                 usage = usage_by_range(conn, start, end)
+                site_usage: dict[str, list] = {}
+                for browser in browsers_with_sites(goals):
+                    try:
+                        site_usage[browser] = site_usage_by_range(conn, browser, start, end)["by_site"]
+                    except sqlite3.OperationalError as error:
+                        if not _is_missing_site_schema(error):
+                            raise
+                        site_usage[browser] = []  # 사이트 컬럼이 없는 옛 DB — 사이트 시간은 0이다
             finally:
                 conn.close()
         except sqlite3.Error as error:
             self._send_unavailable("집계 DB", error)
             return
-        self._send_json(200, progress_payload(goals, usage))
+        self._send_json(200, progress_payload(goals, usage, site_usage))
 
     def _write_goal(self, goal_id: int | None) -> None:
         """목표 생성(goal_id가 None)·교체. 출처·본문 형식을 먼저 검사하고, 입력은 goals가 엄격하게 검증한다.
@@ -406,12 +464,20 @@ class _Handler(BaseHTTPRequestHandler):
         recorded = self._recorded_process_names()
         if recorded is None:
             return
+        recorded_sites = self._recorded_sites()
+        if recorded_sites is None:
+            return
+        known = {
+            "known_processes": recorded,
+            "known_sites": recorded_sites,
+            "known_browsers": {browser.process_name for browser in BROWSERS},
+        }
         try:
             with GoalStore(self.goals_db_path) as store:
                 if goal_id is None:
-                    goal = store.create(**fields, known_processes=recorded)
+                    goal = store.create(**fields, **known)
                 else:
-                    goal = store.update(goal_id, **fields, known_processes=recorded)
+                    goal = store.update(goal_id, **fields, **known)
         except GoalValidationError as error:
             self._send_json(400, validation_error_body(error))
             return

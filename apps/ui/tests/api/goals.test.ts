@@ -8,6 +8,7 @@ import {
   fetchGoalProgress,
   fetchGoals,
   fetchTrackedProcesses,
+  fetchTrackedSites,
   updateGoal,
 } from "../../src/api/goals.ts";
 
@@ -47,6 +48,7 @@ const INPUT = {
   daily_target_minutes: 120,
   weekdays: [0, 1],
   processes: ["Code.exe"],
+  sites: [{ browser: "chrome.exe", domain: "youtube.com" }],
 };
 
 test("목록과 추적된 프로세스는 GET으로 받는다", async () => {
@@ -159,4 +161,13 @@ test("칸 목록이 없는 오류는 fields가 빈 목록이다", async () => {
     assert.equal(error.code, "forbidden");
     return true;
   });
+});
+
+test("추적된 사이트는 GET /api/tracked-sites로 받는다", async () => {
+  const sites = [{ browser: "chrome.exe", domain: "youtube.com" }];
+  const calls = stubFetch(() => json({ sites }));
+
+  assert.deepEqual(await fetchTrackedSites(), sites);
+  assert.equal(calls[0].method, "GET");
+  assert.ok(calls[0].url.endsWith("/api/tracked-sites"));
 });

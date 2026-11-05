@@ -14,20 +14,24 @@ goals.db에만 저장되고, 그중 어떤 프로세스가 어느 목표에 속�
 """
 
 from goals.errors import FieldError, GoalNotFoundError, GoalValidationError, SchemaVersionError
-from goals.models import Goal, GoalSnapshot
-from goals.progress import GoalProgress, ProcessTime, ProgressSummary, compute_progress
+from goals.models import Goal, GoalSnapshot, SiteTarget
+from goals.progress import GoalProgress, ProcessTime, ProgressSummary, SiteTime, TopTarget, compute_progress
 from goals.store import GoalStore
 from goals.validation import (
     MAX_GOALS,
     MAX_PROCESSES_PER_GOAL,
+    MAX_SITES_PER_GOAL,
+    is_valid_domain,
     is_valid_process_name,
     process_key,
+    site_key,
     validate_goal,
 )
 
 __all__ = [
     "MAX_GOALS",
     "MAX_PROCESSES_PER_GOAL",
+    "MAX_SITES_PER_GOAL",
     "FieldError",
     "Goal",
     "GoalNotFoundError",
@@ -38,8 +42,13 @@ __all__ = [
     "ProcessTime",
     "ProgressSummary",
     "SchemaVersionError",
+    "SiteTarget",
+    "SiteTime",
+    "TopTarget",
     "process_key",
     "compute_progress",
+    "is_valid_domain",
     "is_valid_process_name",
+    "site_key",
     "validate_goal",
 ]

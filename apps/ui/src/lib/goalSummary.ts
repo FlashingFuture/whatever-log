@@ -1,9 +1,13 @@
 import { processKey } from "./processPick.ts";
 
-/** 가장 길게 수행한 프로세스와 그 활성 시간(초). */
+/**
+ * 가장 길게 수행한 대상과 그 활성 시간(초). 사이트면 site에 도메인이 있고 process는 그 사이트를 본
+ * 브라우저다(없거나 null이면 프로세스 전체).
+ */
 export interface TopProcess {
   process: string;
   active_seconds: number;
+  site?: string | null;
 }
 
 /**
@@ -11,6 +15,9 @@ export interface TopProcess {
  * - same: 목표 중 가장 길게 수행한 프로세스가 실제로도 가장 길게 수행한 프로세스와 같다 → 하나만 보인다.
  * - goalAndActual: 둘이 다르다 → 목표 중 최장과 실제 최장을 둘 다 보인다.
  * - actualOnly: 목표 쪽 프로세스가 없다(목표가 없거나 연결·수행이 없음) → 실제 최장만 보인다.
+ *
+ * 실제 최장은 프로세스 단위다. 목표 쪽이 브라우저의 사이트면 그 브라우저 전체와는 다른 대상이므로
+ * (사이트는 브라우저의 일부) 같은 것으로 합치지 않고 둘 다 보여 준다.
  */
 export type TopBlocks =
   | { kind: "same"; top: TopProcess }
@@ -27,6 +34,7 @@ export function chooseTopBlocks(
   }
   if (
     actualTop !== null &&
+    !goalTop.site &&
     processKey(goalTop.process) === processKey(actualTop.process)
   ) {
     return { kind: "same", top: actualTop };

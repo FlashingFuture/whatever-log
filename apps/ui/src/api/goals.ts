@@ -4,7 +4,7 @@ import {
   SHORT_REQUEST_TIMEOUT_MS,
   sendJson,
 } from "./client.ts";
-import type { Goal, GoalInput, GoalProgressResponse } from "./types";
+import type { Goal, GoalInput, GoalProgressResponse, SiteLink } from "./types";
 
 /** 저장된 목표 목록(만든 순서). */
 export async function fetchGoals(): Promise<Goal[]> {
@@ -60,4 +60,13 @@ export async function fetchTrackedProcesses(): Promise<string[]> {
     SHORT_REQUEST_TIMEOUT_MS,
   );
   return response.processes;
+}
+
+/** 추적된 브라우저 사이트 중 목표에 연결할 수 있는 (브라우저, 도메인)들. */
+export async function fetchTrackedSites(): Promise<SiteLink[]> {
+  const response = await getJson<{ sites: SiteLink[] }>(
+    "/api/tracked-sites",
+    SHORT_REQUEST_TIMEOUT_MS,
+  );
+  return response.sites;
 }

@@ -27,7 +27,7 @@ function minutesValue(text: string): number | string {
 /**
  * 목표 만들기·수정 폼(이름, 하루 목표 시간, 적용 요일). 규칙은 서버(packages/goals)가 엄격하게 검증하므로
  * 여기서는 다시 구현하지 않고, 서버가 돌려준 칸별 오류를 그 칸 옆에 그대로 보여 준다. 이름 앞뒤 공백만
- * 입력 편의로 지우고 나머지 값은 사용자가 넣은 그대로 보낸다. 연결 프로세스는 이 폼에서 바꾸지 않는다(수정할
+ * 입력 편의로 지우고 나머지 값은 사용자가 넣은 그대로 보낸다. 연결 프로세스·사이트는 이 폼에서 바꾸지 않는다(수정할
  * 때 기존 연결을 그대로 보낸다 — 연결은 상세 화면에서 한다).
  */
 export function createGoalForm(props: GoalFormProps): HTMLElement {
@@ -154,6 +154,7 @@ export function createGoalForm(props: GoalFormProps): HTMLElement {
         daily_target_minutes: minutesValue(minutesInput.value),
         weekdays: [...selected].sort((a, b) => a - b),
         processes: props.goal?.processes ?? [],
+        sites: props.goal?.sites ?? [],
       })
       .catch((error: unknown) => {
         showErrors(

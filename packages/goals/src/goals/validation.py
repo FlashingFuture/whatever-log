@@ -1,5 +1,5 @@
 """목표 입력 검증. 일부러 엄격하다 — 입력의 목적이 분명하다(목표 이름 + 하루 목표 시간 + 요일 +
-연결할 프로세스 이름)는 점을 이용해, 모양이 조금이라도 다르면 조용히 고쳐 받지 않고 거부한다.
+연결할 프로세스 이름, 브라우저의 사이트)는 점을 이용해, 모양이 조금이라도 다르면 조용히 고쳐 받지 않고 거부한다.
 
 - 형식(type)을 맞춘다: 숫자 칸에 문자열·불리언을 받지 않고, 목록 칸에 문자열을 받지 않는다.
 - 값을 몰래 고치지 않는다: 앞뒤 공백, 중복, 범위 밖 값은 정리해 주지 않고 오류로 알린다.
@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from goals.errors import FieldError, GoalValidationError
+from goals.models import SiteTarget
 
 NAME_MAX_CHARS = 50
 MIN_TARGET_MINUTES = 1
@@ -23,6 +24,11 @@ MAX_TARGET_MINUTES = 24 * 60
 WEEKDAYS = frozenset(range(7))
 MAX_GOALS = 20
 MAX_PROCESSES_PER_GOAL = 20
+MAX_SITES_PER_GOAL = 20
+DOMAIN_MAX_CHARS = 253
+# 도메인에 있으면 안 되는 글자. `/`는 저장 이름(브라우저/도메인)의 구분자라 들어가면 모호해진다.
+_FORBIDDEN_IN_DOMAIN = frozenset(" /\\?#@%[]")
+_SITE_FIELDS = frozenset({"browser", "domain"})
 
 # Windows 파일 이름에 쓸 수 없는 글자. 프로세스 이름은 exe 파일 이름이라 이것들이 들어갈 수 없다.
 _FORBIDDEN_IN_PROCESS_NAME = frozenset('\\/:*?"<>|')
@@ -48,6 +54,8 @@ class GoalSpec:
     weekdays: frozenset[int]
     # (이름, 비교 키) — 대소문자를 구분하지 않는 키 순서로 정렬돼 같은 입력은 항상 같은 순서다.
     processes: tuple[tuple[str, str], ...]
+    # (사이트, 비교 키) — 비교 키(site_key) 순서.
+    sites: tuple[tuple[SiteTarget, str], ...] = ()
 
 
 def _utf16_units(text: str) -> int:
@@ -62,6 +70,11 @@ def process_key(name: str) -> str:
     것을 막을 때 모두 이 키를 쓴다.
     """
     return name.casefold()
+
+
+def site_key(browser: str, domain: str) -> str:
+    """사이트 연결의 비교 키: `브라우저 키/도메인`. 브라우저 이름과 도메인 모두 `/`를 가질 수 없어 모호하지 않다."""
+    return f"{process_key(browser)}/{domain.casefold()}"
 
 
 def name_key(name: str) -> str:
@@ -198,6 +211,107 @@ def _check_processes(
     return tuple(sorted(((item, process_key(item)) for item in value), key=lambda pair: pair[1]))
 
 
+def _domain_problem(domain: str) -> tuple[str, str] | None:
+    """도메인이 recorder가 기록하는 모양이 아니면 (code, 설명), 맞으면 None.
+
+    recorder는 URL의 호스트를 소문자로 두고 앞의 `www.`를 뗀 채 기록한다(chromium.urls.domain_of).
+    같은 모양만 받아 기록된 도메인과 정확히 맞는다.
+    """
+    if _has_control_character(domain):
+        return "invalid_characters", "제어 문자가 들어 있습니다."
+    if any(char in _FORBIDDEN_IN_DOMAIN for char in domain):
+        return "invalid_characters", "도메인에 쓸 수 없는 글자(공백 / \\ ? # @ % [ ])가 있습니다."
+    if not 1 <= len(domain) <= DOMAIN_MAX_CHARS:
+        return "length", f"도메인은 1~{DOMAIN_MAX_CHARS}자여야 합니다."
+    if domain != domain.casefold():
+        return "not_lowercase", "도메인은 소문자여야 합니다."
+    if domain.startswith(("www.", ".")) or domain.endswith("."):
+        return "invalid_domain", "앞의 `www.`나 앞뒤의 점 없이 기록된 도메인이어야 합니다."
+    return None
+
+
+def is_valid_domain(domain: object) -> bool:
+    """연결할 수 있는 사이트 도메인인지. 화면이 고를 수 있는 목록을 거를 때 쓴다(검증과 같은 규칙)."""
+    return isinstance(domain, str) and _domain_problem(domain) is None
+
+
+def _check_sites(
+    value: Any,
+    process_keys: set[str],
+    known_sites: Collection[tuple[str, str]] | None,
+    known_browsers: Collection[str] | None,
+    errors: list[FieldError],
+) -> tuple[tuple[SiteTarget, str], ...] | None:
+    """연결 사이트 칸(0~20개)을 검사해 통과하면 (사이트, 키) 쌍을 키 순으로, 아니면 errors를 더하고 None."""
+    if not isinstance(value, (list, tuple)):
+        errors.append(FieldError("sites", "type", "연결할 사이트는 목록이어야 합니다."))
+        return None
+    if len(value) > MAX_SITES_PER_GOAL:
+        errors.append(
+            FieldError("sites", "too_many", f"한 목표에는 사이트를 {MAX_SITES_PER_GOAL}개까지 연결할 수 있습니다.")
+        )
+        return None
+
+    problems_before = len(errors)
+    seen: set[str] = set()
+    parsed: list[tuple[SiteTarget, str]] = []
+    for index, item in enumerate(value):
+        field = f"sites[{index}]"
+        if not isinstance(item, dict) or set(item) != _SITE_FIELDS:
+            errors.append(FieldError(field, "type", "사이트는 `browser`와 `domain` 두 칸을 가진 객체여야 합니다."))
+            continue
+        browser, domain = item["browser"], item["domain"]
+        if not isinstance(browser, str) or not isinstance(domain, str):
+            errors.append(FieldError(field, "type", "`browser`와 `domain`은 문자열이어야 합니다."))
+            continue
+        problem = _process_name_problem(browser) or _domain_problem(domain)
+        if problem is not None:
+            errors.append(FieldError(field, problem[0], f"`{browser}`/`{domain}`: {problem[1]}"))
+            continue
+        if known_browsers is not None and browser not in known_browsers:
+            errors.append(FieldError(field, "unknown_browser", f"`{browser}`는 사이트를 기록하는 브라우저가 아닙니다."))
+            continue
+        key = site_key(browser, domain)
+        if key in seen:
+            errors.append(FieldError(field, "duplicate", f"`{browser}`의 `{domain}`이 두 번 들어 있습니다."))
+            continue
+        seen.add(key)
+        if process_key(browser) in process_keys:
+            errors.append(
+                FieldError(
+                    field,
+                    "overlaps_process",
+                    f"`{browser}` 전체가 이미 연결돼 있어 그 안의 `{domain}`은 따로 연결할 수 없습니다(시간이 겹쳐 세어집니다).",
+                )
+            )
+            continue
+        if known_sites is not None and (browser, domain) not in known_sites:
+            errors.append(FieldError(field, "unknown_site", f"`{browser}`에서 `{domain}`은 기록된 적이 없습니다."))
+            continue
+        parsed.append((SiteTarget(browser, domain), key))
+    if len(errors) > problems_before:
+        return None
+    return tuple(sorted(parsed, key=lambda pair: pair[1]))
+
+
+def usable_sites(sites: Any, errors: Sequence[FieldError]) -> list[tuple[SiteTarget, str]]:
+    """검증에 실패한 입력에서도 다른 목표와 겹치는지 확인할 수 있는 사이트((사이트, 키) 쌍)를 꺼낸다.
+
+    usable_keys와 같은 이유다. 오류가 난 칸(전체, 개별 항목)은 믿을 수 없어 뺀다.
+    """
+    failed = {error.field for error in errors}
+    if not isinstance(sites, (list, tuple)) or "sites" in failed:
+        return []
+    pairs: list[tuple[SiteTarget, str]] = []
+    for index, item in enumerate(sites):
+        if f"sites[{index}]" in failed or not isinstance(item, dict) or set(item) != _SITE_FIELDS:
+            continue
+        browser, domain = item["browser"], item["domain"]
+        if isinstance(browser, str) and isinstance(domain, str):
+            pairs.append((SiteTarget(browser, domain), site_key(browser, domain)))
+    return pairs
+
+
 def usable_keys(
     name: Any, processes: Any, errors: Sequence[FieldError]
 ) -> tuple[str | None, list[tuple[str, str]]]:
@@ -223,27 +337,35 @@ def validate_goal(
     daily_target_minutes: Any,
     weekdays: Any,
     processes: Any,
+    sites: Any = (),
     known_processes: Collection[str] | None = None,
+    known_sites: Collection[tuple[str, str]] | None = None,
+    known_browsers: Collection[str] | None = None,
 ) -> GoalSpec:
     """목표 입력을 엄격하게 검증해 GoalSpec으로 돌려준다. 하나라도 어긋나면 GoalValidationError.
 
     모든 칸을 검사해서 오류를 한꺼번에 담는다. known_processes를 주면 연결할 프로세스가 그 목록(보통
     recorder가 기록한 이름들)에 정확히 있어야 한다 — 기록된 적 없는 이름을 연결해 달성률이 영원히 0이
-    되는 일을 막는다. 이 목록을 알 수 없는 곳(단위 테스트 등)에서는 생략한다.
+    되는 일을 막는다. 이 목록을 알 수 없는 곳(단위 테스트 등)에서는 생략한다. 사이트도 같다: known_sites는
+    기록된 (브라우저, 도메인) 쌍들, known_browsers는 사이트를 기록하는 브라우저 프로세스 이름들이다.
     """
     errors: list[FieldError] = []
     checked_name = _check_name(name, errors)
     minutes = _check_target_minutes(daily_target_minutes, errors)
     checked_weekdays = _check_weekdays(weekdays, errors)
     checked_processes = _check_processes(processes, known_processes, errors)
+    process_keys = {process_key(item) for item in processes} if checked_processes is not None else set()
+    checked_sites = _check_sites(sites, process_keys, known_sites, known_browsers, errors)
     if errors:
         raise GoalValidationError(errors)
     assert checked_name is not None and minutes is not None
     assert checked_weekdays is not None and checked_processes is not None
+    assert checked_sites is not None
     return GoalSpec(
         name=checked_name,
         name_key=name_key(checked_name),
         daily_target_minutes=minutes,
         weekdays=checked_weekdays,
         processes=checked_processes,
+        sites=checked_sites,
     )

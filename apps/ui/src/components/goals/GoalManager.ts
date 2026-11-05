@@ -3,13 +3,18 @@ import {
   deleteGoal,
   fetchGoals,
   fetchTrackedProcesses,
+  fetchTrackedSites,
   type Goal,
   type GoalInput,
+  type SiteLink,
   updateGoal,
 } from "../../api";
 import {
   addProcess,
+  addSite,
+  type LinkTarget,
   removeProcess,
+  removeSite,
   splitProcesses,
 } from "../../lib/processPick";
 import { createButton } from "../common/Button";
@@ -172,14 +177,17 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
 
   async function showDetail(
     goalId: number,
-    options: { focusProcess?: string; error?: string } = {},
+    options: { focusTarget?: LinkTarget; error?: string } = {},
   ): Promise<void> {
     const id = ++sceneId;
     let tracked: string[];
+    let trackedSites: SiteLink[];
     try {
-      [goals, tracked] = await Promise.all([
+      [goals, tracked, trackedSites] = await Promise.all([
         fetchGoals(),
         fetchTrackedProcesses(),
+        // 사이트 목록을 못 불러와도(옛 hub 등) 프로세스 연결은 할 수 있게 한다.
+        fetchTrackedSites().catch(() => []),
       ]);
     } catch (error) {
       if (id === sceneId) {
@@ -219,10 +227,10 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
     content.append(
       createGoalProcesses({
         goal,
-        split: splitProcesses(tracked, goals, goal.id),
-        focusProcess: options.focusProcess,
+        split: splitProcesses(tracked, goals, goal.id, trackedSites),
+        focusTarget: options.focusTarget,
         busy,
-        onMove: (process, link) => void move(goal, process, link),
+        onMove: (target, link) => void move(goal, target, link),
       }),
     );
 
@@ -242,30 +250,39 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
 
   async function move(
     goal: Goal,
-    process: string,
+    target: LinkTarget,
     link: boolean,
   ): Promise<void> {
     if (busy) {
       return;
     }
     busy = true;
-    const processes = link
-      ? addProcess(goal.processes, process)
-      : removeProcess(goal.processes, process);
+    let processes = goal.processes;
+    let sites = goal.sites;
+    if (target.kind === "process") {
+      processes = link
+        ? addProcess(processes, target.process)
+        : removeProcess(processes, target.process);
+    } else {
+      sites = link
+        ? addSite(sites, target.site)
+        : removeSite(sites, target.site);
+    }
     try {
       await updateGoal(goal.id, {
         name: goal.name,
         daily_target_minutes: goal.daily_target_minutes,
         weekdays: goal.weekdays,
         processes,
+        sites,
       });
       busy = false;
       props.onChange();
-      await showDetail(goal.id, { focusProcess: process });
+      await showDetail(goal.id, { focusTarget: target });
     } catch (error) {
       busy = false;
       await showDetail(goal.id, {
-        focusProcess: process,
+        focusTarget: target,
         error: `저장하지 못했습니다: ${message(error)}`,
       });
     }

@@ -11,6 +11,7 @@ export {
   fetchGoalProgress,
   fetchGoals,
   fetchTrackedProcesses,
+  fetchTrackedSites,
   updateGoal,
 } from "./goals";
 export { iconUrl, siteIconUrl } from "./icons";
@@ -26,7 +27,10 @@ export type {
   ProcessUsage,
   RangeSummary,
   RangeUsage,
+  SiteLink,
   SiteRangeUsage,
+  SiteTime,
   SiteUsage,
+  TopTarget,
 } from "./types";
 export { fetchProcessUsage, fetchSiteUsage, fetchUsage } from "./usage";

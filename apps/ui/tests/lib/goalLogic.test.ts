@@ -5,7 +5,11 @@ import { chooseTopBlocks } from "../../src/lib/goalSummary.ts";
 import { formatTarget, formatWeekdays } from "../../src/lib/goalText.ts";
 import {
   addProcess,
+  addSite,
+  decodeTarget,
+  encodeTarget,
   removeProcess,
+  removeSite,
   splitProcesses,
 } from "../../src/lib/processPick.ts";
 
@@ -106,4 +110,111 @@ test("목표 쪽 프로세스가 없으면 실제 최장만 보인다", () => {
     kind: "actualOnly",
     actualTop: null,
   });
+});
+
+const YT = { browser: "chrome.exe", domain: "youtube.com" };
+const DOCS = { browser: "chrome.exe", domain: "docs.python.org" };
+const EDGE_YT = { browser: "msedge.exe", domain: "youtube.com" };
+const SITE_GOALS = [
+  { id: 1, name: "공부", processes: ["Code.exe"], sites: [DOCS] },
+  { id: 2, name: "휴식", processes: [], sites: [EDGE_YT] },
+];
+
+test("사이트도 연결됨 / 추가할 수 있음 / 다른 목표에 있음으로 나뉜다", () => {
+  const split = splitProcesses(
+    ["Code.exe", "chrome.exe", "msedge.exe"],
+    SITE_GOALS,
+    1,
+    [YT, DOCS, EDGE_YT, { browser: "chrome.exe", domain: "a.com" }],
+  );
+
+  assert.deepEqual(split.linkedSites, [DOCS]);
+  assert.deepEqual(split.availableSites, [
+    { browser: "chrome.exe", domain: "a.com" },
+    YT,
+  ]);
+  assert.deepEqual(split.takenSitesByOthers, [
+    { site: EDGE_YT, goalName: "휴식" },
+  ]);
+});
+
+test("사이트가 연결된 브라우저는 전체를 추가할 수 없고, 어느 목표 때문인지 알려 준다", () => {
+  const split = splitProcesses(
+    ["chrome.exe", "msedge.exe", "zoom.exe"],
+    SITE_GOALS,
+    1,
+  );
+
+  assert.deepEqual(split.available, ["zoom.exe"]);
+  assert.deepEqual(split.blocked, [
+    { process: "chrome.exe", goalName: "공부" }, // 이 목표 자신의 사이트 때문에도 막힌다
+    { process: "msedge.exe", goalName: "휴식" },
+  ]);
+});
+
+test("브라우저 전체가 연결돼 있으면(어느 목표든) 그 안의 사이트는 고를 수 없다", () => {
+  const goals = [
+    { id: 1, name: "공부", processes: ["chrome.exe"], sites: [] },
+    { id: 2, name: "휴식", processes: ["MSEDGE.EXE"], sites: [] },
+  ];
+
+  const split = splitProcesses(["chrome.exe"], goals, 1, [YT, EDGE_YT]);
+
+  assert.deepEqual(split.availableSites, []);
+});
+
+test("사이트 비교는 브라우저 이름의 대소문자를 무시하고 도메인은 브라우저별로 따로다", () => {
+  const goals = [{ id: 2, name: "휴식", processes: [], sites: [EDGE_YT] }];
+
+  const split = splitProcesses([], goals, 1, [
+    { browser: "MSEDGE.exe", domain: "youtube.com" },
+    YT, // 같은 도메인이라도 크롬의 것은 다른 대상이다
+  ]);
+
+  assert.deepEqual(split.availableSites, [YT]);
+});
+
+test("사이트 추가·제거는 새 목록을 돌려주고 원본을 바꾸지 않는다", () => {
+  const list = [YT];
+
+  assert.deepEqual(addSite(list, DOCS), [DOCS, YT]);
+  assert.deepEqual(
+    addSite(list, { browser: "CHROME.EXE", domain: "youtube.com" }),
+    [YT],
+  );
+  assert.deepEqual(
+    removeSite(list, { browser: "Chrome.exe", domain: "youtube.com" }),
+    [],
+  );
+  assert.deepEqual(list, [YT]);
+});
+
+test("끌어다 놓을 때 주고받는 글자는 되돌릴 수 있고, 엉뚱한 글자는 거른다", () => {
+  const process = { kind: "process", process: "Code.exe" } as const;
+  const site = { kind: "site", site: YT } as const;
+
+  assert.deepEqual(decodeTarget(encodeTarget(process)), process);
+  assert.deepEqual(decodeTarget(encodeTarget(site)), site);
+  assert.equal(decodeTarget("Code.exe"), null);
+  assert.equal(decodeTarget("null"), null);
+  assert.equal(decodeTarget('{"kind":"site","site":{"browser":1}}'), null);
+  assert.equal(decodeTarget('{"kind":"window","process":"a"}'), null);
+});
+
+test("목표 쪽 최장이 사이트면 그 브라우저 전체와 같게 보지 않고 둘 다 보인다", () => {
+  const goalTop = {
+    process: "chrome.exe",
+    active_seconds: 600,
+    site: "youtube.com",
+  };
+  const actual = { process: "chrome.exe", active_seconds: 1200 };
+
+  assert.equal(chooseTopBlocks(goalTop, actual).kind, "goalAndActual");
+  assert.equal(
+    chooseTopBlocks(
+      { process: "chrome.exe", active_seconds: 600, site: null },
+      actual,
+    ).kind,
+    "same",
+  );
 });

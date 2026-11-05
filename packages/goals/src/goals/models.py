@@ -5,12 +5,24 @@ from datetime import date
 
 
 @dataclass(frozen=True)
+class SiteTarget:
+    """목표에 연결하는 사이트 하나: 어느 브라우저(프로세스 이름)에서 본 어느 도메인인지.
+
+    사용 시간이 브라우저별로 따로 집계되므로(같은 사이트라도 chrome과 edge는 따로 센다) 둘을 함께 가진다.
+    """
+
+    browser: str
+    domain: str
+
+
+@dataclass(frozen=True)
 class Goal:
     """사용자가 설정한 목표 하나.
 
     weekdays는 목표를 적용하는 요일이다(파이썬 date.weekday()와 같다: 월=0 … 일=6). processes는 이
     목표에 연결된 프로세스 이름들(대소문자를 구분하지 않는 이름 순)이고, 한 프로세스는 하나의 목표에만
-    연결된다. created_at/updated_at은 UTC ISO 8601이다.
+    연결된다. sites는 크롬·엣지 같은 브라우저의 "세부 페이지"(사이트)를 연결한 것으로, 브라우저 프로세스
+    전체와 그 안의 사이트는 겹쳐 세지 않도록 함께 연결할 수 없다. created_at/updated_at은 UTC ISO 8601이다.
     """
 
     id: int
@@ -20,6 +32,7 @@ class Goal:
     processes: tuple[str, ...]
     created_at: str
     updated_at: str
+    sites: tuple[SiteTarget, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -34,3 +47,4 @@ class GoalSnapshot:
     name: str
     daily_target_minutes: int
     processes: tuple[str, ...]
+    sites: tuple[SiteTarget, ...] = ()
