@@ -24,6 +24,55 @@ export interface GoalProcessesProps {
 
 const DRAG_TYPE = "application/x-whatever-target";
 
+/** 다시 그리기 전후로 이어 줄 스크롤 위치: 모달 본문과 각 칸(목록)의 것. */
+export interface ScrollState {
+  outer: number;
+  lists: Record<string, number>;
+}
+
+/** outer(스크롤되는 바깥 영역)와 그 안의 칸들의 스크롤 위치를 읽는다. */
+export function readScroll(outer: HTMLElement): ScrollState {
+  const lists: Record<string, number> = {};
+  for (const section of outer.querySelectorAll<HTMLElement>(
+    "section[aria-label]",
+  )) {
+    const list = section.querySelector<HTMLElement>("ul");
+    if (list) {
+      lists[section.getAttribute("aria-label") ?? ""] = list.scrollTop;
+    }
+  }
+  return { outer: outer.scrollTop, lists };
+}
+
+/** readScroll로 읽어 둔 위치를 새로 그린 outer에 되돌린다(칸은 이름으로 짝을 맞춘다). */
+export function restoreScroll(outer: HTMLElement, state: ScrollState): void {
+  outer.scrollTop = state.outer;
+  for (const section of outer.querySelectorAll<HTMLElement>(
+    "section[aria-label]",
+  )) {
+    const top = state.lists[section.getAttribute("aria-label") ?? ""];
+    const list = section.querySelector<HTMLElement>("ul");
+    if (list && top !== undefined) {
+      list.scrollTop = top;
+    }
+  }
+}
+
+/** 이 요소를 스크롤시키는 가장 가까운 조상(없으면 문서). */
+function scrollParent(element: HTMLElement): HTMLElement {
+  for (
+    let parent = element.parentElement;
+    parent;
+    parent = parent.parentElement
+  ) {
+    const overflowY = getComputedStyle(parent).overflowY;
+    if (overflowY === "auto" || overflowY === "scroll") {
+      return parent;
+    }
+  }
+  return document.documentElement;
+}
+
 // 사이트 목록을 펼쳐 둔 브라우저(키). 한 번 옮길 때마다 화면이 다시 그려지므로, 펼친 상태는 여기서 이어 준다.
 const expandedBrowsers = new Set<string>();
 
@@ -208,14 +257,17 @@ export function createGoalProcesses(props: GoalProcessesProps): HTMLElement {
       } else {
         expandedBrowsers.add(key);
       }
-      // 저장할 것이 없는 화면 상태라 서버에 가지 않고 이 조각만 다시 그린다.
+      // 저장할 것이 없는 화면 상태라 서버에 가지 않고 이 조각만 다시 그린다. 스크롤 위치는 이어 준다.
+      const outer = scrollParent(root);
+      const scroll = readScroll(outer);
       const next = createGoalProcesses(props);
       root.replaceWith(next);
+      restoreScroll(outer, scroll);
       next
         .querySelector<HTMLButtonElement>(
           `button[aria-label="${process} 사이트"]`,
         )
-        ?.focus();
+        ?.focus({ preventScroll: true });
     });
     li.append(toggle);
     const rows = [li];
@@ -315,7 +367,8 @@ export function createGoalProcesses(props: GoalProcessesProps): HTMLElement {
         "button[data-key]",
       )) {
         if (button.dataset.key === wanted) {
-          button.focus();
+          // 포커스가 목록을 끌고 가지 않게 한다 — 옮긴 항목이 다른 칸의 낯선 자리로 가도 보던 자리를 지킨다.
+          button.focus({ preventScroll: true });
           return;
         }
       }

@@ -42,7 +42,9 @@ export interface ProcessSplit {
 
 /** 프로세스 이름의 비교 키. Windows 파일 이름은 대소문자를 구분하지 않아 같은 프로세스로 본다. */
 export function processKey(name: string): string {
-  return name.toLowerCase();
+  // 서버(Python casefold)와 맞춘다: toLowerCase만으로는 "ß"가 "ss"와 같은 키가 되지 않는다. 대문자로 올렸다가
+  // 내리면 casefold와 같은 결과가 된다("Straße" → "strasse").
+  return name.toUpperCase().toLowerCase();
 }
 
 /** 사이트의 비교 키(서버의 site_key와 같다): 브라우저 키 + "/" + 도메인. */
@@ -104,10 +106,16 @@ export function splitProcesses(
     wholeBrowsers.add(key);
   }
 
-  const addable = tracked.filter(
-    (process) =>
-      !linkedKeys.has(processKey(process)) && !owner.has(processKey(process)),
-  );
+  // 대소문자만 다른 이름이 따로 기록돼 있어도(같은 프로세스) 한 번만 보여 준다.
+  const seen = new Set<string>();
+  const addable = tracked.filter((process) => {
+    const key = processKey(process);
+    if (linkedKeys.has(key) || owner.has(key) || seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
   const available = addable
     .filter((process) => !browserSiteGoal.has(processKey(process)))
     .sort(byKey);

@@ -12,7 +12,12 @@ import styles from "./UsagePage.module.css";
  * 지워지지 않게 한다. 돌려주는 함수로 화면을 정리한다.
  */
 export function mountUsagePage(root: HTMLElement): () => void {
-  const goals = createGoalManager({ onChange: () => view.refresh() });
+  const goals = createGoalManager({
+    onChange: () => view.refresh(),
+    // 15초마다 요약이 다시 그려져 열었던 버튼이 사라졌을 수 있다 — 지금 있는 버튼으로 포커스를 돌려준다.
+    onClose: () =>
+      root.querySelector<HTMLElement>("[data-goal-manage]")?.focus(),
+  });
 
   const view = createPeriodView({
     loadContent: async (period) => {

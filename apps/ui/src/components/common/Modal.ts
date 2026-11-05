@@ -51,15 +51,26 @@ export function createModal(props: ModalProps): Modal {
 
   // 배경은 dialog 자체의 가장자리다 — 안쪽 패널(panel)이 dialog를 꽉 채우므로, 패널 밖을 눌렀다는 것은
   // 패널이 덮지 않은 backdrop을 눌렀다는 뜻이다.
+  // 글자를 끌어 선택하다 배경에서 손을 떼는 경우(누른 곳은 패널 안)에도 click이 배경에 생긴다 — 누른 곳도
+  // 배경이었을 때만 닫는다.
+  let pressedOnBackdrop = false;
+  dialog.addEventListener("pointerdown", (event) => {
+    pressedOnBackdrop = event.target === dialog;
+  });
   dialog.addEventListener("click", (event) => {
-    if (event.target === dialog) {
+    if (event.target === dialog && pressedOnBackdrop) {
       dialog.close();
     }
+    pressedOnBackdrop = false;
   });
   dialog.addEventListener("close", () => props.onClose());
 
   function show(view: ModalView): void {
+    // 장면을 통째로 갈아 끼우면 눌렀던 버튼이 사라져 포커스가 문서 맨 위로 빠진다 — 모달 안에 있던 포커스는
+    // 새 제목으로 옮겨 키보드·스크린 리더 사용자가 모달 안에 머물게 한다.
+    const hadFocus = dialog.contains(document.activeElement);
     const title = document.createElement("h2");
+    title.tabIndex = -1;
     title.className = styles.title;
     title.textContent = view.title;
     header.replaceChildren(
@@ -81,6 +92,9 @@ export function createModal(props: ModalProps): Modal {
       }),
     );
     body.replaceChildren(view.content);
+    if (hadFocus && !dialog.contains(document.activeElement)) {
+      title.focus({ preventScroll: true });
+    }
   }
 
   return {

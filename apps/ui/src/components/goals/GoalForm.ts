@@ -18,10 +18,12 @@ export interface GoalFormProps {
 
 const FORM_FIELDS = ["name", "daily_target_minutes", "weekdays"] as const;
 
-/** 목표 시간 칸의 글자를 서버에 보낼 값으로: 정수 글자면 숫자, 아니면 글자 그대로(그러면 서버가 칸별로 알려 준다). */
+/**
+ * 목표 시간 칸의 글자를 서버에 보낼 값으로: 10진 정수로만 이뤄진 글자(앞의 0 없이)면 숫자, 아니면 글자 그대로
+ * (그러면 서버가 칸별로 알려 준다). Number()는 공백·"1e2"·"0x10"도 숫자로 받아 주므로 쓰지 않는다.
+ */
 function minutesValue(text: string): number | string {
-  const number = Number(text);
-  return text.trim() !== "" && Number.isInteger(number) ? number : text;
+  return /^(0|[1-9]\d*)$/.test(text) ? Number(text) : text;
 }
 
 /**

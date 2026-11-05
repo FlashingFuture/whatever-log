@@ -24,7 +24,12 @@ import { createModal } from "../common/Modal";
 import { createGoalForm } from "./GoalForm";
 import { createGoalList } from "./GoalList";
 import styles from "./GoalManager.module.css";
-import { createGoalProcesses } from "./GoalProcesses";
+import {
+  createGoalProcesses,
+  readScroll,
+  restoreScroll,
+  type ScrollState,
+} from "./GoalProcesses";
 
 export interface GoalManager {
   /** "목표 프로세스 관리" 모달을 목록 화면으로 연다. */
@@ -35,6 +40,8 @@ export interface GoalManager {
 export interface GoalManagerProps {
   /** 목표나 연결 프로세스가 바뀌었다 — 홈의 수행 시간을 다시 불러오게 한다. */
   onChange: () => void;
+  /** 모달이 닫혔다(어떤 방식으로든). 열었던 버튼으로 포커스를 돌려주는 데 쓴다. */
+  onClose?: () => void;
 }
 
 function message(error: unknown): string {
@@ -59,9 +66,26 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
   let goals: Goal[] = [];
   // 화면을 연달아 바꿀 때 먼저 보낸 요청의 늦은 응답이 나중 화면을 덮지 않게 하는 순번.
   let sceneId = 0;
+  // 연결을 저장하는 중인지. 저장이 끝나고 새 목록이 그려질 때까지 켜 둬서, 낡은 목록에서 연달아 누른 변경이
+  // 서버의 최신 상태를 덮어쓰지 못하게 한다.
   let busy = false;
+  let destroyed = false;
 
-  const modal = createModal({ label: "목표 프로세스 관리", onClose: () => {} });
+  const modal = createModal({
+    label: "목표 프로세스 관리",
+    onClose: () => {
+      // 닫힌 뒤에 끝난 저장·불러오기가 닫힌 모달을 다시 그리지 않게 장면을 넘긴다.
+      sceneId++;
+      props.onClose?.();
+    },
+  });
+
+  /** 홈을 다시 불러오게 한다. 화면을 떠난 뒤(해제)에는 요청을 보내지 않는다. */
+  function notifyChange(): void {
+    if (!destroyed) {
+      props.onChange();
+    }
+  }
 
   function addButton(): HTMLButtonElement {
     return createIconButton({
@@ -109,7 +133,7 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
   }
 
   function showForm(goal: Goal | null, back: () => void | Promise<void>): void {
-    sceneId++;
+    const id = ++sceneId;
     modal.show({
       title: goal ? "목표 수정" : "목표 만들기",
       onBack: () => void back(),
@@ -117,14 +141,19 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
         goal,
         onCancel: () => void back(),
         onSubmit: async (input: GoalInput) => {
+          // 저장 중에 다른 화면으로 옮겼다면(뒤로 가기, 닫기) 저장은 그대로 반영하되 화면은 바꾸지 않는다.
           if (goal) {
             await updateGoal(goal.id, input);
-            props.onChange();
-            await back();
+            notifyChange();
+            if (id === sceneId) {
+              await back();
+            }
           } else {
             const created = await createGoal(input);
-            props.onChange();
-            await showDetail(created.id);
+            notifyChange();
+            if (id === sceneId) {
+              await showDetail(created.id);
+            }
           }
         },
       }),
@@ -132,7 +161,7 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
   }
 
   function showDelete(goal: Goal): void {
-    sceneId++;
+    const id = ++sceneId;
     const content = document.createElement("div");
     content.className = styles.confirm;
     const question = paragraph("정말 삭제하시겠습니까?");
@@ -150,8 +179,8 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
         button.disabled = true;
         deleteGoal(goal.id)
           .then(() => {
-            props.onChange();
-            return showList();
+            notifyChange();
+            return id === sceneId ? showList() : undefined;
           })
           .catch((failure: unknown) => {
             error.hidden = false;
@@ -177,7 +206,12 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
 
   async function showDetail(
     goalId: number,
-    options: { focusTarget?: LinkTarget; error?: string } = {},
+    options: {
+      focusTarget?: LinkTarget;
+      error?: string;
+      /** 다시 그리기 전의 스크롤 위치 — 하나를 옮길 때마다 목록이 맨 위로 되돌아가지 않게 한다. */
+      scroll?: ScrollState;
+    } = {},
   ): Promise<void> {
     const id = ++sceneId;
     let tracked: string[];
@@ -229,7 +263,7 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
         goal,
         split: splitProcesses(tracked, goals, goal.id, trackedSites),
         focusTarget: options.focusTarget,
-        busy,
+        busy: false, // 방금 서버에서 받은 최신 상태라 다시 누를 수 있다
         onMove: (target, link) => void move(goal, target, link),
       }),
     );
@@ -246,6 +280,21 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
       ],
       content,
     });
+    if (options.scroll) {
+      restoreScroll(modal.body, options.scroll);
+    }
+  }
+
+  /** 저장하는 동안 지금 보이는 목록을 눌러도 아무 일도 없게 잠근다(새 목록이 그려지면 풀린 채로 나온다). */
+  function lockPicker(): void {
+    for (const button of modal.body.querySelectorAll("button")) {
+      button.disabled = true;
+    }
+    for (const item of modal.body.querySelectorAll<HTMLElement>(
+      '[draggable="true"]',
+    )) {
+      item.draggable = false;
+    }
   }
 
   async function move(
@@ -257,6 +306,9 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
       return;
     }
     busy = true;
+    lockPicker();
+    const scene = sceneId;
+    const scroll = readScroll(modal.body);
     let processes = goal.processes;
     let sites = goal.sites;
     if (target.kind === "process") {
@@ -276,15 +328,20 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
         processes,
         sites,
       });
-      busy = false;
-      props.onChange();
-      await showDetail(goal.id, { focusTarget: target });
+      notifyChange();
+      if (scene === sceneId) {
+        await showDetail(goal.id, { focusTarget: target, scroll });
+      }
     } catch (error) {
+      if (scene === sceneId) {
+        await showDetail(goal.id, {
+          focusTarget: target,
+          scroll,
+          error: `저장하지 못했습니다: ${message(error)}`,
+        });
+      }
+    } finally {
       busy = false;
-      await showDetail(goal.id, {
-        focusTarget: target,
-        error: `저장하지 못했습니다: ${message(error)}`,
-      });
     }
   }
 
@@ -294,6 +351,8 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
       void showList();
     },
     destroy() {
+      destroyed = true;
+      sceneId++;
       modal.destroy();
     },
   };

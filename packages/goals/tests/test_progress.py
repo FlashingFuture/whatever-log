@@ -47,7 +47,8 @@ def test_process_names_match_case_insensitively_and_case_variants_are_merged() -
 
 
 def test_no_goals_or_no_activity_gives_an_empty_summary() -> None:
-    assert compute_progress([], {"Code.exe": 10.0}) == ([], compute_progress([], {})[1])
+    progress, summary = compute_progress([], {"Code.exe": 10.0})
+    assert progress == [] and summary.active_seconds == 0.0 and summary.top is None
     _, summary = compute_progress([_goal(1, "공부", ("Code.exe",))], {})
 
     assert summary.active_seconds == 0.0 and summary.top is None

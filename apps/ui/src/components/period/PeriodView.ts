@@ -60,6 +60,9 @@ export function createPeriodView(props: PeriodViewProps): PeriodView {
   // 것으로 버려지는 걸 막는다 — 백그라운드 갱신은 최신 요청이 끝났을 때만 시작한다.
   // 이전 구간의 낡은 요청이 멈춰 있어도 갱신을 막지 않도록 최신 요청만 본다.
   let latestPending = false;
+  // 요청이 진행 중이라 건너뛴 배경 갱신이 있는지. 그 요청은 갱신을 부른 변경(목표 저장 등)보다 먼저 시작했을
+  // 수 있어 낡은 값을 가져올 수 있으므로, 끝난 뒤 한 번 더 불러온다.
+  let refreshQueued = false;
   let destroyed = false;
 
   const element = document.createElement("div");
@@ -147,8 +150,10 @@ export function createPeriodView(props: PeriodViewProps): PeriodView {
 
   function load({ isBackgroundRefresh = false } = {}): void {
     if (isBackgroundRefresh && latestPending) {
+      refreshQueued = true;
       return;
     }
+    refreshQueued = false;
     const requestId = ++latestRequestId;
     latestPending = true;
     if (!isBackgroundRefresh) {
@@ -182,12 +187,23 @@ export function createPeriodView(props: PeriodViewProps): PeriodView {
       .finally(() => {
         if (requestId === latestRequestId) {
           latestPending = false;
+          if (refreshQueued && !destroyed) {
+            load({ isBackgroundRefresh: true });
+          }
         }
       });
   }
 
   function onKeyDown(event: KeyboardEvent): void {
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+      return;
+    }
+    // 모달(목표 관리)과 입력칸도 방향키를 자기 안에서 쓴다 — 글자 칸에서 커서를 옮기거나 모달 안에서 움직일
+    // 때 뒤의 구간이 같이 넘어가면 안 된다.
+    if (
+      event.target instanceof Element &&
+      event.target.closest("dialog, input, textarea, select")
+    ) {
       return;
     }
     // 팝업(달력·목록)은 방향키를 자기 안에서 쓴다 — 뒤의 구간이 같이 넘어가면 안 된다.

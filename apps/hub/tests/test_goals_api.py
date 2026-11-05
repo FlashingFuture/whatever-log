@@ -370,3 +370,40 @@ def test_goal_fields_rejects_unknown_keys_and_fills_missing_ones_with_none() -> 
     }
     with pytest.raises(BadRequest):
         goal_fields({"name": "a", "extra": 1})
+
+
+# --- 리뷰 반영: 본문 검사 보강 ---
+
+
+def test_a_delete_with_a_body_is_rejected_and_deletes_nothing(goals_server) -> None:
+    _, created, _ = _call(goals_server, "POST", "/api/goals", {**GOAL, "processes": []})
+    path = f"/api/goals/{created['id']}"
+
+    status, payload, _ = _call(goals_server, "DELETE", path, {"x": 1})
+
+    assert status == 400 and payload["error"]["code"] == "invalid_request"
+    assert _call(goals_server, "GET", "/api/goals")[1] == {"goals": [created]}
+    assert _call(goals_server, "DELETE", path)[0] == 204
+
+
+def test_deeply_nested_json_is_a_400_not_a_crash(goals_server) -> None:
+    deep = b"[" * 15_000 + b"]" * 15_000  # 32KB 상한 안쪽이지만 재귀 한도는 훌쩍 넘는다
+
+    status, payload, _ = _call(goals_server, "POST", "/api/goals", raw=deep)
+
+    assert status == 400 and payload["error"]["code"] == "invalid_request"
+
+
+def test_a_truncated_body_is_rejected() -> None:
+    headers = {"Content-Type": "application/json", "Content-Length": "20"}
+    with pytest.raises(BadRequest) as caught:
+        read_json_object(headers, io.BytesIO(b'{"name":'))
+    assert caught.value.status == 400
+
+
+def test_a_goal_without_links_is_saved_even_if_the_recorder_db_is_unreadable(goals_server, tmp_path) -> None:
+    _Handler.db_path = tmp_path / "missing" / "recorder.db"  # 열 수 없는 기록 DB
+    body = {**GOAL, "processes": [], "sites": []}
+
+    assert _call(goals_server, "POST", "/api/goals", body)[0] == 201
+    assert _call(goals_server, "POST", "/api/goals", {**GOAL, "name": "다른"})[0] == 503  # 연결이 있으면 확인이 필요하다

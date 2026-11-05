@@ -70,13 +70,22 @@ def read_json_object(headers: Mapping[str, str], body: BinaryIO) -> dict[str, An
     if not 0 < length <= MAX_BODY_BYTES:
         raise BadRequest(413, api_error.INVALID_REQUEST, f"본문은 1~{MAX_BODY_BYTES}바이트여야 합니다.")
     raw = body.read(length)
+    if len(raw) != length:  # 본문을 다 보내기 전에 연결을 끊었다
+        raise BadRequest(400, api_error.INVALID_REQUEST, "본문이 Content-Length보다 짧습니다.")
     try:
         parsed = json.loads(raw)
-    except (UnicodeDecodeError, ValueError):
+    except (UnicodeDecodeError, ValueError, RecursionError):  # 깊이 중첩된 JSON은 RecursionError로 온다
         raise BadRequest(400, api_error.INVALID_REQUEST, "본문이 올바른 JSON이 아닙니다.") from None
     if not isinstance(parsed, dict):
         raise BadRequest(400, api_error.INVALID_REQUEST, "본문은 JSON 객체여야 합니다.")
     return parsed
+
+
+def reject_body(headers: Mapping[str, str]) -> None:
+    """본문이 없어야 하는 요청(DELETE)에 본문이나 Content-Type이 있으면 BadRequest(400)."""
+    length = headers.get("Content-Length", "0").strip()
+    if length not in ("", "0") or "Content-Type" in headers or "Transfer-Encoding" in headers:
+        raise BadRequest(400, api_error.INVALID_REQUEST, "이 요청에는 본문을 보낼 수 없습니다.")
 
 
 def goal_fields(body: dict[str, Any]) -> dict[str, Any]:

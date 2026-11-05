@@ -104,6 +104,7 @@ export function createUsageSummary(props: UsageSummaryProps): HTMLElement {
   const manage = document.createElement("button");
   manage.type = "button";
   manage.className = styles.manage;
+  manage.dataset.goalManage = "";
   manage.textContent = "목표 프로세스 관리";
   manage.addEventListener("click", props.onManageGoals);
   container.append(manage);

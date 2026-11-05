@@ -218,3 +218,18 @@ test("목표 쪽 최장이 사이트면 그 브라우저 전체와 같게 보지
     "same",
   );
 });
+
+test("대소문자만 다른 이름이 따로 기록돼도 추가 목록에는 한 번만 나온다", () => {
+  const split = splitProcesses(["Chrome.exe", "chrome.EXE", "zoom.exe"], [], 1);
+
+  assert.deepEqual(split.available, ["Chrome.exe", "zoom.exe"]);
+});
+
+test("서버의 casefold처럼 ß와 ss를 같은 프로세스로 본다", () => {
+  const goals = [{ id: 2, name: "운동", processes: ["Straße.exe"] }];
+
+  const split = splitProcesses(["STRASSE.exe", "other.exe"], goals, 1);
+
+  assert.deepEqual(split.available, ["other.exe"]);
+  assert.deepEqual(removeProcess(["Straße.exe"], "STRASSE.EXE"), []);
+});

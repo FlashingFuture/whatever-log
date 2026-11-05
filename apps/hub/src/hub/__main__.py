@@ -51,6 +51,7 @@ from hub.goals_service import (
     is_local_host,
     progress_payload,
     read_json_object,
+    reject_body,
     validation_error_body,
 )
 from hub.icons import IconStore
@@ -199,6 +200,10 @@ def _is_missing_site_schema(error: sqlite3.OperationalError) -> bool:
 
 class _Handler(BaseHTTPRequestHandler):
     """/api/* 요청을 집계 함수로 넘기고 JSON으로 응답한다."""
+
+    # 요청을 읽는 소켓의 제한 시간. 본문을 끝까지 보내지 않고 연결만 열어 두는 클라이언트가 처리 스레드를
+    # 무기한 붙잡지 못하게 한다(쓰기 응답이나 아이콘 전송에는 영향이 없다).
+    timeout = 15
 
     db_path: Path = DEFAULT_DB_PATH
     goals_db_path: Path = DEFAULT_GOALS_DB_PATH
@@ -461,12 +466,17 @@ class _Handler(BaseHTTPRequestHandler):
         except BadRequest as error:
             self._send_bad_request(error)
             return
-        recorded = self._recorded_process_names()
-        if recorded is None:
-            return
-        recorded_sites = self._recorded_sites()
-        if recorded_sites is None:
-            return
+        # 연결할 것이 없으면 기록 DB를 읽을 이유가 없다 — DB를 못 읽는 중에도 연결 없는 목표는 저장된다.
+        recorded: list[str] | None = None
+        if fields["processes"]:
+            recorded = self._recorded_process_names()
+            if recorded is None:
+                return
+        recorded_sites: set[tuple[str, str]] | None = None
+        if fields["sites"]:
+            recorded_sites = self._recorded_sites()
+            if recorded_sites is None:
+                return
         known = {
             "known_processes": recorded,
             "known_sites": recorded_sites,
@@ -493,6 +503,7 @@ class _Handler(BaseHTTPRequestHandler):
         """목표를 지운다(연결 정보도 같이). 출처를 검사하고, 지난 날의 스냅샷은 남는다."""
         try:
             check_write_origin(self.headers.get("Origin"), _ALLOWED_ORIGIN)
+            reject_body(self.headers)
         except BadRequest as error:
             self._send_bad_request(error)
             return

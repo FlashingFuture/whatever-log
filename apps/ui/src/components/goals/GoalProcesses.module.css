@@ -97,6 +97,9 @@
   font-size: var(--text-sm);
 }
 .owner {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 @media (max-width: 520px) {

@@ -94,6 +94,9 @@
 - 오류는 `{"error":{"code","message","fields?"}}` — 입력 오류는 칸별(`fields`)로 돌려준다.
 - 쓰기(POST/PUT/DELETE)는 Host가 로컬이고, Origin이 허용 목록(`127.0.0.1`/`localhost`)이며,
   `Content-Type: application/json`, 본문 32KB 이하, 모르는 필드 없음일 때만 받는다(CSRF·DNS 리바인딩 방어).
+  본문이 `Content-Length`보다 짧거나 JSON이 아니거나 너무 깊게 중첩돼도 400이다. `DELETE`는 반대로 본문이나
+  `Content-Type`이 있으면 400으로 거부한다. 요청을 읽는 소켓에는 15초 제한 시간이 있다. 연결할 프로세스·사이트가
+  없는 목표는 기록 DB를 읽지 않고 저장한다.
   CORS preflight는 허용된 Origin에만 응답한다.
 
 ## UI
