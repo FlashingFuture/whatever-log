@@ -1,0 +1,21 @@
+[project]
+name = "goals"
+version = "0.1.0"
+description = "사용자의 목표(이름·하루 목표 시간·요일)와 연결된 프로세스를 엄격하게 검증해 저장하는 패키지. 화면(ui)·hub·전송 에이전트가 같은 규칙을 쓴다"
+requires-python = ">=3.14"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/goals"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
