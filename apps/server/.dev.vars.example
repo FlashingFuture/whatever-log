@@ -1,0 +1,4 @@
+# 로컬 개발용 비밀 값. 이 파일을 복사해 `.dev.vars`를 만들고 값을 채운다(.dev.vars는 gitignore됨).
+# `wrangler dev`가 이 값을 Worker의 env로 넣어 준다. 따옴표 없이 `키=값` 한 줄씩 쓴다.
+# 운영에서는 이 파일이 아니라 `pnpm exec wrangler secret put GOOGLE_CLIENT_SECRET`으로 올린다.
+GOOGLE_CLIENT_SECRET=

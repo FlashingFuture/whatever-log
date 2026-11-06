@@ -1,0 +1,25 @@
+# Cloudflare Workers 설정. wrangler(Workers의 CLI)가 이 파일을 읽는다.
+# 비밀이 아닌 값만 여기 둔다. 비밀(GOOGLE_CLIENT_SECRET)은 이 파일에 쓰지 않는다 —
+# 로컬은 .dev.vars, 운영은 `wrangler secret put`으로 넣는다(docs/auth-design.md).
+name = "whatever-log-server"
+main = "src/index.ts"
+# 이 날짜의 Workers 런타임 동작에 고정한다(런타임이 바뀌어도 코드가 갑자기 달라지지 않게).
+compatibility_date = "2026-10-30"
+
+# 배포 주소(https://whatever-log-server.<서브도메인>.workers.dev)를 열어 둔다. 명시해 두면 wrangler 기본값이
+# 바뀌어도 주소가 갑자기 닫히지 않는다. 코드 버전마다 따로 열리는 미리보기 주소는 필요 없어서 끈다.
+workers_dev = true
+preview_urls = false
+
+[vars]
+# 공개 값이다(로그인 화면에 보이는 값과 같다). 서버는 ID 토큰의 aud가 이 값인지 검사한다.
+GOOGLE_CLIENT_ID = "506740497505-okl0mm0ge5p7kojam78pdur54ej03j3e.apps.googleusercontent.com"
+
+# 사용자·토큰을 저장하는 D1(SQLite) 데이터베이스. 코드에서는 env.DB로 쓴다.
+# 로컬(`wrangler dev`)은 database_id를 쓰지 않고 .wrangler/ 안의 로컬 DB를 쓴다. 운영에 올리기 전에
+# `wrangler d1 create whatever-log`가 알려 주는 id로 바꾸고 `wrangler d1 migrations apply DB --remote`를 실행한다.
+[[d1_databases]]
+binding = "DB"
+database_name = "whatever-log"
+database_id = "2cecdf26-5daa-474b-84e7-8bc82b2d0f03"
+migrations_dir = "migrations"
