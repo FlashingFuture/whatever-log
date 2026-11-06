@@ -9,3 +9,12 @@ compatibility_date = "2026-10-30"
 [vars]
 # 공개 값이다(로그인 화면에 보이는 값과 같다). 서버는 ID 토큰의 aud가 이 값인지 검사한다.
 GOOGLE_CLIENT_ID = "506740497505-okl0mm0ge5p7kojam78pdur54ej03j3e.apps.googleusercontent.com"
+
+# 사용자·토큰을 저장하는 D1(SQLite) 데이터베이스. 코드에서는 env.DB로 쓴다.
+# 로컬(`wrangler dev`)은 database_id를 쓰지 않고 .wrangler/ 안의 로컬 DB를 쓴다. 운영에 올리기 전에
+# `wrangler d1 create whatever-log`가 알려 주는 id로 바꾸고 `wrangler d1 migrations apply DB --remote`를 실행한다.
+[[d1_databases]]
+binding = "DB"
+database_name = "whatever-log"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"

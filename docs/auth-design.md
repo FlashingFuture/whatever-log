@@ -73,12 +73,36 @@
 - **토큰 저장은 인터페이스**: `TokenStore`가 저장 위치를 감춘다. 지금은 메모리 구현(테스트용)뿐이고,
   자격 증명 관리자 구현은 로그인을 만들 때 더한다.
 
+## `POST /auth/google` (apps/server)
+
+요청: `{"code", "code_verifier", "redirect_uri"}` (JSON, 4KB 이하, 모르는 칸 거부). `redirect_uri`는
+`http://127.0.0.1|localhost|[::1]:<포트>[/경로]`만 받는다.
+
+| 응답 | 의미 |
+| --- | --- |
+| 200 `{token, expires_at, email}` | 성공. 토큰 원문은 이 응답에서만 나간다(DB에는 SHA-256 해시만). 유효 기간 30일 |
+| 400 `invalid_request` | 본문 형식 오류 / 413·415는 크기·Content-Type |
+| 400 `invalid_grant` | 코드가 만료됐거나 이미 쓰였다 — 다시 로그인하면 된다 |
+| 403 `email_not_verified` | Google이 이메일을 검증하지 않은 계정 |
+| 502 `upstream_error` | Google 쪽·우리 설정 문제. 응답에는 상세 내용을 담지 않는다 |
+
+- 토큰은 무작위 32바이트(서명 키 불필요). 사용자당 유효 토큰은 5개까지이고 넘으면 오래된 것부터, 만료된 것은
+  다음 로그인 때 지운다. 모든 응답은 `Cache-Control: no-store`다.
+- 저장소는 D1(`users`, `tokens`; `apps/server/migrations/`). 사용자를 지우면 토큰도 함께 지워진다(계정 삭제).
+- Google 공개키(JWKS)는 Worker 인스턴스에서 1시간 캐시하고, 모르는 `kid`는 1분에 한 번만 다시 받는다.
+- 코드·토큰·비밀은 로그에 남기지 않는다.
+
+배포 전에 할 일: `wrangler d1 create whatever-log`로 만든 id를 `wrangler.toml`의 `database_id`에 넣고,
+`wrangler d1 migrations apply DB --remote`, `wrangler secret put GOOGLE_CLIENT_SECRET`, `wrangler deploy`.
+로컬 확인은 `wrangler d1 migrations apply DB --local` 뒤 `wrangler dev`.
+
 ## 지금 있는 것 / 없는 것
 
-- 있는 것: `packages/cloud` 뼈대(`NotSignedIn`, `Session`, `TokenStore`, 메모리 저장소, `Account`,
-  `@require_login`)와 격리 테스트.
-- 없는 것: 서버(Workers), Google 로그인 흐름, 자격 증명 관리자 저장소, 전송 에이전트, 이메일 발송,
-  화면의 로그인 버튼. 각각 만들 때 이 문서를 먼저 고친다.
+- 있는 것: `packages/cloud` 뼈대와 격리 테스트, `apps/server`의 `POST /auth/google`(코드 교환·ID 토큰 검증·
+  토큰 발급·D1 저장).
+- 없는 것: 서버가 토큰을 받아 쓰는 쪽(인증이 필요한 API), 데스크톱의 루프백 PKCE 로그인과 자격 증명 관리자
+  저장소, 로그아웃·계정 삭제 API, 요청 횟수 제한, 전송 에이전트, 이메일 발송, 화면의 로그인 버튼. 각각 만들 때
+  이 문서를 먼저 고친다.
 
 ## 확인해야 할 것
 
