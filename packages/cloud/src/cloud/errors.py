@@ -8,3 +8,15 @@ class NotSignedIn(Exception):
     def __init__(self) -> None:
         """사용자에게 보여 줄 수 있는 고정 메시지로 만든다."""
         super().__init__("로그인이 필요합니다.")
+
+
+class LoginFailed(Exception):
+    """로그인 흐름이 실패했다. 메시지는 사용자에게 그대로 보여 줄 수 있는 문장이다(코드·토큰·비밀은 담지 않는다)."""
+
+
+class LoginCancelled(LoginFailed):
+    """사용자가 Google 로그인 화면에서 취소했거나 권한을 거부했다(오류가 아니라 사용자의 선택이다)."""
+
+    def __init__(self) -> None:
+        """고정 메시지로 만든다."""
+        super().__init__("로그인을 취소했습니다.")

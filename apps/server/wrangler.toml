@@ -6,6 +6,11 @@ main = "src/index.ts"
 # 이 날짜의 Workers 런타임 동작에 고정한다(런타임이 바뀌어도 코드가 갑자기 달라지지 않게).
 compatibility_date = "2026-10-30"
 
+# 배포 주소(https://whatever-log-server.<서브도메인>.workers.dev)를 열어 둔다. 명시해 두면 wrangler 기본값이
+# 바뀌어도 주소가 갑자기 닫히지 않는다. 코드 버전마다 따로 열리는 미리보기 주소는 필요 없어서 끈다.
+workers_dev = true
+preview_urls = false
+
 [vars]
 # 공개 값이다(로그인 화면에 보이는 값과 같다). 서버는 ID 토큰의 aud가 이 값인지 검사한다.
 GOOGLE_CLIENT_ID = "506740497505-okl0mm0ge5p7kojam78pdur54ej03j3e.apps.googleusercontent.com"

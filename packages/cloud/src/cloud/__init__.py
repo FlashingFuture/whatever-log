@@ -5,8 +5,24 @@
 """
 
 from cloud.account import Account
-from cloud.errors import NotSignedIn
+from cloud.config import CloudConfig, load_config
+from cloud.errors import LoginCancelled, LoginFailed, NotSignedIn
+from cloud.google_login import sign_in_with_google
 from cloud.guard import require_login
+from cloud.keyring_store import KeyringTokenStore
 from cloud.session import InMemoryTokenStore, Session, TokenStore
 
-__all__ = ["Account", "InMemoryTokenStore", "NotSignedIn", "Session", "TokenStore", "require_login"]
+__all__ = [
+    "Account",
+    "CloudConfig",
+    "InMemoryTokenStore",
+    "KeyringTokenStore",
+    "LoginCancelled",
+    "LoginFailed",
+    "NotSignedIn",
+    "Session",
+    "TokenStore",
+    "load_config",
+    "require_login",
+    "sign_in_with_google",
+]

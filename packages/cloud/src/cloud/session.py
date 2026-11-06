@@ -9,11 +9,13 @@ from typing import Protocol
 class Session:
     """서버가 발급한 자체 토큰. Google 토큰은 보관하지 않는다(docs/auth-design.md).
 
-    expires_at은 UTC 시각(시간대 정보가 있는 datetime)이고, None이면 만료가 없다.
+    expires_at은 UTC 시각(시간대 정보가 있는 datetime)이고, None이면 만료가 없다. email은 화면에 "누구로
+    로그인했는지" 보여 주는 용도이고, 서버가 알려 준 값을 그대로 둔다(없을 수 있다).
     """
 
     token: str
     expires_at: datetime | None = None
+    email: str | None = None
 
 
 class TokenStore(Protocol):

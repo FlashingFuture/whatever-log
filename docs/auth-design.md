@@ -96,13 +96,31 @@
 `wrangler d1 migrations apply DB --remote`, `wrangler secret put GOOGLE_CLIENT_SECRET`, `wrangler deploy`.
 로컬 확인은 `wrangler d1 migrations apply DB --local` 뒤 `wrangler dev`.
 
+## 데스크톱 로그인 (packages/cloud)
+
+`sign_in_with_google(config)`가 한 번에 진행한다.
+
+1. PKCE `code_verifier`(무작위 86자)와 `state`를 만들고 `127.0.0.1`의 빈 포트에 일회용 서버를 연다.
+2. 시스템 브라우저로 Google 로그인 주소를 연다. 범위는 `openid email`뿐이다. 브라우저를 못 열어도 쓸 수 있게
+   주소를 `show_url`로도 알린다.
+3. 돌아온 `/callback`에서 `state`가 맞는 첫 콜백만 받는다(틀린 `state`·코드 없음·다른 경로는 응답만 하고
+   계속 기다린다). 사용자가 취소하면(`error=`) `LoginCancelled`, 180초가 지나면 `LoginFailed`.
+4. 코드·`code_verifier`·`redirect_uri`를 서버 `POST /auth/google`에 보내 토큰을 받는다. 앱은 클라이언트 비밀을
+   갖지 않는다. 서버 주소는 https(또는 개발용 로컬 http)만 받는다.
+5. 호출부가 `Account.sign_in(session)`으로 저장한다. 운영 저장소는 `KeyringTokenStore`(Windows 자격 증명
+   관리자, 서비스 `whatever.log`)다. 저장된 값이 깨졌거나 자격 증명 관리자를 쓸 수 없으면 `load`는 "로그인 안 됨"으로
+   보고(로컬 기능은 로그인에 의존하지 않는다), `save`는 실패를 숨기지 않는다.
+
+직접 해 보기: `uv run python -m cloud login | status | logout`. 로컬 서버(`wrangler dev`)로 시험하려면
+환경 변수 `WHATEVER_LOG_SERVER_URL=http://127.0.0.1:8790`을 준다. 로그아웃은 이 PC의 로그인 정보만 지운다
+(서버에 남은 토큰은 만료 때까지 유효하다 — 서버 로그아웃 API가 생기면 함께 폐기한다).
+
 ## 지금 있는 것 / 없는 것
 
-- 있는 것: `packages/cloud` 뼈대와 격리 테스트, `apps/server`의 `POST /auth/google`(코드 교환·ID 토큰 검증·
-  토큰 발급·D1 저장).
-- 없는 것: 서버가 토큰을 받아 쓰는 쪽(인증이 필요한 API), 데스크톱의 루프백 PKCE 로그인과 자격 증명 관리자
-  저장소, 로그아웃·계정 삭제 API, 요청 횟수 제한, 전송 에이전트, 이메일 발송, 화면의 로그인 버튼. 각각 만들 때
-  이 문서를 먼저 고친다.
+- 있는 것: `packages/cloud`(`NotSignedIn`·`Session`·`TokenStore`·`Account`·`@require_login`, 위의 로그인 흐름,
+  자격 증명 관리자 저장소, 명령줄)와 격리 테스트, `apps/server`의 `POST /auth/google`(배포됨).
+- 없는 것: 서버가 토큰을 받아 쓰는 쪽(인증이 필요한 API), 서버 로그아웃·계정 삭제 API, 요청 횟수 제한, 화면(UI)의
+  로그인 버튼과 hub의 계정 API, 전송 에이전트, 이메일 발송. 각각 만들 때 이 문서를 먼저 고친다.
 
 ## 확인해야 할 것
 
