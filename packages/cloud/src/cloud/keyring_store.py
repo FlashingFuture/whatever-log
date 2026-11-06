@@ -12,6 +12,20 @@ SERVICE_NAME = "whatever.log"
 USERNAME = "session"
 
 
+_INSECURE_MARKERS = ("plaintext", "uncrypted", "keyrings.alt", "backends.null")
+
+
+def _require_secure_backend() -> None:
+    """토큰이 평문 파일에 남거나(PlaintextKeyring) 어디에도 저장되지 않는(null) 백엔드면 저장을 거부한다."""
+    backend = keyring.get_keyring()
+    active = getattr(backend, "backends", None)  # 체인 백엔드는 우선순위가 가장 높은 것이 실제로 쓰인다
+    if active:
+        backend = active[0]
+    kind = f"{type(backend).__module__}.{type(backend).__name__}".lower()
+    if any(marker in kind for marker in _INSECURE_MARKERS):
+        raise keyring.errors.KeyringError("안전한 OS 자격 증명 관리자가 없어 로그인 정보를 저장하지 않았습니다.")
+
+
 class KeyringTokenStore:
     """토큰을 `goals.db`·`recorder.db`가 아니라 OS 자격 증명 관리자에 둔다(기록 DB를 복사·백업해도 토큰이 따라가지 않는다).
 
@@ -39,16 +53,16 @@ class KeyringTokenStore:
             email = data.get("email")
             if not isinstance(token, str) or not token:
                 return None
-            return Session(
-                token=token,
-                expires_at=datetime.fromisoformat(expires_at) if expires_at else None,
-                email=email if isinstance(email, str) else None,
-            )
+            expiry = datetime.fromisoformat(expires_at) if expires_at else None
+            if expiry is not None and expiry.tzinfo is None:
+                return None  # 시간대 없는 시각은 UTC 시계와 비교할 수 없다 — 깨진 항목으로 본다
+            return Session(token=token, expires_at=expiry, email=email if isinstance(email, str) else None)
         except (ValueError, KeyError, TypeError, AttributeError):
             return None
 
     def save(self, session: Session) -> None:
-        """세션을 저장한다(이미 있으면 바꾼다). 자격 증명 관리자를 쓸 수 없으면 오류를 올린다."""
+        """세션을 저장한다(이미 있으면 바꾼다). 자격 증명 관리자를 쓸 수 없거나 평문으로 저장하는 백엔드면 KeyringError를 올린다."""
+        _require_secure_backend()
         value = json.dumps(
             {
                 "token": session.token,
@@ -63,4 +77,6 @@ class KeyringTokenStore:
         try:
             keyring.delete_password(self._service, self._username)
         except keyring.errors.PasswordDeleteError:
-            pass  # 이미 없다
+            # 항목이 없어서 난 오류인지, 지우지 못해서 난 오류인지 오류만으로는 알 수 없다 — 아직 남아 있으면 실패다.
+            if keyring.get_password(self._service, self._username) is not None:
+                raise

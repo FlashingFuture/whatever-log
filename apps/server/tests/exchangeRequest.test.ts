@@ -90,6 +90,8 @@ test("redirect_uri는 로컬 루프백 http 주소만 받는다", () => {
     "http://127.0.0.1:53412/callback",
     "http://localhost:8080/oauth/callback",
     "http://[::1]:9000/cb",
+    "http://127.0.0.1:1/cb", // 포트 경계
+    "http://127.0.0.1:65535/cb",
   ]) {
     assert.equal(
       parseExchangeRequest({ ...VALID_BODY, redirect_uri: ok }).ok,
@@ -106,6 +108,9 @@ test("redirect_uri는 로컬 루프백 http 주소만 받는다", () => {
     "http://127.0.0.1:53412/callback?x=1",
     "http://127.0.0.1:53412/callback#frag",
     "http://127.0.0.1:99999999/callback",
+    "http://127.0.0.1:65536/callback", // 포트 범위 밖
+    "http://127.0.0.1:99999/callback",
+    "http://127.0.0.1:0/callback",
     "com.example.app:/oauth",
     "http://0.0.0.0:5000/",
   ]) {

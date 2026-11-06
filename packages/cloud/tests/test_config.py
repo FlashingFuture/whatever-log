@@ -33,3 +33,10 @@ def test_insecure_or_malformed_server_urls_are_rejected(url: str) -> None:
 @pytest.mark.parametrize("url", ["https://server.example", "http://localhost:8790", "http://127.0.0.1:8790", "http://[::1]:8790"])
 def test_https_and_local_http_are_accepted(url: str) -> None:
     assert CloudConfig(server_url=url).server_url == url
+
+
+def test_the_google_client_id_can_be_overridden_together_with_the_server() -> None:
+    from cloud.config import CLIENT_ID_ENV, GOOGLE_CLIENT_ID
+
+    assert load_config({}).google_client_id == GOOGLE_CLIENT_ID
+    assert load_config({CLIENT_ID_ENV: "other-client"}).google_client_id == "other-client"

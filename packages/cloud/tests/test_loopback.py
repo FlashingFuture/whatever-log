@@ -127,3 +127,60 @@ def test_the_port_is_released_after_the_with_block() -> None:
 
     with pytest.raises(urllib.error.URLError):
         urllib.request.urlopen(uri, timeout=1)
+
+
+def test_an_oauth_error_other_than_cancelling_is_a_failure_not_a_cancel() -> None:
+    results: list = []
+    with LoopbackReceiver(STATE) as receiver:
+        thread = _call_later(receiver, f"?error=unauthorized_client&state={STATE}", results)
+
+        with pytest.raises(LoginFailed, match="unauthorized_client") as raised:
+            receiver.wait_for_code(timeout=5)
+        thread.join()
+
+    assert not isinstance(raised.value, LoginCancelled)
+    assert "취소" not in results[0][2]
+
+
+def test_an_error_code_with_odd_characters_is_not_echoed() -> None:
+    results: list = []
+    with LoopbackReceiver(STATE) as receiver:
+        thread = _call_later(receiver, f"?error=%3Cscript%3E&state={STATE}", results)
+
+        with pytest.raises(LoginFailed) as raised:
+            receiver.wait_for_code(timeout=5)
+        thread.join()
+
+    assert "script" not in str(raised.value) and "script" not in results[0][2]
+
+
+def test_a_half_open_connection_does_not_block_the_real_callback_or_the_deadline() -> None:
+    import socket
+
+    results: list = []
+    with LoopbackReceiver(STATE) as receiver:
+        port = receiver._server.server_port
+        stalled = socket.create_connection(("127.0.0.1", port))  # 요청을 보내지 않고 연결만 붙잡는다
+        try:
+            thread = _call_later(receiver, f"?code=real&state={STATE}", results)
+
+            started = time.monotonic()
+            assert receiver.wait_for_code(timeout=5) == "real"
+            thread.join()
+            assert time.monotonic() - started < 2
+        finally:
+            stalled.close()
+
+
+def test_a_half_open_connection_does_not_push_past_the_deadline() -> None:
+    import socket
+
+    with LoopbackReceiver(STATE) as receiver:
+        stalled = socket.create_connection(("127.0.0.1", receiver._server.server_port))
+        try:
+            started = time.monotonic()
+            with pytest.raises(LoginFailed, match="시간이 지났습니다"):
+                receiver.wait_for_code(timeout=0.5)
+            assert time.monotonic() - started < 2
+        finally:
+            stalled.close()

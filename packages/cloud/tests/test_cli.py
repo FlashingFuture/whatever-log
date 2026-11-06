@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
+import keyring.errors
 import pytest
 
 import cloud.__main__ as cli
@@ -67,3 +68,32 @@ def test_login_failures_keep_the_user_signed_out(monkeypatch, capsys, error) -> 
 def test_unknown_commands_are_rejected() -> None:
     with pytest.raises(SystemExit):
         cli.main(["delete-everything"], account=_account())
+
+
+class _BrokenStore:
+    """자격 증명 관리자를 쓸 수 없는 상태: 저장도 삭제도 실패한다."""
+
+    def load(self) -> Session | None:
+        return Session("tok")
+
+    def save(self, session: Session) -> None:
+        raise keyring.errors.KeyringError("저장할 수 없음")
+
+    def clear(self) -> None:
+        raise keyring.errors.PasswordDeleteError("지울 수 없음")
+
+
+def test_a_failure_to_store_the_session_is_reported_not_a_traceback(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(cli, "sign_in_with_google", lambda config, **kwargs: Session("tok", None, "a@example.com"))
+
+    assert cli.main(["login"], account=Account(_BrokenStore(), now=lambda: NOW)) == 1
+
+    out = capsys.readouterr().out
+    assert "저장하지 못했습니다" in out and "로그인했습니다" not in out
+
+
+def test_a_failure_to_clear_the_session_is_not_reported_as_logged_out(capsys) -> None:
+    assert cli.main(["logout"], account=Account(_BrokenStore(), now=lambda: NOW)) == 1
+
+    out = capsys.readouterr().out
+    assert "지우지 못했습니다" in out and "로그아웃했습니다" not in out

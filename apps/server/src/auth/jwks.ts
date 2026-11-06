@@ -24,6 +24,17 @@ export function createGoogleKeyProvider(
 
   async function refresh(): Promise<void> {
     fetchedAt = now();
+    try {
+      await load();
+    } catch (error) {
+      // 키가 하나도 없는 채로 실패했다면 1분을 기다리게 하지 않고 다음 로그인에서 바로 다시 시도한다.
+      // (키가 있을 때의 실패는 그대로 두어, 모르는 kid로 Google을 계속 두드리는 것을 막는다.)
+      if (keys.size === 0) fetchedAt = Number.NEGATIVE_INFINITY;
+      throw error;
+    }
+  }
+
+  async function load(): Promise<void> {
     const response = await fetchFn(GOOGLE_JWKS_URL, {
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });

@@ -1,5 +1,6 @@
 """서버(`POST /auth/google`)에 인증 코드를 보내 로그인 토큰을 받는다."""
 
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -63,7 +64,10 @@ def exchange_code(
         with opener(request, timeout=_TIMEOUT_SECONDS) as response:
             return _parse_session(response.read(_MAX_RESPONSE_BYTES))
     except urllib.error.HTTPError as error:
-        message = _error_message(error.read(_MAX_RESPONSE_BYTES))
+        try:
+            message = _error_message(error.read(_MAX_RESPONSE_BYTES))
+        except (OSError, http.client.HTTPException):
+            message = None  # 오류 헤더만 보내고 끊긴 응답 — 상태 코드만 알려 준다
         raise LoginFailed(message or f"서버가 로그인을 거부했습니다({error.code}).") from None
-    except (urllib.error.URLError, TimeoutError, OSError):
+    except (urllib.error.URLError, OSError, http.client.HTTPException):
         raise LoginFailed("서버에 연결하지 못했습니다. 인터넷 연결을 확인해 주세요.") from None

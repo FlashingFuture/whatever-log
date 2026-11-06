@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 DEFAULT_SERVER_URL = "https://whatever-log-server.whateverlog.workers.dev"
 GOOGLE_CLIENT_ID = "506740497505-okl0mm0ge5p7kojam78pdur54ej03j3e.apps.googleusercontent.com"
 SERVER_URL_ENV = "WHATEVER_LOG_SERVER_URL"
+CLIENT_ID_ENV = "WHATEVER_LOG_GOOGLE_CLIENT_ID"
 _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
@@ -27,6 +28,10 @@ class CloudConfig:
 
 
 def load_config(environ: dict[str, str] | None = None) -> CloudConfig:
-    """기본 설정. 환경 변수 `WHATEVER_LOG_SERVER_URL`로 서버 주소를 바꿀 수 있다(로컬 `wrangler dev` 확인용)."""
+    """기본 설정. 환경 변수 `WHATEVER_LOG_SERVER_URL`로 서버 주소를, `WHATEVER_LOG_GOOGLE_CLIENT_ID`로 Google
+    클라이언트 ID를 바꿀 수 있다(로컬 `wrangler dev`나 다른 서버 확인용). 서버가 쓰는 클라이언트 ID와 같아야 로그인된다."""
     env = os.environ if environ is None else environ
-    return CloudConfig(server_url=env.get(SERVER_URL_ENV, DEFAULT_SERVER_URL).rstrip("/"))
+    return CloudConfig(
+        server_url=env.get(SERVER_URL_ENV, DEFAULT_SERVER_URL).rstrip("/"),
+        google_client_id=env.get(CLIENT_ID_ENV, GOOGLE_CLIENT_ID),
+    )

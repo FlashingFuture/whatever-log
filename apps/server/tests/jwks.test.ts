@@ -87,3 +87,40 @@ test("키 요청이 실패하면 오류를 올린다", async () => {
 
   await assert.rejects(() => provider.get("k1"), /503/);
 });
+
+test("키를 한 번도 받지 못한 채 실패했으면 1분을 기다리지 않고 바로 다시 시도한다", async () => {
+  let calls = 0;
+  const provider = createGoogleKeyProvider(
+    async () => {
+      calls += 1;
+      return calls === 1
+        ? new Response("down", { status: 503 })
+        : jsonResponse({ keys: [{ kty: "RSA", kid: "k1" }] });
+    },
+    () => 5 * HOUR,
+  );
+
+  await assert.rejects(() => provider.get("k1"), /503/);
+  assert.equal((await provider.get("k1"))?.kid, "k1");
+  assert.equal(calls, 2);
+});
+
+test("키가 있을 때의 갱신 실패는 1분 간격 제한을 그대로 지킨다", async () => {
+  const clock = { now: 0 };
+  let calls = 0;
+  const provider = createGoogleKeyProvider(
+    async () => {
+      calls += 1;
+      return calls === 1
+        ? jsonResponse({ keys: [{ kty: "RSA", kid: "k1" }] })
+        : new Response("down", { status: 503 });
+    },
+    () => clock.now,
+  );
+  await provider.get("k1");
+
+  clock.now = 2 * MINUTE;
+  await assert.rejects(() => provider.get("unknown"), /503/);
+  await provider.get("unknown"); // 방금 실패했으니 Google에 다시 가지 않는다
+  assert.equal(calls, 2);
+});

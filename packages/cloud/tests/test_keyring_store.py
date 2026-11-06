@@ -106,3 +106,35 @@ def test_the_token_is_stored_only_in_the_credential_manager(backend) -> None:
     KeyringTokenStore("svc", "user").save(SESSION)
 
     assert "tok-123" in backend.items[("svc", "user")]
+
+
+def test_an_expiry_without_a_timezone_reads_as_signed_out(backend) -> None:
+    backend.items[("svc", "user")] = '{"token": "t", "expires_at": "2026-12-06T03:00:00"}'
+
+    assert KeyringTokenStore("svc", "user").load() is None
+
+
+@pytest.mark.parametrize("module", ["keyrings.alt.file", "keyring.backends.null"])
+def test_it_refuses_to_save_into_a_plaintext_or_null_backend(module) -> None:
+    previous = keyring.get_keyring()
+    plaintext = type("PlaintextKeyring", (_MemoryKeyring,), {"__module__": module})()
+    keyring.set_keyring(plaintext)
+    try:
+        with pytest.raises(keyring.errors.KeyringError, match="자격 증명 관리자"):
+            KeyringTokenStore("svc", "user").save(SESSION)
+        assert plaintext.items == {}
+    finally:
+        keyring.set_keyring(previous)
+
+
+def test_a_failed_delete_is_reported_unless_the_entry_is_really_gone(backend) -> None:
+    store = KeyringTokenStore("svc", "user")
+    store.save(SESSION)
+
+    def cannot_delete(service: str, username: str) -> None:
+        raise keyring.errors.PasswordDeleteError("잠금 해제 취소")
+
+    backend.delete_password = cannot_delete  # type: ignore[method-assign]
+    with pytest.raises(keyring.errors.PasswordDeleteError):
+        store.clear()
+    assert store.load() == SESSION  # 지워지지 않았다는 사실이 숨겨지지 않는다

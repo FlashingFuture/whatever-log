@@ -1,3 +1,13 @@
+/** 기본 헤더에 호출부가 준 헤더를 겹친다. HeadersInit이 배열·Headers 객체여도 같게 동작하도록 Headers로 바꿔 합친다. */
+function withDefaults(extra: HeadersInit): Headers {
+  const merged = new Headers({
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+  });
+  for (const [name, value] of new Headers(extra)) merged.set(name, value);
+  return merged;
+}
+
 /** JSON 응답. 로그인 응답에는 토큰이 들어가므로 어떤 응답도 캐시되지 않게 한다. */
 export function jsonResponse(
   body: unknown,
@@ -6,11 +16,7 @@ export function jsonResponse(
 ): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      "Cache-Control": "no-store",
-      ...headers,
-    },
+    headers: withDefaults(headers),
   });
 }
 

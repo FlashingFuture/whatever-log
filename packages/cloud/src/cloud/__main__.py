@@ -5,6 +5,8 @@
 
 import argparse
 import sys
+
+import keyring.errors
 from datetime import UTC, datetime
 
 from cloud.account import Account
@@ -26,6 +28,9 @@ def _login(account: Account) -> int:
         account.sign_in(session)
     except LoginCancelled as error:
         print(error)
+        return 1
+    except keyring.errors.KeyringError as error:
+        print(f"로그인 정보를 저장하지 못했습니다: {error}")
         return 1
     except LoginFailed as error:
         print(f"로그인하지 못했습니다: {error}")
@@ -56,7 +61,11 @@ def main(argv: list[str] | None = None, *, account: Account | None = None, now: 
         return _login(account)
     if args.command == "status":
         return _status(account)
-    account.sign_out()
+    try:
+        account.sign_out()
+    except keyring.errors.KeyringError as error:
+        print(f"로그인 정보를 지우지 못했습니다: {error}")
+        return 1
     print("로그아웃했습니다. (이 PC의 로그인 정보만 지웠습니다. 서버에 남은 토큰은 만료 때까지 유효합니다.)")
     return 0
 

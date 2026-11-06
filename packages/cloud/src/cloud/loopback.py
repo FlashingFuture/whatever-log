@@ -2,7 +2,8 @@
 
 import hmac
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import re
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from cloud.errors import LoginCancelled, LoginFailed
@@ -14,6 +15,9 @@ _PAGE = (
 )
 _DONE = "로그인이 완료됐습니다. 이 창을 닫고 whatever.log로 돌아가세요."
 _CANCELLED = "로그인이 취소됐습니다. 이 창을 닫아도 됩니다."
+_FAILED = "Google 로그인에 실패했습니다. whatever.log에서 안내를 확인해 주세요."
+_ERROR_CODE = re.compile(r"[a-z_]{1,40}")
+_REQUEST_TIMEOUT_SECONDS = 5
 _REJECTED = "이 로그인 요청은 처리할 수 없습니다. whatever.log에서 다시 시도해 주세요."
 
 
@@ -24,12 +28,16 @@ class _Outcome:
         """아직 아무것도 받지 않은 상태로 시작한다."""
         self.code: str | None = None
         self.cancelled = False
+        self.error: str | None = None
 
 
 def _handler_for(state: str, outcome: _Outcome) -> type[BaseHTTPRequestHandler]:
     """이 로그인 시도의 state와 결과 보관소에 묶인 요청 처리기를 만든다."""
 
     class Handler(BaseHTTPRequestHandler):
+        # 연결만 열고 요청을 끝내지 않는 클라이언트가 소켓을 붙잡고 있지 않게 한다.
+        timeout = _REQUEST_TIMEOUT_SECONDS
+
         def _reply(self, status: int, message: str) -> None:
             body = _PAGE.format(message=message).encode("utf-8")
             self.send_response(status)
@@ -53,8 +61,13 @@ def _handler_for(state: str, outcome: _Outcome) -> type[BaseHTTPRequestHandler]:
                 self._reply(400, _REJECTED)
                 return
             if "error" in query:
-                outcome.cancelled = True
-                self._reply(200, _CANCELLED)
+                error = query["error"][0]
+                if error == "access_denied":  # 사용자가 취소·거부했다
+                    outcome.cancelled = True
+                    self._reply(200, _CANCELLED)
+                else:  # unauthorized_client 같은 설정 문제 — 취소와 구분한다
+                    outcome.error = error if _ERROR_CODE.fullmatch(error) else "unknown"
+                    self._reply(200, _FAILED)
                 return
             code = (query.get("code") or [""])[0]
             if not code:
@@ -79,7 +92,8 @@ class LoopbackReceiver:
     def __init__(self, state: str) -> None:
         """포트 0으로 바인딩해 OS가 빈 포트를 고르게 한다."""
         self._outcome = _Outcome()
-        self._server = HTTPServer(("127.0.0.1", 0), _handler_for(state, self._outcome))
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), _handler_for(state, self._outcome))
+        self._server.daemon_threads = True  # 멈춘 연결이 있어도 종료·마감을 막지 않는다
         self._server.timeout = 0.2
 
     @property
@@ -102,6 +116,8 @@ class LoopbackReceiver:
             self._server.handle_request()
             if self._outcome.cancelled:
                 raise LoginCancelled
+            if self._outcome.error is not None:
+                raise LoginFailed(f"Google 로그인 설정에 문제가 있습니다({self._outcome.error}).")
             if self._outcome.code is not None:
                 return self._outcome.code
         raise LoginFailed("로그인 시간이 지났습니다. 다시 시도해 주세요.")

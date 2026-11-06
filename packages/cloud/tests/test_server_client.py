@@ -132,3 +132,18 @@ def test_error_messages_never_contain_the_code(serve) -> None:
         exchange_code(server.url, **ARGS)
 
     assert "4/0Code" not in str(caught.value) and "v" * 43 not in str(caught.value)
+
+
+def test_an_error_response_cut_off_mid_body_still_becomes_login_failed() -> None:
+    import http.client
+    import urllib.error
+
+    class _Cut(urllib.error.HTTPError):
+        def read(self, *args):
+            raise http.client.IncompleteRead(b"")
+
+    def opener(request, timeout):
+        raise _Cut("https://s", 502, "bad gateway", {}, None)
+
+    with pytest.raises(LoginFailed, match="502"):
+        exchange_code("https://s", opener=opener, **ARGS)
