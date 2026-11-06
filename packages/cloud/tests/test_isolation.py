@@ -2,6 +2,11 @@
 
 서버와 통신하는 코드는 `cloud`에만 둔다. 로컬 기능이 `cloud`를 import하거나 의존성에 넣으면 로그인이
 기록의 전제가 되어 버리므로, 소스·의존성·실제 import를 모두 검사한다.
+
+예외는 hub 하나다: 화면의 로그인 버튼이 hub의 계정 API를 거치기 때문이다. 그래도 hub의 기록·집계·목표는 로그인과
+무관해야 하므로, hub가 `cloud`를 아는 곳을 어댑터 파일 하나(`hub/cloud_adapter.py`)로 제한하고, 그 import가
+함수 안에만 있게 하며(맨 위에서 import하면 `cloud`가 깨졌을 때 hub 전체가 뜨지 않는다), `cloud` 없이도 hub가
+뜨고 계정 기능만 "사용할 수 없음"이 되는지 실제로 확인한다.
 """
 
 import ast
@@ -15,8 +20,9 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-# 서버를 부르는 쪽만 cloud에 의존할 수 있다. 지금은 그런 소비자가 아직 없다 — 생기면 여기에 더한다.
-ALLOWED_CONSUMERS: frozenset[str] = frozenset()
+# 서버를 부르는 쪽만 cloud에 의존할 수 있다. 소비자를 더할 때는 위 설명처럼 "어디서, 어떻게" 아는지를 좁히는 테스트도 더한다.
+ALLOWED_CONSUMERS: frozenset[str] = frozenset({"hub"})
+HUB_CLOUD_ADAPTER = ROOT / "apps" / "hub" / "src" / "hub" / "cloud_adapter.py"
 # 로컬 기능의 대표 모듈 — 로그인(cloud) 없이 import되어야 한다.
 LOCAL_MODULES = [
     "recorder.__main__",
@@ -55,7 +61,8 @@ def _imported_top_level_names(source: str) -> set[str]:
 
 
 def test_the_member_list_covers_the_local_features() -> None:
-    assert {"recorder", "goals", "aggregation", "hub", "desktop"} <= {folder.name for folder in LOCAL_MEMBERS}
+    assert {"recorder", "goals", "aggregation", "desktop"} <= {folder.name for folder in LOCAL_MEMBERS}
+    assert "hub" not in {folder.name for folder in LOCAL_MEMBERS}  # hub는 아래 전용 테스트로 더 엄격하게 본다
 
 
 @pytest.mark.parametrize("folder", LOCAL_MEMBERS, ids=lambda folder: folder.name)
@@ -101,3 +108,64 @@ def test_local_modules_import_even_when_cloud_cannot_be_imported() -> None:
     assert result.returncode == 0, result.stderr
     imported = result.stdout.strip().split(",")
     assert {"recorder.storage", "aggregation.range", "goals"} <= set(imported)
+
+
+def _cloud_import_nodes(tree: ast.AST) -> list[ast.stmt]:
+    return [
+        node
+        for node in ast.walk(tree)
+        if (isinstance(node, ast.Import) and any(alias.name.split(".")[0] == "cloud" for alias in node.names))
+        or (isinstance(node, ast.ImportFrom) and node.level == 0 and (node.module or "").split(".")[0] == "cloud")
+    ]
+
+
+def test_hub_knows_cloud_only_in_the_adapter_file() -> None:
+    hub_sources = ROOT / "apps" / "hub" / "src"
+    offenders = [
+        str(path.relative_to(ROOT))
+        for path in hub_sources.rglob("*.py")
+        if path != HUB_CLOUD_ADAPTER and "cloud" in _imported_top_level_names(path.read_text(encoding="utf-8"))
+    ]
+
+    assert offenders == []
+    assert "cloud" in _imported_top_level_names(HUB_CLOUD_ADAPTER.read_text(encoding="utf-8"))  # 이 테스트가 헛돌지 않게
+
+
+def test_the_adapters_cloud_import_is_inside_a_function() -> None:
+    """맨 위(모듈 수준)에서 import하면 `cloud`가 깨진 환경에서 hub 전체가 뜨지 않는다."""
+    tree = ast.parse(HUB_CLOUD_ADAPTER.read_text(encoding="utf-8"))
+    module_level = [node for node in tree.body if node in _cloud_import_nodes(tree)]
+    in_function = [
+        node
+        for function in ast.walk(tree)
+        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for node in ast.walk(function)
+        if node in _cloud_import_nodes(tree)
+    ]
+
+    assert module_level == []
+    assert in_function != []
+
+
+def test_hub_starts_and_only_the_account_feature_is_unavailable_without_cloud() -> None:
+    program = textwrap.dedent(
+        """
+        import importlib.abc, sys
+
+        class BlockCloud(importlib.abc.MetaPathFinder):
+            def find_spec(self, name, path=None, target=None):
+                if name == "cloud" or name.startswith("cloud."):
+                    raise ImportError("cloud is blocked for this test")
+
+        sys.meta_path.insert(0, BlockCloud())
+        import hub.__main__ as hub_main
+        import goals  # 목표 기능은 그대로 쓸 수 있다
+
+        snapshot = hub_main._Handler.account.snapshot()
+        print(snapshot["available"], snapshot["signed_in"], snapshot["providers"])
+        """
+    )
+    result = subprocess.run([sys.executable, "-c", program], capture_output=True, text=True, timeout=60)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "False False []"

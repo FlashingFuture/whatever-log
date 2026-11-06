@@ -184,3 +184,12 @@ def test_a_half_open_connection_does_not_push_past_the_deadline() -> None:
             assert time.monotonic() - started < 2
         finally:
             stalled.close()
+
+
+def test_cancelling_from_the_app_ends_the_wait_at_once() -> None:
+    with LoopbackReceiver(STATE) as receiver:
+        started = time.monotonic()
+        with pytest.raises(LoginCancelled):
+            receiver.wait_for_code(timeout=30, cancelled=lambda: time.monotonic() - started > 0.3)
+
+        assert time.monotonic() - started < 3

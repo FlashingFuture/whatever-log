@@ -66,6 +66,13 @@ API로 서빙만 합니다 — `apps/desktop`이 창을 열 때 hub를 자식 �
 필요해져서 공통 모듈로 뺐습니다 — recorder/hub 둘 다 이 모듈을 씁니다
 (`docs/2026-10-hub-architecture.md` 참고).
 
+로그인(Google)과 서버 통신은 `packages/cloud`에만 있고, 서버는 `apps/server`(Cloudflare Workers + D1)입니다
+(`docs/auth-design.md`, `docs/sync-design.md`). **기록·집계·목표는 로그인 없이 항상 동작해야 합니다** —
+recorder·aggregation·goals·chromium·supervision·desktop은 `cloud`를 import하거나 의존하지 않습니다(테스트가 검사).
+예외는 hub 하나이고, hub가 `cloud`를 아는 곳은 `apps/hub/src/hub/cloud_adapter.py` 한 파일(import는 함수 안)뿐입니다.
+서버로 나가는 값은 `docs/data-handling.md`가 기준이고, 프로세스·사이트 이름과 기록은 서버로 보내지 않습니다.
+화면(`apps/ui`)의 상태는 `docs/ui-state.md`의 전략을 따릅니다(진실은 hub, 브라우저 저장소 미사용, 앱 전체 상태는 `state/`).
+
 프로세스 종료 코드와 HTTP API 에러 응답 형식처럼 앱들이 같은 뜻으로 공유해야 하는 범용
 계약은 `packages/common`에만 둡니다. 특정 앱에서만 쓰는 것은 그 앱 디렉터리에서
 관리합니다(`docs/2026-10-error-handling.md` 참고).

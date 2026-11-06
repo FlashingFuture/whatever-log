@@ -54,8 +54,8 @@
 - 보고서 요청에 담긴 집계 수치(`docs/data-handling.md`의 표)
 - 이메일은 처음으로 서버에 가는 **사용자 식별 값**이다. 구현할 때 `docs/data-handling.md`의 "전송되지 않는
   내용"과 표를 먼저 고친다.
-- **계정 삭제**: 앱에서 삭제를 요청하면 서버가 사용자와 그에 딸린 데이터를 모두 지운다(국내 개인정보
-  보호 요건). 서버를 만들 때 함께 설계한다.
+- **계정 삭제**: 서버가 사용자와 그에 딸린 데이터(목표·달성도·토큰)를 모두 지운다(국내 개인정보 보호 요건).
+  서버 API(`DELETE /account`)는 만들어져 있고(`docs/sync-design.md`), 화면의 버튼은 아직 없다.
 
 ## 로그인이 없어도 돌아가야 한다
 
@@ -64,7 +64,11 @@
 
 - **의존 방향**: 서버와 통신하는 코드는 `packages/cloud`에만 둔다. recorder, aggregation, goals, chromium,
   supervision과 `apps/recorder`는 `cloud`를 **import하지 않고 의존성에도 넣지 않는다**(테스트가 검사한다).
-  나중에 서버를 부르는 쪽(전송 에이전트, 화면의 보고서 기능)만 `cloud`에 의존한다.
+  서버를 부르는 쪽만 `cloud`에 의존한다. 지금은 **hub 하나**가 예외다(화면의 로그인 버튼이 hub의 계정 API를
+  거친다). 그래도 hub의 기록·집계·목표가 로그인에 묶이지 않도록, hub가 `cloud`를 아는 곳을 어댑터
+  `apps/hub/src/hub/cloud_adapter.py` 하나로 좁히고 그 import를 함수 안에만 둔다. `cloud`를 불러오지 못하면 계정
+  기능만 "사용할 수 없음"이 되고 hub의 나머지는 그대로 뜬다(테스트가 `cloud` import를 막은 프로세스에서 실제로
+  hub를 띄워 확인한다).
 - **로그인 요구는 호출 지점에서**: 서버를 부르는 함수에만 `@require_login`을 붙인다. 로그인이 안 되어 있거나
   토큰이 만료됐으면 네트워크에 가기 전에 `NotSignedIn`이 난다. 화면은 보고서 자리에만 "로그인하면 쓸 수
   있어요"를 보여 준다.
@@ -113,17 +117,39 @@
    보고(로컬 기능은 로그인에 의존하지 않는다), `save`는 실패를 숨기지 않는다.
 
 직접 해 보기: `uv run python -m cloud login | status | logout`. 로컬 서버(`wrangler dev`)로 시험하려면
-환경 변수 `WHATEVER_LOG_SERVER_URL=http://127.0.0.1:8790`을 준다. 로그아웃은 이 PC의 로그인 정보만 지운다
-(서버에 남은 토큰은 만료 때까지 유효하다 — 서버 로그아웃 API가 생기면 함께 폐기한다).
+환경 변수 `WHATEVER_LOG_SERVER_URL=http://127.0.0.1:8790`을 준다(다른 서버를 쓸 때는 Google 클라이언트 ID도
+`WHATEVER_LOG_GOOGLE_CLIENT_ID`로 맞춘다). 명령줄의 `logout`은 이 PC의 로그인 정보만 지운다. 서버의 토큰까지
+폐기하는 것은 화면(hub)의 로그아웃이다(아래).
+
+## 화면과 hub의 계정 API (apps/hub)
+
+화면(UI)의 상단 막대 로그인 버튼은 hub의 계정 API를 부른다. 로그인은 사용자가 브라우저에서 끝낼 때까지 최대 3분이
+걸려서, hub가 별도 스레드에서 진행하고 화면은 결과를 주기적으로 묻는다(상태 관리는 `docs/ui-state.md`).
+
+| 요청 | 설명 |
+| --- | --- |
+| `GET /api/account` | `{available, signed_in, email, login: {state, message}, providers: [{id, label}]}`. `login.state`는 `idle`·`pending`·`failed`. **토큰은 어디에도 없다** |
+| `POST /api/account/login` | `{"provider": "google"}`. 시스템 브라우저를 열고 202. 이미 진행 중이면 409, 모르는 방식이면 400, 계정 기능이 없으면 503 |
+| `DELETE /api/account/login` | 진행 중인 로그인을 취소한다(진행 중이 아니어도 200) |
+| `POST /api/account/logout` | 서버의 토큰 폐기를 시도하고(`POST /auth/logout`, 5초 제한, 실패해도 계속) 이 PC의 로그인 정보를 지운다. 응답에 `revoked_on_server`. 지우지 못하면 500 |
+| `POST /api/links/open` | `{"link": "privacy"}`. 고정된 목록의 바깥 링크만 시스템 브라우저로 연다(임의 주소는 400) |
+
+- 쓰기 요청은 기존 목표 API와 같은 방어를 적용한다: Host가 로컬이어야 하고, Origin이 허용된 UI와 **정확히** 같아야
+  하며, 본문은 `application/json`(로그아웃·취소는 본문 없음)이다. 그래서 이 PC에서 도는 다른 웹페이지가 로그인을
+  시작시키거나 로그아웃시킬 수 없다.
+- 로그인 방식 목록은 `cloud.PROVIDERS`에서 오고 화면은 그 목록으로 버튼을 그린다. 새 방식은 `Provider` 한 줄과 서버의
+  `/auth/<id>` 추가로 붙는다.
+- 네이티브 창(webview)에서는 `target=_blank` 링크가 기본 브라우저로 열린다고 보장되지 않아서, 화면이 링크 이름만
+  알리고 hub가 시스템 브라우저를 연다. 주소는 hub의 고정 목록(`hub/external_links.py`)에만 있다.
 
 ## 지금 있는 것 / 없는 것
 
 - 있는 것: `packages/cloud`(`NotSignedIn`·`Session`·`TokenStore`·`Account`·`@require_login`, 위의 로그인 흐름,
-  자격 증명 관리자 저장소, 명령줄)와 격리 테스트, `apps/server`의 `POST /auth/google`(배포됨).
+  로그인 방식 목록, 자격 증명 관리자 저장소, 명령줄)와 격리 테스트, `apps/server`의 `POST /auth/google`(배포됨).
   토큰을 받아 쓰는 서버 API(목표·달성도·기기·`POST /auth/logout`·`DELETE /account`)는 서버 코드와 테스트가
-  있다(`docs/sync-design.md`, 배포 전).
-- 없는 것: 데스크톱 쪽 동기화 클라이언트(명령줄 `logout`이 서버 토큰도 폐기하게 하는 것 포함), 요청 횟수 제한,
-  화면(UI)의 로그인 버튼과 hub의 계정 API, 전송 에이전트, 이메일 발송. 각각 만들 때 이 문서를 먼저 고친다.
+  있다(`docs/sync-design.md`, 배포 전). hub의 계정 API와 화면의 상단 막대(로그인·로그아웃 버튼, 자세히 알아보기).
+- 없는 것: 데스크톱 쪽 동기화 클라이언트(목표·달성도를 서버로 보내는 것), 화면의 계정 삭제 버튼과 기기 목록, 요청
+  횟수 제한, 전송 에이전트, 이메일 발송. 각각 만들 때 이 문서를 먼저 고친다.
 
 ## 확인해야 할 것
 

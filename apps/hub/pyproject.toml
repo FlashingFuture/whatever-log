@@ -6,6 +6,7 @@ requires-python = ">=3.14"
 dependencies = [
     "aggregation",
     "chromium",
+    "cloud",
     "goals",
     "recorder",
     "common",
@@ -15,6 +16,7 @@ dependencies = [
 [tool.uv.sources]
 aggregation = { workspace = true }
 chromium = { workspace = true }
+cloud = { workspace = true }
 goals = { workspace = true }
 recorder = { workspace = true }
 common = { workspace = true }

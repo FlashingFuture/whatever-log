@@ -131,3 +131,31 @@ export interface GoalProgressResponse {
     top: TopTarget | null;
   };
 }
+
+/** 로그인 방식 하나(화면의 로그인 버튼 하나). id는 요청에 쓰고 label은 버튼에 보인다. */
+export interface LoginProvider {
+  id: string;
+  label: string;
+}
+
+/**
+ * hub가 알려 주는 로그인 상태(`GET /api/account`). 로그인 토큰은 여기에 없다 — 토큰은 이 PC의 자격 증명
+ * 관리자에만 있고 화면은 보지 못한다. login.state: idle(진행 안 함) / pending(브라우저에서 로그인 중) /
+ * failed(직전 시도가 실패, message에 사유).
+ */
+export interface AccountSnapshot {
+  /** false면 이 설치에서는 로그인 기능을 쓸 수 없다(나머지 기능은 그대로 동작한다). */
+  available: boolean;
+  signed_in: boolean;
+  email: string | null;
+  login: { state: "idle" | "pending" | "failed"; message: string | null };
+  providers: LoginProvider[];
+}
+
+/** 로그아웃 응답: 상태에 더해, 서버의 토큰까지 폐기됐는지. */
+export interface LogoutResponse extends AccountSnapshot {
+  revoked_on_server: boolean;
+}
+
+/** 화면이 시스템 브라우저로 열어 달라고 요청할 수 있는 링크의 이름(hub가 고정 목록으로 주소를 정한다). */
+export type ExternalLink = "privacy";

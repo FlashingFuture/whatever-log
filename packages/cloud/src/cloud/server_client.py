@@ -12,6 +12,8 @@ from cloud.errors import LoginFailed
 from cloud.session import Session
 
 _TIMEOUT_SECONDS = 20
+# urllib 기본 User-Agent(Python-urllib)는 Cloudflare가 봇으로 보고 서버에 닿기 전에 403(1010)으로 막는다.
+_USER_AGENT = "whatever-log-desktop"
 _MAX_RESPONSE_BYTES = 16 * 1024
 
 Opener = Callable[..., Any]
@@ -40,6 +42,28 @@ def _parse_session(body: bytes) -> Session:
     return Session(token=token, expires_at=expires_at, email=email if isinstance(email, str) else None)
 
 
+def revoke_session(
+    server_url: str,
+    token: str,
+    *,
+    opener: Opener = urllib.request.urlopen,
+    timeout: float = 5,
+) -> bool:
+    """서버에서 이 토큰을 폐기한다(`POST /auth/logout`). 폐기됐으면 True. 서버에 닿지 못하거나 거부해도 예외 없이
+    False를 돌려준다 — 로그아웃은 서버가 어떻든 이 PC에서는 끝나야 하기 때문이다(서버의 토큰은 만료까지 남는다)."""
+    request = urllib.request.Request(
+        f"{server_url}/auth/logout",
+        data=b"",
+        headers={"Authorization": f"Bearer {token}", "User-Agent": _USER_AGENT},
+        method="POST",
+    )
+    try:
+        with opener(request, timeout=timeout) as response:
+            return 200 <= response.status < 300
+    except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError):
+        return False
+
+
 def exchange_code(
     server_url: str,
     *,
@@ -56,8 +80,7 @@ def exchange_code(
     request = urllib.request.Request(
         f"{server_url}/auth/google",
         data=json.dumps({"code": code, "code_verifier": code_verifier, "redirect_uri": redirect_uri}).encode("utf-8"),
-        # urllib 기본 User-Agent(Python-urllib)는 Cloudflare가 봇으로 보고 서버에 닿기 전에 403(1010)으로 막는다.
-        headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "whatever-log-desktop"},
+        headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": _USER_AGENT},
         method="POST",
     )
     try:

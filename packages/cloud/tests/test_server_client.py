@@ -21,13 +21,14 @@ class _FakeServer:
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:
-                length = int(self.headers["Content-Length"])
+                raw = self.rfile.read(int(self.headers["Content-Length"]))
                 outer.requests.append(
                     {
                         "path": self.path,
                         "type": self.headers["Content-Type"],
                         "agent": self.headers["User-Agent"],
-                        "body": json.loads(self.rfile.read(length)),
+                        "auth": self.headers["Authorization"],
+                        "body": json.loads(raw) if raw else None,
                     }
                 )
                 self.send_response(status)
@@ -147,3 +148,21 @@ def test_an_error_response_cut_off_mid_body_still_becomes_login_failed() -> None
 
     with pytest.raises(LoginFailed, match="502"):
         exchange_code("https://s", opener=opener, **ARGS)
+
+
+def test_revoke_posts_the_bearer_token_and_reports_success(serve) -> None:
+    from cloud.server_client import revoke_session
+
+    server = serve(204, b"")
+
+    assert revoke_session(server.url, "tok-123") is True
+    (request,) = server.requests
+    assert request["path"] == "/auth/logout" and request["auth"] == "Bearer tok-123"
+    assert not request["agent"].startswith("Python-urllib")
+
+
+def test_revoke_never_raises_and_reports_failure(serve) -> None:
+    from cloud.server_client import revoke_session
+
+    assert revoke_session(serve(401, {"error": {"message": "x"}}).url, "tok") is False
+    assert revoke_session("http://127.0.0.1:9", "tok") is False  # 연결할 수 없는 서버

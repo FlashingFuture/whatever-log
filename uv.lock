@@ -282,6 +282,7 @@ source = { editable = "apps/hub" }
 dependencies = [
     { name = "aggregation" },
     { name = "chromium" },
+    { name = "cloud" },
     { name = "common" },
     { name = "goals" },
     { name = "recorder" },
@@ -297,6 +298,7 @@ dev = [
 requires-dist = [
     { name = "aggregation", editable = "packages/aggregation" },
     { name = "chromium", editable = "packages/chromium" },
+    { name = "cloud", editable = "packages/cloud" },
     { name = "common", editable = "packages/common" },
     { name = "goals", editable = "packages/goals" },
     { name = "recorder", editable = "apps/recorder" },
