@@ -23,7 +23,12 @@ class _FakeServer:
             def do_POST(self) -> None:
                 length = int(self.headers["Content-Length"])
                 outer.requests.append(
-                    {"path": self.path, "type": self.headers["Content-Type"], "body": json.loads(self.rfile.read(length))}
+                    {
+                        "path": self.path,
+                        "type": self.headers["Content-Type"],
+                        "agent": self.headers["User-Agent"],
+                        "body": json.loads(self.rfile.read(length)),
+                    }
                 )
                 self.send_response(status)
                 self.send_header("Content-Length", str(len(body)))
@@ -65,6 +70,15 @@ def test_it_posts_code_verifier_and_redirect_uri_and_returns_the_session(serve) 
     (request,) = server.requests
     assert request["path"] == "/auth/google" and request["type"] == "application/json"
     assert request["body"] == {"code": "4/0Code", "code_verifier": "v" * 43, "redirect_uri": ARGS["redirect_uri"]}
+
+
+def test_it_does_not_use_the_default_python_user_agent(serve) -> None:
+    # Cloudflare는 Python-urllib을 봇으로 보고 서버에 닿기 전에 403(error 1010)으로 막는다.
+    server = serve(200, {"token": "t", "expires_at": "2026-12-06T03:00:00Z"})
+
+    exchange_code(server.url, **ARGS)
+
+    assert not server.requests[0]["agent"].startswith("Python-urllib")
 
 
 def test_the_server_message_is_shown_for_known_errors(serve) -> None:

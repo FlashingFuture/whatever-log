@@ -55,7 +55,8 @@ def exchange_code(
     request = urllib.request.Request(
         f"{server_url}/auth/google",
         data=json.dumps({"code": code, "code_verifier": code_verifier, "redirect_uri": redirect_uri}).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        # urllib 기본 User-Agent(Python-urllib)는 Cloudflare가 봇으로 보고 서버에 닿기 전에 403(1010)으로 막는다.
+        headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "whatever-log-desktop"},
         method="POST",
     )
     try:
