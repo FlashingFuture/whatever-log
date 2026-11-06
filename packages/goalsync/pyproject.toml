@@ -1,0 +1,30 @@
+[project]
+name = "goalsync"
+version = "0.1.0"
+description = "로컬 목표(goals.db)와 서버의 목표·달성도를 맞춘다: 로그인 직후 올릴 목표 고르기, 주기 동기화, 날짜별 달성 분 계산. 서버를 부르므로 cloud에 의존하는 쪽(동기화 에이전트, hub의 어댑터)만 쓴다"
+requires-python = ">=3.14"
+dependencies = [
+    "aggregation",
+    "cloud",
+    "goals",
+]
+
+[tool.uv.sources]
+aggregation = { workspace = true }
+cloud = { workspace = true }
+goals = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/goalsync"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

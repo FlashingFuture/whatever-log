@@ -48,6 +48,8 @@ from hub.account_service import (
     AccountUnavailable,
     LoginInProgress,
     LogoutProblem,
+    SyncBusy,
+    SyncProblem,
     UnknownProvider,
 )
 from hub.cloud_adapter import create_cloud_port
@@ -202,6 +204,9 @@ def _usage_edges(query: dict[str, list[str]]) -> list[datetime]:
         raise ValueError("edges가 표현할 수 있는 날짜 범위를 벗어났습니다.") from exc
 
 
+# 동기화 확인 창에서 한 번에 보낼 수 있는 선택 개수와 항목 이름의 길이(목표는 최대 20개씩 두 쪽이다).
+MAX_SYNC_CHOICES = 100
+MAX_SYNC_KEY_LENGTH = 100
 _PROCESS_PATH_PREFIX = "/api/processes/"
 _GOAL_PATH = re.compile(r"/api/goals/(\d{1,9})")
 _PROCESS_USAGE_SUFFIX = "/usage"
@@ -316,6 +321,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._logout()
         elif path == "/api/links/open":
             self._open_link()
+        elif path == "/api/sync/apply":
+            self._apply_sync()
         else:
             self._send_json(404, api_error.error_body(api_error.NOT_FOUND, "not found"))
 
@@ -358,6 +365,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._get_goals()
         elif parsed.path == "/api/account":
             self._send_account(200)
+        elif parsed.path == "/api/sync/plan":
+            self._get_sync_plan()
         elif parsed.path == "/api/goals/progress":
             self._get_goal_progress(parsed.query)
         elif parsed.path == "/api/processes":
@@ -527,6 +536,60 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(500, api_error.error_body(api_error.INTERNAL, error.message))
             return
         self._send_account(200, {"revoked_on_server": revoked})
+
+    def _send_sync_problem(self, problem: SyncProblem) -> None:
+        """동기화 요청의 실패: 로그인이 필요하면 409, 서버 문제면 503(사유는 사용자용 문장)."""
+        if problem.signed_out:
+            self._send_json(409, api_error.error_body(api_error.INVALID_REQUEST, problem.message))
+        else:
+            self._send_json(503, api_error.error_body(api_error.UNAVAILABLE, problem.message))
+
+    def _get_sync_plan(self) -> None:
+        """GET /api/sync/plan — 로그인 직후 "무엇을 서버에 올릴까요?" 확인 창의 내용(서버 목록과 이 PC 목록을 견준 것)."""
+        try:
+            plan = self.account.sync_plan(self.goals_db_path)
+        except AccountUnavailable:
+            self._send_account_unavailable()
+            return
+        except SyncProblem as problem:
+            self._send_sync_problem(problem)
+            return
+        except (sqlite3.Error, SchemaVersionError) as error:
+            self._send_unavailable("목표 DB", error)
+            return
+        self._send_json(200, plan)
+
+    def _apply_sync(self) -> None:
+        """POST /api/sync/apply {"accepted": [key…]} — 체크한 항목만 서버에 올리고·합치고·가져온다. 체크하지 않은 이 PC 목표는 올리지 않는다."""
+        body = self._check_account_write(json_body=True)
+        if body is None:
+            return
+        accepted = body.get("accepted")
+        if (
+            set(body) != {"accepted"}
+            or not isinstance(accepted, list)
+            or len(accepted) > MAX_SYNC_CHOICES
+            or not all(isinstance(key, str) and 0 < len(key) <= MAX_SYNC_KEY_LENGTH for key in accepted)
+        ):
+            self._send_json(
+                400, api_error.error_body(api_error.INVALID_REQUEST, "accepted 칸에 항목 이름 목록만 보내야 합니다.")
+            )
+            return
+        try:
+            result = self.account.sync_apply(self.goals_db_path, accepted)
+        except AccountUnavailable:
+            self._send_account_unavailable()
+            return
+        except SyncBusy:
+            self._send_json(409, api_error.error_body(api_error.INVALID_REQUEST, "이미 동기화를 처리하는 중입니다."))
+            return
+        except SyncProblem as problem:
+            self._send_sync_problem(problem)
+            return
+        except (sqlite3.Error, SchemaVersionError) as error:
+            self._send_unavailable("목표 DB", error)
+            return
+        self._send_json(200, result)
 
     def _send_account_unavailable(self) -> None:
         """계정 기능을 쓸 수 없는 환경(cloud 없음)의 요청에 503."""

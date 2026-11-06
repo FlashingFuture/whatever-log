@@ -8,6 +8,18 @@ from keyring.errors import KeyringError as StorageError
 
 from cloud.account import Account
 from cloud.config import CloudConfig, load_config
+from cloud.api import (
+    DayProgress,
+    GoalConflict,
+    NotAuthorized,
+    ProgressEntry,
+    ProgressResult,
+    RemoteGoal,
+    ServerApi,
+    ServerError,
+    ServerUnreachable,
+)
+from cloud.env_store import EnvTokenStore
 from cloud.errors import LoginCancelled, LoginFailed, NotSignedIn
 from cloud.google_login import sign_in_with_google
 from cloud.guard import require_login
@@ -20,12 +32,22 @@ __all__ = [
     "PROVIDERS",
     "Account",
     "CloudConfig",
+    "DayProgress",
+    "EnvTokenStore",
+    "GoalConflict",
     "InMemoryTokenStore",
     "KeyringTokenStore",
     "LoginCancelled",
     "LoginFailed",
+    "NotAuthorized",
     "NotSignedIn",
+    "ProgressEntry",
+    "ProgressResult",
     "Provider",
+    "RemoteGoal",
+    "ServerApi",
+    "ServerError",
+    "ServerUnreachable",
     "Session",
     "StorageError",
     "TokenStore",

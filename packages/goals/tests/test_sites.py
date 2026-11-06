@@ -220,7 +220,7 @@ def test_a_version_1_database_is_migrated_and_keeps_its_links(tmp_path) -> None:
         updated = store.update(goal.id, **_fields(name="A", processes=["Code.exe"], sites=[_site()]))
         assert updated.sites == (SiteTarget("chrome.exe", "youtube.com"),)
     (version,) = sqlite3.connect(path).execute("PRAGMA user_version").fetchone()
-    assert version == SCHEMA_VERSION == 2
+    assert version == SCHEMA_VERSION == 3
 
 
 # --- 수행 시간 ---

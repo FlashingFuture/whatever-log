@@ -13,8 +13,9 @@
 
 import logging
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 logger = logging.getLogger("hub.account")
@@ -51,6 +52,21 @@ class AccountUnavailable(Exception):
     """계정 기능을 쓸 수 없다(`cloud`를 불러오지 못한 환경)."""
 
 
+class SyncProblem(Exception):
+    """동기화 확인 창의 요청을 처리하지 못했다. message는 사용자에게 그대로 보여 줄 수 있는 문장이고, signed_out이면 로그인이
+    필요한 상황(로그인 전·만료)이다."""
+
+    def __init__(self, message: str, *, signed_out: bool = False) -> None:
+        """사용자용 메시지와 로그인 필요 여부를 담는다."""
+        super().__init__(message)
+        self.message = message
+        self.signed_out = signed_out
+
+
+class SyncBusy(Exception):
+    """이미 다른 동기화 적용이 진행 중이다."""
+
+
 @dataclass(frozen=True)
 class ProviderInfo:
     """화면의 로그인 버튼 하나: 요청에 쓰는 id와 버튼에 보이는 이름."""
@@ -85,6 +101,14 @@ class CloudPort(Protocol):
         """이 PC의 로그인 정보를 지우고, 서버의 토큰도 폐기를 시도한다(서버 폐기 성공 여부를 돌려준다). 지우지 못하면 LogoutProblem."""
         ...
 
+    def sync_plan(self, goals_db: Path) -> dict[str, Any]:
+        """로그인 직후 확인 창의 계획(서버 목표와 이 PC 목표를 견준 것). 서버·로그인 문제는 SyncProblem."""
+        ...
+
+    def sync_apply(self, goals_db: Path, accepted: Collection[str]) -> dict[str, Any]:
+        """사용자가 체크한 항목(key)을 적용한다. 서버·로그인 문제는 SyncProblem."""
+        ...
+
 
 class AccountService:
     """로그인 진행 상태(없음/진행 중/실패)를 들고, 요청에 맞춰 CloudPort를 부른다.
@@ -100,6 +124,7 @@ class AccountService:
         self._unavailable = False
         self._lock = threading.Lock()
         self._cancel = threading.Event()
+        self._sync_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._state = "idle"  # idle | pending | failed
         self._message: str | None = None
@@ -187,6 +212,20 @@ class AccountService:
         with self._lock:
             self._state, self._message = "idle", None
         return revoked
+
+    def sync_plan(self, goals_db: Path) -> dict[str, Any]:
+        """동기화 확인 창에 보여 줄 계획. 계정 기능이 없으면 AccountUnavailable, 서버·로그인 문제는 SyncProblem."""
+        return self._get_port().sync_plan(goals_db)
+
+    def sync_apply(self, goals_db: Path, accepted: Collection[str]) -> dict[str, Any]:
+        """체크한 항목을 적용한다. 같은 시각에 두 번 적용되지 않게 막는다(진행 중이면 SyncBusy)."""
+        port = self._get_port()
+        if not self._sync_lock.acquire(blocking=False):
+            raise SyncBusy
+        try:
+            return port.sync_apply(goals_db, accepted)
+        finally:
+            self._sync_lock.release()
 
     def wait_for_login(self, timeout: float) -> None:
         """진행 중인 로그인 스레드가 끝나기를 기다린다(테스트용)."""

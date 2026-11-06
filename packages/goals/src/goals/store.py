@@ -18,10 +18,11 @@ from pathlib import Path
 from typing import Any
 
 from goals.errors import FieldError, GoalNotFoundError, GoalValidationError, SchemaVersionError
-from goals.models import Goal, GoalSnapshot, SiteTarget
+from goals.models import SYNC_STATES, Goal, GoalSnapshot, SiteTarget, SyncLink
 from goals.validation import (
     MAX_GOALS,
     GoalSpec,
+    name_key,
     process_key,
     site_key,
     usable_keys,
@@ -30,7 +31,14 @@ from goals.validation import (
 )
 
 # 2: 연결 대상 종류에 `site`(브라우저의 사이트)를 더했다. 1에서 올라올 때 대상 테이블을 새 CHECK로 다시 만든다.
-SCHEMA_VERSION = 2
+# 3: 서버와의 연결 칸(remote_id 등)과 동기화 보조 테이블을 더했다(docs/sync-design.md). 기존 목표는 모두 `ask`다.
+SCHEMA_VERSION = 3
+
+# sync_meta의 키: 동기화를 켰는지, 연결한 계정의 이메일(계정이 바뀌면 연결을 끊는 데 쓴다).
+META_SYNC_ENABLED = "sync_enabled"
+META_ACCOUNT_EMAIL = "account_email"
+
+_SYNC_STATES_SQL = ", ".join(f"'{state}'" for state in SYNC_STATES)
 
 # 연결 대상의 종류: 프로세스(`이름.exe`)와 사이트(`브라우저/도메인`). 종류 칸을 두되, CHECK로 허용 목록을 닫아
 # 두어 모르는 종류가 들어오지 못한다. 사이트의 이름 칸은 `브라우저/도메인`으로 합쳐 저장한다(둘 다 `/`를 가질
@@ -70,7 +78,24 @@ CREATE TABLE IF NOT EXISTS goals (
         CHECK (typeof(daily_target_minutes) = 'integer' AND daily_target_minutes BETWEEN 1 AND 1440),
     weekdays INTEGER NOT NULL CHECK (typeof(weekdays) = 'integer' AND weekdays BETWEEN 1 AND 127),
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    -- 서버와의 연결(docs/sync-design.md). 프로세스·사이트 연결은 서버와 무관하다.
+    remote_id TEXT,
+    remote_revision INTEGER,
+    sync_state TEXT NOT NULL DEFAULT 'ask' CHECK (sync_state IN ({_SYNC_STATES_SQL})),
+    dirty INTEGER NOT NULL DEFAULT 0 CHECK (dirty IN (0, 1))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_goals_remote_id ON goals(remote_id) WHERE remote_id IS NOT NULL;
+
+-- 로컬에서 지운 연결 목표의 서버 ID. 서버에 삭제를 알리기 전까지 남긴다.
+CREATE TABLE IF NOT EXISTS sync_deletions (
+    remote_id TEXT PRIMARY KEY
+);
+
+CREATE TABLE IF NOT EXISTS sync_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 
 {_GOAL_TARGETS_DDL};
@@ -159,6 +184,8 @@ class GoalStore:
             )
         if version == 1:
             self._migrate_1_to_2()
+        if version in (1, 2):
+            self._migrate_2_to_3()
         self._conn.executescript(_SCHEMA)
         self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -172,6 +199,20 @@ class GoalStore:
             for table in ("goal_targets", "goal_snapshot_targets"):
                 self._conn.execute(f"INSERT INTO {table} SELECT * FROM {table}_v1")
                 self._conn.execute(f"DROP TABLE {table}_v1")
+
+    def _migrate_2_to_3(self) -> None:
+        """goals에 서버 연결 칸을 더한다(기존 목표는 `ask`, 연결 없음). 한 트랜잭션이다."""
+        columns = {
+            "remote_id": "TEXT",
+            "remote_revision": "INTEGER",
+            "sync_state": f"TEXT NOT NULL DEFAULT 'ask' CHECK (sync_state IN ({_SYNC_STATES_SQL}))",
+            "dirty": "INTEGER NOT NULL DEFAULT 0 CHECK (dirty IN (0, 1))",
+        }
+        with self._write():
+            existing = {row[1] for row in self._conn.execute("PRAGMA table_info(goals)")}
+            for column, definition in columns.items():
+                if column not in existing:  # 이미 있으면(다시 실행된 마이그레이션) 건너뛴다
+                    self._conn.execute(f"ALTER TABLE goals ADD COLUMN {column} {definition}")
 
     @contextmanager
     def _write(self) -> Iterator[None]:
@@ -259,10 +300,12 @@ class GoalStore:
             if errors or spec is None:
                 raise GoalValidationError(errors)
             now = self._timestamp()
+            # 동기화를 켠 뒤 만든 목표는 처음부터 서버와 맞출 목표다(켤 때 한 번 확인받았다).
+            state = "sync" if self._get_meta(META_SYNC_ENABLED) == "1" else "ask"
             goal_id = self._conn.execute(
-                "INSERT INTO goals (name, name_key, daily_target_minutes, weekdays, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (spec.name, spec.name_key, spec.daily_target_minutes, _weekday_mask(spec.weekdays), now, now),
+                "INSERT INTO goals (name, name_key, daily_target_minutes, weekdays, created_at, updated_at, sync_state) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (spec.name, spec.name_key, spec.daily_target_minutes, _weekday_mask(spec.weekdays), now, now, state),
             ).lastrowid
             self._insert_targets(goal_id, spec)
             created = self.get(goal_id)  # 같은 트랜잭션 안에서 읽는다 — 방금 저장한 상태 그대로
@@ -295,14 +338,22 @@ class GoalStore:
             errors += self._conflicts(name, processes, sites, spec, errors, exclude_id=goal_id)
             if errors or spec is None:
                 raise GoalValidationError(errors)
+            # 연결된 목표는 서버가 아는 칸이 바뀐 때만 dirty로 표시한다(프로세스 연결만 바꾼 수정은 서버와 무관하다).
+            mask = _weekday_mask(spec.weekdays)
             self._conn.execute(
-                "UPDATE goals SET name = ?, name_key = ?, daily_target_minutes = ?, weekdays = ?, updated_at = ? "
+                "UPDATE goals SET "
+                "dirty = CASE WHEN remote_id IS NOT NULL AND "
+                "(name != ? OR daily_target_minutes != ? OR weekdays != ?) THEN 1 ELSE dirty END, "
+                "name = ?, name_key = ?, daily_target_minutes = ?, weekdays = ?, updated_at = ? "
                 "WHERE id = ?",
                 (
                     spec.name,
+                    spec.daily_target_minutes,
+                    mask,
+                    spec.name,
                     spec.name_key,
                     spec.daily_target_minutes,
-                    _weekday_mask(spec.weekdays),
+                    mask,
                     self._timestamp(),
                     goal_id,
                 ),
@@ -316,9 +367,156 @@ class GoalStore:
     def delete(self, goal_id: int) -> None:
         """목표를 지운다(연결 정보도 같이). 지난 날의 스냅샷은 남는다. 없는 id면 GoalNotFoundError."""
         with self._write():
+            # 서버에 연결된 목표면 서버 삭제를 나중에 알릴 수 있게 ID를 남긴다(오프라인에서 지워도 사라지지 않는다).
+            self._conn.execute(
+                "INSERT OR IGNORE INTO sync_deletions (remote_id) SELECT remote_id FROM goals "
+                "WHERE id = ? AND remote_id IS NOT NULL",
+                (goal_id,),
+            )
             deleted = self._conn.execute("DELETE FROM goals WHERE id = ?", (goal_id,)).rowcount
             if deleted == 0:
                 raise GoalNotFoundError(goal_id)
+
+    # --- 서버와의 연결(docs/sync-design.md) ---
+    # 아래 메서드는 동기화(goalsync)와 hub의 확인 창이 쓴다. 서버로 가는 칸(이름·목표 시간·요일)만 다루고,
+    # 프로세스·사이트 연결은 건드리지 않는다.
+
+    def _get_meta(self, key: str) -> str | None:
+        row = self._conn.execute("SELECT value FROM sync_meta WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def get_meta(self, key: str) -> str | None:
+        """동기화 보조 값(sync_meta). 없으면 None."""
+        return self._get_meta(key)
+
+    def set_meta(self, key: str, value: str) -> None:
+        """동기화 보조 값을 저장한다(이미 있으면 바꾼다)."""
+        with self._write():
+            self._conn.execute(
+                "INSERT INTO sync_meta (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+
+    def sync_links(self) -> list[SyncLink]:
+        """목표마다의 서버 연결 상태(목표 id 순)."""
+        rows = self._conn.execute(
+            "SELECT id, sync_state, remote_id, remote_revision, dirty FROM goals ORDER BY id"
+        ).fetchall()
+        return [SyncLink(goal_id, state, remote_id, revision, bool(dirty)) for goal_id, state, remote_id, revision, dirty in rows]
+
+    def _require_goal(self, goal_id: int) -> None:
+        if self._conn.execute("SELECT 1 FROM goals WHERE id = ?", (goal_id,)).fetchone() is None:
+            raise GoalNotFoundError(goal_id)
+
+    def set_sync_state(self, goal_id: int, state: str) -> None:
+        """아직 서버와 연결되지 않은 목표의 동기화 선택(`sync`: 올리기, `local_only`: 올리지 않기, `ask`: 다시 묻기).
+
+        이미 연결된 목표의 상태는 바꾸지 않는다(연결을 끊으려면 unlink). 없는 id면 GoalNotFoundError.
+        """
+        if state not in SYNC_STATES:
+            raise ValueError(f"알 수 없는 동기화 상태입니다: {state!r}")
+        with self._write():
+            self._require_goal(goal_id)
+            self._conn.execute(
+                "UPDATE goals SET sync_state = ? WHERE id = ? AND remote_id IS NULL", (state, goal_id)
+            )
+
+    def link_remote(self, goal_id: int, remote_id: str, revision: int) -> None:
+        """목표를 서버의 목표와 연결하고 동기화 상태로 둔다(밀린 수정 표시는 지운다)."""
+        with self._write():
+            self._require_goal(goal_id)
+            self._conn.execute(
+                "UPDATE goals SET remote_id = ?, remote_revision = ?, sync_state = 'sync', dirty = 0 WHERE id = ?",
+                (remote_id, revision, goal_id),
+            )
+
+    def mark_pushed(self, goal_id: int, revision: int) -> None:
+        """서버에 수정을 보냈다: 서버가 돌려준 revision을 적고 밀린 수정 표시를 지운다."""
+        with self._write():
+            self._conn.execute(
+                "UPDATE goals SET remote_revision = ?, dirty = 0 WHERE id = ?", (revision, goal_id)
+            )
+
+    def unlink(self, goal_id: int) -> None:
+        """서버와의 연결을 끊고 이 PC에만 두는 목표로 만든다(프로세스 연결은 그대로)."""
+        with self._write():
+            self._conn.execute(
+                "UPDATE goals SET remote_id = NULL, remote_revision = NULL, sync_state = 'local_only', dirty = 0 "
+                "WHERE id = ?",
+                (goal_id,),
+            )
+
+    def apply_remote(
+        self,
+        goal_id: int,
+        *,
+        name: str,
+        daily_target_minutes: int,
+        weekdays: Collection[int],
+        revision: int,
+    ) -> None:
+        """서버의 값(이름·목표 시간·요일)으로 이 목표를 맞춘다. 프로세스·사이트 연결은 그대로다.
+
+        같은 이름의 다른 목표가 이 PC에 이미 있으면 GoalValidationError(이름은 목표마다 하나뿐이다).
+        """
+        mask = _weekday_mask(frozenset(weekdays))
+        with self._write():
+            self._require_goal(goal_id)
+            try:
+                self._conn.execute(
+                    "UPDATE goals SET name = ?, name_key = ?, daily_target_minutes = ?, weekdays = ?, "
+                    "remote_revision = ?, dirty = 0, updated_at = ? WHERE id = ?",
+                    (name, name_key(name), daily_target_minutes, mask, revision, self._timestamp(), goal_id),
+                )
+            except sqlite3.IntegrityError:
+                raise GoalValidationError([FieldError("name", "duplicate", "같은 이름의 목표가 이미 있습니다.")]) from None
+
+    def create_from_remote(
+        self,
+        *,
+        remote_id: str,
+        name: str,
+        daily_target_minutes: int,
+        weekdays: Collection[int],
+        revision: int,
+    ) -> Goal:
+        """서버에만 있던 목표를 이 PC에 만든다(프로세스·사이트 연결은 비어 있다). 이름 충돌·개수 상한은 GoalValidationError."""
+        with self._write():
+            (count,) = self._conn.execute("SELECT COUNT(*) FROM goals").fetchone()
+            if count >= MAX_GOALS:
+                raise GoalValidationError([FieldError("goals", "too_many", f"목표는 {MAX_GOALS}개까지 만들 수 있습니다.")])
+            now = self._timestamp()
+            try:
+                goal_id = self._conn.execute(
+                    "INSERT INTO goals (name, name_key, daily_target_minutes, weekdays, created_at, updated_at, "
+                    "remote_id, remote_revision, sync_state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'sync')",
+                    (name, name_key(name), daily_target_minutes, _weekday_mask(frozenset(weekdays)), now, now, remote_id, revision),
+                ).lastrowid
+            except sqlite3.IntegrityError:
+                raise GoalValidationError([FieldError("name", "duplicate", "같은 이름의 목표가 이미 있습니다.")]) from None
+            created = self.get(goal_id)
+        assert created is not None
+        return created
+
+    def pending_deletions(self) -> list[str]:
+        """서버에 아직 알리지 못한 삭제(서버 목표 ID)."""
+        return [row[0] for row in self._conn.execute("SELECT remote_id FROM sync_deletions ORDER BY remote_id")]
+
+    def clear_deletion(self, remote_id: str) -> None:
+        """서버에 삭제를 알렸다(또는 서버에 이미 없다)."""
+        with self._write():
+            self._conn.execute("DELETE FROM sync_deletions WHERE remote_id = ?", (remote_id,))
+
+    def reset_sync(self) -> None:
+        """서버와의 연결을 모두 끊는다(계정이 바뀌었을 때): 목표는 모두 `ask`·연결 없음이 되고, 보내지 못한 삭제와 동기화
+        설정도 지운다. 이전 계정의 목표가 다른 계정에 올라가지 않게 한다. 프로세스·사이트 연결은 그대로다."""
+        with self._write():
+            self._conn.execute(
+                "UPDATE goals SET remote_id = NULL, remote_revision = NULL, sync_state = 'ask', dirty = 0"
+            )
+            self._conn.execute("DELETE FROM sync_deletions")
+            self._conn.execute("DELETE FROM sync_meta")
 
     @staticmethod
     def _validate(
