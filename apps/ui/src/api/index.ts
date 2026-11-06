@@ -22,6 +22,7 @@ export {
   updateGoal,
 } from "./goals";
 export { iconUrl, siteIconUrl } from "./icons";
+export { applySync, fetchSyncPlan } from "./sync";
 export type {
   AccountSnapshot,
   BucketUsage,
@@ -42,6 +43,9 @@ export type {
   SiteRangeUsage,
   SiteTime,
   SiteUsage,
+  SyncItem,
+  SyncPlan,
+  SyncResult,
   TopTarget,
 } from "./types";
 export { fetchProcessUsage, fetchSiteUsage, fetchUsage } from "./usage";

@@ -76,7 +76,7 @@ PC에서 실행 중인 프로세스와 활성 창을 주기적으로 기록하�
 - **패키지 매니저**: pnpm — `corepack enable` 후 `pnpm install`
 - **Lint/Format**: `pnpm lint`, `pnpm format` (Biome)
 - **버전 관리(로컬)**: [mise](https://mise.jdx.dev/)로 Node 버전만 고정해뒀습니다 (`.mise.toml`). `mise install`로 맞는 버전을 받고, `mise activate`를 쉘 프로필에 추가하면 디렉터리 진입 시 자동 전환됩니다.
-- **Docker**: `docker-compose.yml` + `Dockerfile`로 개발 환경을 컨테이너화할 수 있습니다. 앱 빌드용이 아니라 여러 디바이스에서 동일한 Node 버전을 보장하는 용도입니다. `docker compose run --rm dev bash`로 들어가서 작업하면 됩니다. (빌드/실행 검증 완료)
+- **Docker**: `docker-compose.yml` + `Dockerfile`로 개발 환경을 컨테이너화할 수 있습니다. 앱 빌드용이 아니라 여러 디바이스에서 동일한 Node 버전을 보장하는 용도입니다. `docker compose run --rm dev bash`로 들어가서 작업하면 됩니다. (빌드/실행 검증 완료) `docker compose up server`는 Cloudflare 쪽(Worker + 로컬 D1)을 `127.0.0.1:8790`에 띄워 동기화를 시험하는 용도입니다(`docs/sync-design.md`의 "Docker").
 
 ## 라이선스
 

@@ -1,4 +1,5 @@
 import { cancelLogin, fetchAccount, logout, startLogin } from "./api";
+import { createSyncDialog } from "./components/sync/SyncDialog";
 import { mountLayout } from "./layouts/Layouts";
 import { createNavBar } from "./layouts/NavBar";
 import { mountProcessPage } from "./pages/ProcessPage";
@@ -14,14 +15,18 @@ import {
 } from "./router/router";
 import { type LayoutName, layoutOf } from "./router/routes";
 import { restoreScroll, trackScroll } from "./router/scroll";
-import { createAccountStore } from "./state/accountStore";
+import { type AccountStore, createAccountStore } from "./state/accountStore";
 import "./styles/global.css";
 
 /** 라우트에 맞는 화면을 content에 그리고, 그 화면을 정리하는 함수를 돌려준다. */
-function mountPage(content: HTMLElement, route: Route): () => void {
+function mountPage(
+  content: HTMLElement,
+  route: Route,
+  account: AccountStore,
+): () => void {
   return route.name === "process"
     ? mountProcessPage(content, route.process)
-    : mountUsagePage(content);
+    : mountUsagePage(content, { account });
 }
 
 const app = document.querySelector("#app");
@@ -31,7 +36,22 @@ if (app) {
   const account = createAccountStore({
     api: { fetchAccount, startLogin, cancelLogin, logout },
   });
-  const navBar = createNavBar(account);
+  // 로그인한 뒤 "어떤 목표를 서버에 넘길까요?"를 묻는 창. 목표가 바뀌면(합치기·가져오기) 현재 화면을 다시 그린다.
+  const syncDialog = createSyncDialog({
+    onGoalsChanged: () => renderRoute("initial"),
+    onSignedOut: () => void account.refresh(),
+  });
+  // 로그인이 막 끝난 순간(로그인 중 → 로그인됨)에만 자동으로 연다. 앱을 다시 열 때마다 묻지 않는다.
+  let previousPhase = account.getState().phase;
+  account.subscribe((state) => {
+    if (previousPhase === "signingIn" && state.phase === "signedIn") {
+      void syncDialog.open({ afterLogin: true });
+    }
+    previousPhase = state.phase;
+  });
+  const navBar = createNavBar(account, {
+    onOpenSync: () => void syncDialog.open({ afterLogin: false }),
+  });
   // 상단 막대는 한 번만 그리고, 화면 틀(레이아웃)은 그 아래 자리(stage)에 갈아 끼운다.
   const stage = document.createElement("div");
   app.replaceChildren(navBar.element, stage);
@@ -60,7 +80,7 @@ if (app) {
       content = mountLayout(root, nextLayout, { onBack: goBack });
       layout = nextLayout;
     }
-    destroyPage = mountPage(content, route);
+    destroyPage = mountPage(content, route, account);
     // 뒤로 가기로 돌아온 화면은 떠날 때의 위치로, 새로 들어간 화면은 맨 위로.
     cancelScrollRestore = restoreScroll(kind === "pop" ? savedScroll() : 0);
   }

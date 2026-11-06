@@ -39,7 +39,7 @@
 - **커밋 전 검증**: Husky `pre-commit` → `lint-staged`가 staged 파일에 Biome을 적용합니다.
 - **커밋 메시지 본문**: 한글로 작성합니다.
 - **Node**: LTS 24.x 기준 (`engines.node: ">=22.23.4"`, `lint-staged`의 실제 요구 버전 + 2026-10 Node 보안 릴리스 반영). Node 18은 2025-04 EOL이라 지원하지 않습니다.
-- **Dockerfile + docker-compose.yml (루트)**: 디바이스 간 Node 버전을 동일하게 맞추기 위한 개발 컨테이너입니다. 앱을 빌드/배포하는 용도가 아닙니다. `docker compose run --rm dev bash`로 들어가서 씁니다. 빌드·실행 검증 완료 (Node/pnpm 버전이 호스트와 일치함을 확인함).
+- **Dockerfile + docker-compose.yml (루트)**: 디바이스 간 Node 버전을 동일하게 맞추기 위한 개발 컨테이너입니다. 앱을 빌드/배포하는 용도가 아닙니다. `docker compose run --rm dev bash`로 들어가서 씁니다. 빌드·실행 검증 완료 (Node/pnpm 버전이 호스트와 일치함을 확인함). `server` 서비스(`docker compose up server`)는 Cloudflare 쪽(Worker + 로컬 D1)을 `127.0.0.1:8790`에 띄워 동기화 에이전트를 실제 Cloudflare 없이 시험하는 용도입니다(`docs/sync-design.md`). recorder는 Windows 전용이라 컨테이너에서 돌지 않습니다.
   - `node_modules`는 named volume(`node_modules`)으로 분리되어 있습니다. 호스트(Windows)와 컨테이너(Linux)는 네이티브 바이너리가 다르므로(예: `@biomejs/cli-win32-x64` vs `cli-linux-x64`) **절대 호스트의 `node_modules`를 컨테이너와 공유(bind mount)하지 마세요** — 서로의 설치를 깨뜨립니다.
   - pnpm store 위치도 `npm_config_store_dir` 환경변수로 `node_modules` volume 안쪽에 고정되어 있습니다. 이게 없으면 컨테이너의 pnpm이 store를 프로젝트 루트(호스트 bind mount)에 흘려서 `.pnpm-store/`가 커밋 대상에 섞여 들어갑니다. 이 설정을 건드릴 때는 이 사실을 기억하세요.
   - Python 등 다른 스택이 들어오면 `Dockerfile`에 추가하되, 아직 쓰이지 않는 스택을 미리 넣지 마세요.
@@ -70,6 +70,7 @@ API로 서빙만 합니다 — `apps/desktop`이 창을 열 때 hub를 자식 �
 (`docs/auth-design.md`, `docs/sync-design.md`). **기록·집계·목표는 로그인 없이 항상 동작해야 합니다** —
 recorder·aggregation·goals·chromium·supervision·desktop은 `cloud`를 import하거나 의존하지 않습니다(테스트가 검사).
 예외는 hub 하나이고, hub가 `cloud`를 아는 곳은 `apps/hub/src/hub/cloud_adapter.py` 한 파일(import는 함수 안)뿐입니다.
+목표 동기화는 `packages/goalsync`(계획·적용·주기 동기화)와 별개 프로세스인 `apps/sync`(에이전트)에 있고, 둘 다 서버를 부르는 쪽이라 `cloud`처럼 로컬 기능이 import·의존하지 못합니다(`goalsync`도 같은 격리 테스트 대상). 목표와 서버의 연결 칸은 `goals.db` 스키마 3입니다(`docs/sync-design.md`).
 서버로 나가는 값은 `docs/data-handling.md`가 기준이고, 프로세스·사이트 이름과 기록은 서버로 보내지 않습니다.
 화면(`apps/ui`)의 상태는 `docs/ui-state.md`의 전략을 따릅니다(진실은 hub, 브라우저 저장소 미사용, 앱 전체 상태는 `state/`).
 

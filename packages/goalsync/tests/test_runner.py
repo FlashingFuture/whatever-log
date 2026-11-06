@@ -1,14 +1,46 @@
-from datetime import date
+from datetime import UTC, date, datetime, time, timedelta
+
+from pathlib import Path
 
 import pytest
 from cloud import ServerUnreachable
 from goals import META_ACCOUNT_EMAIL, META_SYNC_ENABLED
+from recorder.sampling import TickSample
+from recorder.storage import open_db, save_tick
 
 from goalsync import sync_once
 
-from conftest import TODAY, goal_fields, make_recorder_db
-
 EMAIL = "a@example.com"
+TODAY = date(2026, 11, 5)
+
+
+def goal_fields(**overrides):
+    fields = {"name": "공부", "daily_target_minutes": 120, "weekdays": [0, 1, 2, 3, 4], "processes": []}
+    fields.update(overrides)
+    return fields
+
+
+def make_recorder_db(path: Path, ticks: dict[date, list[tuple[str, int]]]) -> Path:
+    """로컬 날짜별로 (프로세스, 15초 틱 수)를 정오부터 이어 붙여 recorder.db를 만든다. 사이트는 `process:domain`으로 줄 수 있다."""
+    conn = open_db(path)
+    for day, runs in ticks.items():
+        moment = datetime.combine(day, time(12, 0)).astimezone()
+        for spec, count in runs:
+            process, _, site = spec.partition(":")
+            for _ in range(count + 1):  # 마지막 틱은 집계에서 빠지므로 하나 더 둔다
+                save_tick(
+                    conn,
+                    TickSample(
+                        sampled_at=moment.astimezone(UTC),
+                        foreground_process=process,
+                        windowed_processes=frozenset({process}),
+                        seconds_since_last_input=0.0,
+                        foreground_site=site or None,
+                    ),
+                )
+                moment += timedelta(seconds=15)
+    conn.close()
+    return path
 
 
 @pytest.fixture
@@ -361,8 +393,6 @@ def test_a_missing_recorder_db_is_not_an_error(tmp_path, store, state, server) -
 
 
 def test_more_than_fifty_rows_are_sent_in_batches(tmp_path, store, state, server) -> None:
-    from datetime import timedelta
-
     days = {TODAY - timedelta(days=n): [("Code.exe", 8)] for n in range(0, 30)}
     db = make_recorder_db(tmp_path / "r.db", days)
     for index in range(3):

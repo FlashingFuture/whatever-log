@@ -5,9 +5,13 @@ from goals import META_ACCOUNT_EMAIL, META_SYNC_ENABLED
 from goalsync import KIND_DOWNLOAD, KIND_MERGE, KIND_UPLOAD, apply_choices, build_plan
 from goalsync.plan import ensure_account, local_key, remote_key
 
-from conftest import goal_fields
-
 EMAIL = "a@example.com"
+
+
+def goal_fields(**overrides):
+    fields = {"name": "공부", "daily_target_minutes": 120, "weekdays": [0, 1, 2, 3, 4], "processes": []}
+    fields.update(overrides)
+    return fields
 
 
 def _plan(store, server, email=EMAIL):

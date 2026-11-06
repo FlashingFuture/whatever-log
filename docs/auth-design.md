@@ -132,6 +132,8 @@
 | `POST /api/account/login` | `{"provider": "google"}`. 시스템 브라우저를 열고 202. 이미 진행 중이면 409, 모르는 방식이면 400, 계정 기능이 없으면 503 |
 | `DELETE /api/account/login` | 진행 중인 로그인을 취소한다(진행 중이 아니어도 200) |
 | `POST /api/account/logout` | 서버의 토큰 폐기를 시도하고(`POST /auth/logout`, 5초 제한, 실패해도 계속) 이 PC의 로그인 정보를 지운다. 응답에 `revoked_on_server`. 지우지 못하면 500 |
+| `GET /api/sync/plan` | 로그인 직후 "무엇을 서버에 올릴까요?" 확인 창의 내용: `{email, enabled, items: [{key, kind, name, daily_target_minutes, weekdays, local_*, declined}]}`. hub가 서버에서 목록을 받아 이 PC의 목표와 견준다. 올라가는 값만 있고 프로세스·사이트·내부 id·토큰은 없다. 로그인 전·만료는 409, 서버에 닿지 못하면 503 |
+| `POST /api/sync/apply` | `{"accepted": [key…]}`(최대 100개). 체크한 항목만 서버에 올리고·합치고·가져온다. 체크하지 않은 이 PC 목표는 `local_only`가 된다. 응답 `{uploaded, merged, downloaded, kept_local, errors}`. 동시에 두 번 적용하면 409 |
 | `POST /api/links/open` | `{"link": "privacy"}`. 고정된 목록의 바깥 링크만 시스템 브라우저로 연다(임의 주소는 400) |
 
 - 쓰기 요청은 기존 목표 API와 같은 방어를 적용한다: Host가 로컬이어야 하고, Origin이 허용된 UI와 **정확히** 같아야

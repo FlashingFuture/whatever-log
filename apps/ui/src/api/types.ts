@@ -159,3 +159,35 @@ export interface LogoutResponse extends AccountSnapshot {
 
 /** 화면이 시스템 브라우저로 열어 달라고 요청할 수 있는 링크의 이름(hub가 고정 목록으로 주소를 정한다). */
 export type ExternalLink = "privacy";
+
+/**
+ * 동기화 확인 창의 한 줄(`GET /api/sync/plan`). 올라가는 값(이름·목표 시간·요일)만 있고, 프로세스·사이트 연결은 없다.
+ * kind: upload(이 PC에만 있는 목표를 서버에 추가) / merge(서버의 같은 이름 목표와 합침) / download(서버에만 있는 목표를
+ * 이 PC에 추가). merge에서만 local_*에 이 PC의 값이 있다. declined는 전에 "올리지 않기"를 골랐던 목표다.
+ */
+export interface SyncItem {
+  key: string;
+  kind: "upload" | "merge" | "download";
+  name: string;
+  daily_target_minutes: number;
+  weekdays: number[];
+  local_daily_target_minutes: number | null;
+  local_weekdays: number[] | null;
+  declined: boolean;
+}
+
+export interface SyncPlan {
+  email: string | null;
+  /** 이 계정에서 이미 한 번 확인을 마쳤는지(처음이면 로그인 직후 자동으로 창을 연다). */
+  enabled: boolean;
+  items: SyncItem[];
+}
+
+/** 적용 결과(`POST /api/sync/apply`): 항목별 개수와 실패한 항목(key와 사용자용 사유). */
+export interface SyncResult {
+  uploaded: number;
+  merged: number;
+  downloaded: number;
+  kept_local: number;
+  errors: { key: string; message: string }[];
+}

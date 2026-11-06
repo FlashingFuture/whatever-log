@@ -1,18 +1,12 @@
 from collections.abc import Collection
-from datetime import UTC, date, datetime, time, timedelta
-from pathlib import Path
+from datetime import UTC, datetime
 
 import pytest
 from cloud import GoalConflict, ProgressResult, RemoteGoal, ServerError, ServerUnreachable
 from goals import GoalStore
 from goals.validation import name_key
-from recorder.sampling import TickSample
-from recorder.storage import open_db, save_tick
 
 from goalsync import SyncState
-
-TODAY = date(2026, 11, 5)
-
 
 class FakeServer:
     """서버의 목표·달성도 규칙을 메모리에서 흉내 낸다(apps/server의 규칙과 같게 — 실제 서버와의 일치는 e2e 시험이 본다)."""
@@ -129,32 +123,3 @@ def store(tmp_path):
 def state(tmp_path):
     with SyncState(tmp_path / "sync.db") as opened:
         yield opened
-
-
-def goal_fields(**overrides):
-    fields = {"name": "공부", "daily_target_minutes": 120, "weekdays": [0, 1, 2, 3, 4], "processes": []}
-    fields.update(overrides)
-    return fields
-
-
-def make_recorder_db(path: Path, ticks: dict[date, list[tuple[str, int]]]) -> Path:
-    """로컬 날짜별로 (프로세스, 15초 틱 수)를 정오부터 이어 붙여 recorder.db를 만든다. 사이트는 `process:domain`으로 줄 수 있다."""
-    conn = open_db(path)
-    for day, runs in ticks.items():
-        moment = datetime.combine(day, time(12, 0)).astimezone()
-        for spec, count in runs:
-            process, _, site = spec.partition(":")
-            for _ in range(count + 1):  # 마지막 틱은 집계에서 빠지므로 하나 더 둔다
-                save_tick(
-                    conn,
-                    TickSample(
-                        sampled_at=moment.astimezone(UTC),
-                        foreground_process=process,
-                        windowed_processes=frozenset({process}),
-                        seconds_since_last_input=0.0,
-                        foreground_site=site or None,
-                    ),
-                )
-                moment += timedelta(seconds=15)
-    conn.close()
-    return path

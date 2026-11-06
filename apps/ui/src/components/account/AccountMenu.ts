@@ -24,6 +24,11 @@ export interface AccountMenu {
   destroy: () => void;
 }
 
+export interface AccountMenuOptions {
+  /** 로그인한 상태의 "목표 동기화" 버튼을 눌렀다 — 어떤 목표를 서버에 넘길지 고르는 창을 연다. */
+  onOpenSync?: () => void;
+}
+
 /** 로그인 방식 버튼의 글자. 방식을 늘려도 "계정으로"는 어떤 이름 뒤에서든 자연스럽다. */
 function providerLabel(label: string): string {
   return `${label} 계정으로 계속하기`;
@@ -122,7 +127,10 @@ function renderPanel(
  * 버튼·팝업 내용은 한 번만 만들어 두고 상태가 바뀔 때 내용만 갱신한다 — 팝업이 붙잡고 있는 버튼이 중간에
  * 교체되면 열림 표시와 바깥 클릭 처리가 어긋나기 때문이다.
  */
-export function createAccountMenu(store: AccountStore): AccountMenu {
+export function createAccountMenu(
+  store: AccountStore,
+  options: AccountMenuOptions = {},
+): AccountMenu {
   const element = document.createElement("div");
   element.className = styles.menu;
 
@@ -144,12 +152,21 @@ export function createAccountMenu(store: AccountStore): AccountMenu {
     label: "로그아웃",
     onClick: () => void store.logout(),
   });
+  const syncButton = createButton({
+    label: "목표 동기화",
+    onClick: () => options.onOpenSync?.(),
+  });
   const logoutError = document.createElement("span");
   logoutError.className = styles.inlineError;
   logoutError.setAttribute("role", "alert");
   const signedInGroup = document.createElement("div");
   signedInGroup.className = styles.signedIn;
-  signedInGroup.append(email, logoutButton, logoutError);
+  signedInGroup.append(
+    email,
+    ...(options.onOpenSync ? [syncButton] : []),
+    logoutButton,
+    logoutError,
+  );
 
   function render(state: AccountState): void {
     // 팝업 안에서 눌러 다시 그려지면 포커스가 사라진다 — 다시 그린 뒤 되돌려 놓는다.
