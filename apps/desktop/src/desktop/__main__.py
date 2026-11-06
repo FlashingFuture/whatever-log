@@ -41,7 +41,7 @@ import time
 from functools import partial
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 import webview
 from hub.__main__ import DEFAULT_PORT as HUB_PORT
@@ -86,6 +86,18 @@ def _resolve_url(use_dev_server: bool) -> str:
             "apps/ui에서 `pnpm run build`를 먼저 실행하세요."
         )
     return _serve_dist(_UI_DIST_DIR)
+
+
+def _origin_of(url: str) -> str:
+    """URL의 origin(`스킴://호스트:포트`). hub가 이 origin의 요청만 받게 알려 주는 데 쓴다."""
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+def _hub_command(ui_url: str) -> list[str]:
+    """hub를 띄우는 명령. UI의 실제 origin만 허용하게 한다 — 이 PC의 다른 로컬 웹 서버가 hub의 목표를
+    읽거나 바꾸지 못하게 하려는 것이다(UI 포트는 창마다 임의라서 hub가 미리 알 수 없다)."""
+    return [sys.executable, "-m", "hub", "--allowed-origin", _origin_of(ui_url)]
 
 
 def _dev_server_is_up(timeout: float) -> bool:
@@ -163,10 +175,13 @@ def main() -> None:
 
     configure_logging(hub_supervisor_logger, DEFAULT_HUB_SUPERVISOR_LOG_PATH)
 
+    # UI를 먼저 서빙해 실제 주소(임의 포트)를 알아낸 뒤, 그 origin을 hub에 넘겨 띄운다.
+    ui_url = _resolve_url(args.dev)
+
     stop_event = threading.Event()
     supervisor_thread = threading.Thread(
         target=supervise,
-        args=([sys.executable, "-m", "hub"],),
+        args=(_hub_command(ui_url),),
         kwargs={
             "logger": hub_supervisor_logger,
             "classify_exit": _classify_hub_exit,
@@ -186,7 +201,7 @@ def main() -> None:
             # 못 본다. 로그에만 남기고 창은 그대로 연다 — apps/ui가 fetch
             # 실패를 감지해서 화면에 에러로 보여준다.
             hub_supervisor_logger.exception("hub 준비를 기다리지 못했지만 창은 엽니다.")
-        webview.create_window("whatever.log", _resolve_url(args.dev))
+        webview.create_window("whatever.log", ui_url)
         # --dev일 때 DevTools를 켠다 — 이 앱은 콘솔 없는 환경(pythonw.exe)에서
         # 돌아서 평소엔 네트워크 탭/콘솔로 디버깅할 방법이 없다.
         webview.start(debug=args.dev)

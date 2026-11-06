@@ -39,3 +39,19 @@
 .top:hover .topName {
   text-decoration: underline;
 }
+.manage {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-link);
+  font: inherit;
+  cursor: pointer;
+}
+.manage:hover {
+  text-decoration: underline;
+}
+.manage:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}

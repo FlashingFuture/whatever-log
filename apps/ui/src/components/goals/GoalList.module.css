@@ -1,0 +1,68 @@
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.empty {
+  composes: muted from "../../styles/shared.module.css";
+  margin: 0;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  border-radius: var(--radius-md);
+}
+.row:hover {
+  background: var(--color-track);
+}
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.main:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+.name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.meta {
+  composes: muted from "../../styles/shared.module.css";
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+}
+/* 수정·삭제 아이콘: 평소엔 숨기고, 마우스를 올리거나 키보드 포커스가 들어오거나 오른쪽 클릭하면 보인다. */
+.actions {
+  display: flex;
+  gap: var(--space-1);
+  padding-right: var(--space-2);
+  opacity: 0;
+}
+.row:hover .actions,
+.row:focus-within .actions,
+.row[data-pinned="true"] .actions {
+  opacity: 1;
+}

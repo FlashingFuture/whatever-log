@@ -18,14 +18,46 @@ from pathlib import Path
 from typing import Any
 
 from goals.errors import FieldError, GoalNotFoundError, GoalValidationError, SchemaVersionError
-from goals.models import Goal, GoalSnapshot
-from goals.validation import MAX_GOALS, GoalSpec, process_key, usable_keys, validate_goal
+from goals.models import Goal, GoalSnapshot, SiteTarget
+from goals.validation import (
+    MAX_GOALS,
+    GoalSpec,
+    process_key,
+    site_key,
+    usable_keys,
+    usable_sites,
+    validate_goal,
+)
 
-SCHEMA_VERSION = 1
+# 2: 연결 대상 종류에 `site`(브라우저의 사이트)를 더했다. 1에서 올라올 때 대상 테이블을 새 CHECK로 다시 만든다.
+SCHEMA_VERSION = 2
 
-# 연결 대상의 종류. 지금은 프로세스뿐이다 — 나중에 사이트 등을 더해도 저장 구조가 바뀌지 않게 종류 칸을
-# 두되, CHECK로 허용 목록을 닫아 두어 모르는 종류가 들어오지 못한다.
+# 연결 대상의 종류: 프로세스(`이름.exe`)와 사이트(`브라우저/도메인`). 종류 칸을 두되, CHECK로 허용 목록을 닫아
+# 두어 모르는 종류가 들어오지 못한다. 사이트의 이름 칸은 `브라우저/도메인`으로 합쳐 저장한다(둘 다 `/`를 가질
+# 수 없어 모호하지 않다) — 그래서 UNIQUE (kind, name_key) 하나로 "한 대상은 한 목표에만"이 지켜진다.
 _KIND_PROCESS = "process"
+_KIND_SITE = "site"
+_KINDS_SQL = f"'{_KIND_PROCESS}', '{_KIND_SITE}'"
+
+_GOAL_TARGETS_DDL = f"""
+CREATE TABLE IF NOT EXISTS goal_targets (
+    goal_id INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ({_KINDS_SQL})),
+    name TEXT NOT NULL,
+    name_key TEXT NOT NULL,
+    PRIMARY KEY (goal_id, kind, name_key),
+    UNIQUE (kind, name_key)
+)"""
+
+_SNAPSHOT_TARGETS_DDL = f"""
+CREATE TABLE IF NOT EXISTS goal_snapshot_targets (
+    day TEXT NOT NULL,
+    goal_id INTEGER NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ({_KINDS_SQL})),
+    name TEXT NOT NULL,
+    PRIMARY KEY (day, goal_id, kind, name),
+    FOREIGN KEY (day, goal_id) REFERENCES goal_snapshots(day, goal_id) ON DELETE CASCADE
+)"""
 
 # 숫자 칸의 CHECK는 범위뿐 아니라 저장 타입도 확인한다: SQLite는 INTEGER 열에 1.5 같은 값이 들어오면
 # REAL로 그대로 보관해 범위 CHECK를 통과시키고, 읽을 때 정수를 기대하는 코드가 깨진다.
@@ -41,14 +73,7 @@ CREATE TABLE IF NOT EXISTS goals (
     updated_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS goal_targets (
-    goal_id INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL CHECK (kind IN ('{_KIND_PROCESS}')),
-    name TEXT NOT NULL,
-    name_key TEXT NOT NULL,
-    PRIMARY KEY (goal_id, kind, name_key),
-    UNIQUE (kind, name_key)
-);
+{_GOAL_TARGETS_DDL};
 
 -- 어떤 날짜에 적용된 목표 설정의 기록(지난 날은 바뀌지 않는다). 목표가 나중에 삭제돼도 남도록 goals에 묶지 않는다.
 CREATE TABLE IF NOT EXISTS goal_snapshots (
@@ -61,14 +86,7 @@ CREATE TABLE IF NOT EXISTS goal_snapshots (
     PRIMARY KEY (day, goal_id)
 );
 
-CREATE TABLE IF NOT EXISTS goal_snapshot_targets (
-    day TEXT NOT NULL,
-    goal_id INTEGER NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('{_KIND_PROCESS}')),
-    name TEXT NOT NULL,
-    PRIMARY KEY (day, goal_id, kind, name),
-    FOREIGN KEY (day, goal_id) REFERENCES goal_snapshots(day, goal_id) ON DELETE CASCADE
-);
+{_SNAPSHOT_TARGETS_DDL};
 """
 
 
@@ -85,6 +103,20 @@ def _weekdays_from_mask(mask: int) -> frozenset[int]:
 def _sorted_by_key(names: list[str]) -> tuple[str, ...]:
     """프로세스 이름들을 비교 키 순으로 — Goal.processes와 GoalSnapshot.processes가 같은 순서가 되게."""
     return tuple(sorted(names, key=process_key))
+
+
+def _site_name(site: SiteTarget) -> str:
+    """사이트 연결을 저장 이름(`브라우저/도메인`)으로."""
+    return f"{site.browser}/{site.domain}"
+
+
+def _sites_from_names(names: list[str]) -> tuple[SiteTarget, ...]:
+    """저장 이름들을 사이트로 되돌려 비교 키 순으로 — Goal.sites와 GoalSnapshot.sites가 같은 순서가 되게."""
+    sites = []
+    for name in names:
+        browser, _, domain = name.partition("/")
+        sites.append(SiteTarget(browser, domain))
+    return tuple(sorted(sites, key=lambda site: site_key(site.browser, site.domain)))
 
 
 class GoalStore:
@@ -125,8 +157,21 @@ class GoalStore:
             raise SchemaVersionError(
                 f"goals.db가 더 새로운 버전({version})으로 만들어졌습니다. 이 프로그램은 {SCHEMA_VERSION}까지 다룹니다."
             )
+        if version == 1:
+            self._migrate_1_to_2()
         self._conn.executescript(_SCHEMA)
         self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+    def _migrate_1_to_2(self) -> None:
+        """대상 테이블의 종류 CHECK에 `site`를 허용하게 다시 만든다(SQLite는 CHECK를 고칠 수 없다). 한 트랜잭션이다."""
+        with self._write():
+            for table in ("goal_targets", "goal_snapshot_targets"):
+                self._conn.execute(f"ALTER TABLE {table} RENAME TO {table}_v1")
+            self._conn.execute(_GOAL_TARGETS_DDL)
+            self._conn.execute(_SNAPSHOT_TARGETS_DDL)
+            for table in ("goal_targets", "goal_snapshot_targets"):
+                self._conn.execute(f"INSERT INTO {table} SELECT * FROM {table}_v1")
+                self._conn.execute(f"DROP TABLE {table}_v1")
 
     @contextmanager
     def _write(self) -> Iterator[None]:
@@ -157,21 +202,22 @@ class GoalStore:
         return None
 
     def list_goals(self) -> list[Goal]:
-        """모든 목표(만든 순서). 목표와 연결 프로세스를 한 문장으로 읽어, 다른 프로세스의 쓰기가 끼어도
+        """모든 목표(만든 순서). 목표와 연결 대상을 한 문장으로 읽어, 다른 프로세스의 쓰기가 끼어도
         한쪽만 바뀐 결과를 보지 않는다."""
         rows = self._conn.execute(
-            "SELECT g.id, g.name, g.daily_target_minutes, g.weekdays, g.created_at, g.updated_at, t.name "
-            "FROM goals g LEFT JOIN goal_targets t ON t.goal_id = g.id AND t.kind = ? "
-            "ORDER BY g.id",
-            (_KIND_PROCESS,),
+            "SELECT g.id, g.name, g.daily_target_minutes, g.weekdays, g.created_at, g.updated_at, t.kind, t.name "
+            "FROM goals g LEFT JOIN goal_targets t ON t.goal_id = g.id "
+            "ORDER BY g.id"
         ).fetchall()
-        goals: dict[int, tuple[tuple, list[str]]] = {}
-        for goal_id, name, minutes, weekdays, created_at, updated_at, process in rows:
-            _, processes = goals.setdefault(
-                goal_id, ((goal_id, name, minutes, weekdays, created_at, updated_at), [])
+        goals: dict[int, tuple[tuple, list[str], list[str]]] = {}
+        for goal_id, name, minutes, weekdays, created_at, updated_at, kind, target in rows:
+            _, processes, sites = goals.setdefault(
+                goal_id, ((goal_id, name, minutes, weekdays, created_at, updated_at), [], [])
             )
-            if process is not None:
-                processes.append(process)
+            if kind == _KIND_PROCESS:
+                processes.append(target)
+            elif kind == _KIND_SITE:
+                sites.append(target)
         return [
             Goal(
                 id=head[0],
@@ -181,8 +227,9 @@ class GoalStore:
                 processes=_sorted_by_key(processes),
                 created_at=head[4],
                 updated_at=head[5],
+                sites=_sites_from_names(sites),
             )
-            for head, processes in goals.values()
+            for head, processes, sites in goals.values()
         ]
 
     # --- 변경 ---
@@ -194,15 +241,18 @@ class GoalStore:
         daily_target_minutes: Any,
         weekdays: Any,
         processes: Any,
+        sites: Any = (),
         known_processes: Collection[str] | None = None,
+        known_sites: Collection[tuple[str, str]] | None = None,
+        known_browsers: Collection[str] | None = None,
     ) -> Goal:
         """목표를 만든다. 입력 형식 오류와 다른 목표와의 충돌(같은 이름, 이미 연결된 프로세스, 개수 상한)을
         한꺼번에 모아 GoalValidationError로 알린다 — 사용자가 한 번에 고칠 수 있게."""
         spec, errors = self._validate(
-            name, daily_target_minutes, weekdays, processes, known_processes
+            name, daily_target_minutes, weekdays, processes, sites, known_processes, known_sites, known_browsers
         )
         with self._write():
-            errors += self._conflicts(name, processes, spec, errors, exclude_id=None)
+            errors += self._conflicts(name, processes, sites, spec, errors, exclude_id=None)
             (count,) = self._conn.execute("SELECT COUNT(*) FROM goals").fetchone()
             if count >= MAX_GOALS:
                 errors.append(FieldError("goals", "too_many", f"목표는 {MAX_GOALS}개까지 만들 수 있습니다."))
@@ -227,19 +277,22 @@ class GoalStore:
         daily_target_minutes: Any,
         weekdays: Any,
         processes: Any,
+        sites: Any = (),
         known_processes: Collection[str] | None = None,
+        known_sites: Collection[tuple[str, str]] | None = None,
+        known_browsers: Collection[str] | None = None,
     ) -> Goal:
         """목표를 통째로 바꾼다(모든 칸이 필요하다 — 일부만 바꾸는 입력은 받지 않는다).
 
         없는 id면 GoalNotFoundError(입력 검사보다 먼저), 입력이 틀리거나 충돌하면 오류를 모아 GoalValidationError.
         """
         spec, errors = self._validate(
-            name, daily_target_minutes, weekdays, processes, known_processes
+            name, daily_target_minutes, weekdays, processes, sites, known_processes, known_sites, known_browsers
         )
         with self._write():
             if self._conn.execute("SELECT 1 FROM goals WHERE id = ?", (goal_id,)).fetchone() is None:
                 raise GoalNotFoundError(goal_id)
-            errors += self._conflicts(name, processes, spec, errors, exclude_id=goal_id)
+            errors += self._conflicts(name, processes, sites, spec, errors, exclude_id=goal_id)
             if errors or spec is None:
                 raise GoalValidationError(errors)
             self._conn.execute(
@@ -273,7 +326,10 @@ class GoalStore:
         daily_target_minutes: Any,
         weekdays: Any,
         processes: Any,
+        sites: Any,
         known_processes: Collection[str] | None,
+        known_sites: Collection[tuple[str, str]] | None,
+        known_browsers: Collection[str] | None,
     ) -> tuple[GoalSpec | None, list[FieldError]]:
         """입력 형식 검증. 통과하면 (GoalSpec, []), 실패하면 (None, 오류들) — 충돌 검사와 합쳐 알리려고 예외 대신 돌려준다."""
         try:
@@ -283,7 +339,10 @@ class GoalStore:
                     daily_target_minutes=daily_target_minutes,
                     weekdays=weekdays,
                     processes=processes,
+                    sites=sites,
                     known_processes=known_processes,
+                    known_sites=known_sites,
+                    known_browsers=known_browsers,
                 ),
                 [],
             )
@@ -291,16 +350,18 @@ class GoalStore:
             return None, list(error.errors)
 
     def _insert_targets(self, goal_id: int, spec: GoalSpec) -> None:
-        """목표의 연결 프로세스들을 저장한다."""
+        """목표의 연결 프로세스와 사이트를 저장한다."""
         self._conn.executemany(
             "INSERT INTO goal_targets (goal_id, kind, name, name_key) VALUES (?, ?, ?, ?)",
-            [(goal_id, _KIND_PROCESS, name, key) for name, key in spec.processes],
+            [(goal_id, _KIND_PROCESS, name, key) for name, key in spec.processes]
+            + [(goal_id, _KIND_SITE, _site_name(site), key) for site, key in spec.sites],
         )
 
     def _conflicts(
         self,
         raw_name: Any,
         raw_processes: Any,
+        raw_sites: Any,
         spec: GoalSpec | None,
         format_errors: list[FieldError],
         *,
@@ -312,9 +373,10 @@ class GoalStore:
         충돌을 같이 알릴 수 있게 한다.
         """
         if spec is not None:
-            key, pairs = spec.name_key, list(spec.processes)
+            key, pairs, site_pairs = spec.name_key, list(spec.processes), list(spec.sites)
         else:
             key, pairs = usable_keys(raw_name, raw_processes, format_errors)
+            site_pairs = usable_sites(raw_sites, format_errors)
         errors: list[FieldError] = []
         exclude = -1 if exclude_id is None else exclude_id
         if (
@@ -341,6 +403,48 @@ class GoalStore:
                     "already_linked",
                     "이미 다른 목표에 연결된 프로세스입니다: " + ", ".join(linked),
                 )
+            )
+
+        # 브라우저 전체(프로세스)와 그 안의 사이트는 같은 시간을 두 번 세게 되므로, 서로 다른 목표에도 나눠 연결할 수 없다.
+        for name, process in pairs:
+            row = self._conn.execute(
+                "SELECT goals.name FROM goal_targets JOIN goals ON goals.id = goal_targets.goal_id "
+                "WHERE goal_targets.kind = ? AND substr(goal_targets.name_key, 1, ?) = ? AND goal_targets.goal_id != ?",
+                (_KIND_SITE, len(process) + 1, process + "/", exclude),
+            ).fetchone()
+            if row:
+                errors.append(
+                    FieldError(
+                        "processes",
+                        "overlaps_site",
+                        f"`{name}` 안의 사이트가 `{row[0]}` 목표에 연결돼 있어 브라우저 전체를 연결할 수 없습니다.",
+                    )
+                )
+        linked_sites: list[str] = []
+        for site, key in site_pairs:
+            row = self._conn.execute(
+                "SELECT goals.name FROM goal_targets JOIN goals ON goals.id = goal_targets.goal_id "
+                "WHERE goal_targets.kind = ? AND goal_targets.name_key = ? AND goal_targets.goal_id != ?",
+                (_KIND_SITE, key, exclude),
+            ).fetchone()
+            if row:
+                linked_sites.append(f"`{site.domain}`(`{row[0]}` 목표)")
+            row = self._conn.execute(
+                "SELECT goals.name FROM goal_targets JOIN goals ON goals.id = goal_targets.goal_id "
+                "WHERE goal_targets.kind = ? AND goal_targets.name_key = ? AND goal_targets.goal_id != ?",
+                (_KIND_PROCESS, process_key(site.browser), exclude),
+            ).fetchone()
+            if row:
+                errors.append(
+                    FieldError(
+                        "sites",
+                        "overlaps_process",
+                        f"`{site.browser}` 전체가 `{row[0]}` 목표에 연결돼 있어 그 안의 `{site.domain}`은 따로 연결할 수 없습니다.",
+                    )
+                )
+        if linked_sites:
+            errors.append(
+                FieldError("sites", "already_linked", "이미 다른 목표에 연결된 사이트입니다: " + ", ".join(linked_sites))
             )
         return errors
 
@@ -380,24 +484,27 @@ class GoalStore:
                 )
                 self._conn.executemany(
                     "INSERT INTO goal_snapshot_targets (day, goal_id, kind, name) VALUES (?, ?, ?, ?)",
-                    [(day, goal.id, _KIND_PROCESS, process) for process in goal.processes],
+                    [(day, goal.id, _KIND_PROCESS, process) for process in goal.processes]
+                    + [(day, goal.id, _KIND_SITE, _site_name(site)) for site in goal.sites],
                 )
         return self.snapshots(today)
 
     def snapshots(self, day: date) -> list[GoalSnapshot]:
         """그날의 스냅샷들(목표 id 순). 기록이 없으면 빈 목록. 한 문장으로 읽어 일관된 결과를 본다."""
         rows = self._conn.execute(
-            "SELECT s.goal_id, s.name, s.daily_target_minutes, t.name "
+            "SELECT s.goal_id, s.name, s.daily_target_minutes, t.kind, t.name "
             "FROM goal_snapshots s "
-            "LEFT JOIN goal_snapshot_targets t ON t.day = s.day AND t.goal_id = s.goal_id AND t.kind = ? "
+            "LEFT JOIN goal_snapshot_targets t ON t.day = s.day AND t.goal_id = s.goal_id "
             "WHERE s.day = ? ORDER BY s.goal_id",
-            (_KIND_PROCESS, day.isoformat()),
+            (day.isoformat(),),
         ).fetchall()
-        grouped: dict[int, tuple[str, int, list[str]]] = {}
-        for goal_id, name, minutes, process in rows:
-            _, _, processes = grouped.setdefault(goal_id, (name, minutes, []))
-            if process is not None:
-                processes.append(process)
+        grouped: dict[int, tuple[str, int, list[str], list[str]]] = {}
+        for goal_id, name, minutes, kind, target in rows:
+            _, _, processes, sites = grouped.setdefault(goal_id, (name, minutes, [], []))
+            if kind == _KIND_PROCESS:
+                processes.append(target)
+            elif kind == _KIND_SITE:
+                sites.append(target)
         return [
             GoalSnapshot(
                 day=day,
@@ -405,6 +512,7 @@ class GoalStore:
                 name=name,
                 daily_target_minutes=minutes,
                 processes=_sorted_by_key(processes),
+                sites=_sites_from_names(sites),
             )
-            for goal_id, (name, minutes, processes) in grouped.items()
+            for goal_id, (name, minutes, processes, sites) in grouped.items()
         ]

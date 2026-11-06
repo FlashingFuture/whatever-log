@@ -1,8 +1,17 @@
-import type { RangeUsage } from "../../api";
+import type { GoalProgressResponse, RangeUsage } from "../../api";
 import { formatDuration } from "../../lib/format";
+import { chooseTopBlocks, type TopProcess } from "../../lib/goalSummary";
 import { createRouteLink } from "../../router/router";
-import { createProcessIcon } from "./ProcessIcon";
+import { createProcessIcon, createSiteIcon } from "./ProcessIcon";
 import styles from "./UsageSummary.module.css";
+
+export interface UsageSummaryProps {
+  usage: RangeUsage;
+  /** 구간의 목표 수행 시간. 불러오지 못했으면 null(목표 칸만 "-"로 보인다). */
+  progress: GoalProgressResponse | null;
+  /** "목표 프로세스 관리"를 눌렀다. */
+  onManageGoals: () => void;
+}
 
 function stat(label: string, value: Node, detail?: string): HTMLElement {
   const block = document.createElement("div");
@@ -26,51 +35,78 @@ function stat(label: string, value: Node, detail?: string): HTMLElement {
   return block;
 }
 
+function text(value: string): HTMLSpanElement {
+  const span = document.createElement("span");
+  span.textContent = value;
+  return span;
+}
+
+function processStat(label: string, top: TopProcess | null): HTMLElement {
+  if (top === null) {
+    return stat(label, text("-"));
+  }
+  // 사이트면 도메인을 이름으로, 그 사이트를 본 브라우저는 시간 옆에 덧붙인다. 눌러서 가는 곳은 브라우저 상세다.
+  const shown = top.site ?? top.process;
+  const link = createRouteLink({ name: "process", process: top.process });
+  link.className = styles.top;
+  link.title = top.site ? `${top.site} · ${top.process}` : top.process;
+  const name = document.createElement("span");
+  name.className = styles.topName;
+  name.textContent = shown; // OS·웹에서 온 값이라 textContent로 넣는다
+  link.append(
+    top.site ? createSiteIcon(top.site) : createProcessIcon(top.process),
+    name,
+  );
+  return stat(
+    label,
+    link,
+    top.site
+      ? `${formatDuration(top.active_seconds)} · ${top.process}`
+      : formatDuration(top.active_seconds),
+  );
+}
+
 /**
- * 홈 왼쪽 요약: 구간의 총 사용 시간과 가장 많이 쓴 프로그램. 둘 다 집중(active) 시간
- * 기준이다. 값은 서버가 계산한 요약(usage.summary)을 그대로 보여 준다 — 무엇의 합인지의 정의는
- * 서버(packages/aggregation)에 한 곳으로 두고, 화면은 다시 계산하지 않는다.
+ * 홈 왼쪽 요약: 목표 수행 시간, 가장 길게 수행한 프로세스(목표 중 / 실제), 그 아래 목표 관리 링크.
+ * 값은 모두 서버가 계산한 것(목표 수행은 packages/goals, 실제는 packages/aggregation)을 그대로
+ * 보여 주고, 화면은 둘이 같은 프로세스인지만 보아 하나로 합친다.
  */
-export function createUsageSummary(usage: RangeUsage): HTMLElement {
+export function createUsageSummary(props: UsageSummaryProps): HTMLElement {
   const container = document.createElement("section");
   container.className = styles.summary;
   container.setAttribute("aria-label", "요약");
 
-  const {
-    active_seconds: activeSeconds,
-    idle_seconds: idleSeconds,
-    top,
-  } = usage.summary;
-  const total = document.createElement("span");
-  total.textContent = formatDuration(activeSeconds);
-
-  const topValue = document.createElement("span");
-  if (top) {
-    const link = createRouteLink({ name: "process", process: top.process });
-    link.className = styles.top;
-    link.title = top.process;
-    const name = document.createElement("span");
-    name.className = styles.topName;
-    name.textContent = top.process; // OS에서 온 값이라 textContent로 넣는다
-    link.append(createProcessIcon(top.process), name);
-    topValue.append(link);
-  } else {
-    topValue.textContent = "-";
-  }
-
+  const { progress, usage } = props;
   container.append(
     stat(
-      "총 사용 시간",
-      total,
-      idleSeconds > 0
-        ? `유휴 포함 ${formatDuration(activeSeconds + idleSeconds)}`
-        : undefined,
-    ),
-    stat(
-      "가장 많이 사용한 프로그램",
-      topValue,
-      top ? formatDuration(top.active_seconds) : undefined,
+      "목표 수행 시간",
+      text(progress ? formatDuration(progress.summary.active_seconds) : "-"),
     ),
   );
+
+  const blocks = chooseTopBlocks(
+    progress?.summary.top ?? null,
+    usage.summary.top,
+  );
+  if (blocks.kind === "same") {
+    container.append(processStat("가장 길게 수행한 프로세스", blocks.top));
+  } else if (blocks.kind === "goalAndActual") {
+    container.append(
+      processStat("목표 중 가장 길게 수행한 프로세스", blocks.goalTop),
+      processStat("실제 가장 길게 수행한 프로세스", blocks.actualTop),
+    );
+  } else {
+    container.append(
+      processStat("실제 가장 길게 수행한 프로세스", blocks.actualTop),
+    );
+  }
+
+  const manage = document.createElement("button");
+  manage.type = "button";
+  manage.className = styles.manage;
+  manage.dataset.goalManage = "";
+  manage.textContent = "목표 프로세스 관리";
+  manage.addEventListener("click", props.onManageGoals);
+  container.append(manage);
   return container;
 }

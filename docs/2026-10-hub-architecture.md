@@ -52,9 +52,12 @@ file:// 이슈와는 다른, 진짜로 적용되는 CORS 사례).
 바인딩했으니 안전하다"는 잘못된 가정이었다 — 와일드카드를 열면 사용자가 띄워둔
 **아무 웹사이트나** 이 API를 fetch해서 프로세스별 사용 시간(개인 활동 정보)을
 읽어갈 수 있다. 브라우저의 로컬 네트워크 접근 제한에 기대는 것도 위험하다. 지금은
-요청의 `Origin`이 `http://(127.0.0.1|localhost)(:포트)?` 패턴일 때만 그 origin을
-그대로 반사하고 `Vary: Origin`을 같이 보낸다 — desktop이 서빙하는 UI(임의 포트)와
-Vite dev server(5173) 둘 다 이 패턴에 맞는다.
+요청의 `Origin`이 허용 목록에 **정확히** 있을 때만 그 origin을 그대로 반사하고 `Vary: Origin`을
+같이 보낸다. 처음엔 "아무 localhost 포트"를 허용했지만, 그러면 이 PC에서 도는 다른 로컬 웹 서버의
+페이지도 읽기·쓰기(목표 생성·삭제)를 할 수 있어서 좁혔다. 허용 목록은 hub를 띄우는 쪽이
+`--allowed-origin`으로 알려 준다 — desktop은 UI를 먼저 서빙해 실제 origin(임의 포트)을 알아낸 뒤 그걸 넘겨
+hub를 띄우고, 따로 띄울 때 기본값은 Vite dev server(5173)다. CORS 응답·preflight·쓰기 Origin 검사·아이콘
+Referer 검사가 모두 같은 목록을 쓴다.
 
 ## uv workspace로 전환
 
@@ -206,6 +209,7 @@ apps/ui/src/
 │  ├─ format.ts                 # 사용 시간 글자(1분 미만은 초 단위), 이름 줄이기
 │  ├─ period.ts                 # 일/주/월 구간 계산·라벨(브라우저의 로컬 시간, 달력·일광절약시간)
 │  ├─ stats.ts                  # maxOf(목록이 길어도 RangeError 없음)
+│  ├─ goalText.ts · goalSummary.ts · processPick.ts  # 목표 글자 표기 · 홈 최장 프로세스 블록 선택 · 연결 목록 분할(순수)
 │  └─ settle.ts                 # settleWithin(제한 시간 안에 끝나면 값, 아니면 undefined)
 ├─ router/                      # 주소 ↔ 화면
 │  ├─ router.ts                 # 해시 라우터(#/ , #/process/<이름>) + 앱 안 이동 깊이
@@ -214,6 +218,10 @@ apps/ui/src/
 ├─ components/                  # 재사용 UI 조각(어느 화면인지 모른다)
 │  ├─ common/                   # "사용 현황"을 모르는 범용 조각: 라벨·콜백만 받는다
 │  │  ├─ Button.ts · Popover.ts · SegmentedControl.ts · Stepper.ts · ErrorView.ts
+│  │  └─ Modal.ts(<dialog> 기반, 장면 교체) · IconButton.ts · Icon.ts(SVG 선 아이콘)
+│  ├─ goals/                    # 목표 관리 모달: GoalManager(목록 → 상세/편집/삭제 확인 장면 전환),
+│  │                            #   GoalList(hover/포커스/우클릭 시 수정·삭제 아이콘), GoalForm(서버 칸별 오류 표시),
+│  │                            #   GoalProcesses(연결/추적 두 칸, 클릭·드래그앤드롭으로 즉시 저장)
 │  ├─ period/                   # 구간 탐색: PeriodView(단위 선택 + 이동 + 내용, 상태·갱신·키보드),
 │  │  │                         #   CalendarPicker(일), PeriodListPicker(주/월)
 │  └─ usage/                    # 사용량을 그리는 조각

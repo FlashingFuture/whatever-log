@@ -149,7 +149,7 @@ def test_the_one_goal_per_process_rule_also_holds_at_the_database_level(tmp_path
         )
     with pytest.raises(sqlite3.IntegrityError):  # 모르는 종류는 CHECK가 막는다
         raw.execute(
-            "INSERT INTO goal_targets (goal_id, kind, name, name_key) VALUES (?, 'site', 'a.com', 'a.com')",
+            "INSERT INTO goal_targets (goal_id, kind, name, name_key) VALUES (?, 'window', 'a.com', 'a.com')",
             (other.id,),
         )
     with pytest.raises(sqlite3.IntegrityError):  # 범위 밖 값

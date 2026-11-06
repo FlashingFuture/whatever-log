@@ -207,3 +207,36 @@ def test_main_opens_window_even_when_hub_is_not_ready_in_time(tmp_path, monkeypa
 
     mock_webview.create_window.assert_called_once()
     mock_webview.start.assert_called_once()
+
+
+def test_hub_is_told_the_real_ui_origin() -> None:
+    """hub는 desktop이 서빙하는 UI(임의 포트)의 origin만 허용해야 한다 — 이 PC의 다른 로컬 웹 서버가 목표를
+    읽거나 바꾸지 못하게."""
+    from desktop.__main__ import _hub_command, _origin_of
+
+    assert _origin_of("http://127.0.0.1:53412/") == "http://127.0.0.1:53412"
+    assert _origin_of("http://localhost:5173") == "http://localhost:5173"
+    command = _hub_command("http://127.0.0.1:53412/")
+    assert command[-2:] == ["--allowed-origin", "http://127.0.0.1:53412"]
+    assert command[1:3] == ["-m", "hub"]
+
+
+def test_main_starts_hub_with_the_origin_of_the_served_ui(tmp_path, monkeypatch) -> None:
+    import desktop.__main__ as main_module
+
+    monkeypatch.setattr(sys, "argv", ["desktop"])
+    monkeypatch.setattr(main_module, "_HUB_READY_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(main_module, "HUB_PORT", 65535)
+    monkeypatch.setattr(main_module, "DEFAULT_HUB_SUPERVISOR_LOG_PATH", tmp_path / "hub-supervisor.log")
+    monkeypatch.setattr(main_module, "supervise", MagicMock())
+    monkeypatch.setattr(main_module, "_resolve_url", lambda use_dev_server: "http://127.0.0.1:40123/")
+
+    try:
+        with patch("desktop.__main__.webview") as mock_webview:
+            main_module.main()
+    finally:
+        main_module.hub_supervisor_logger.handlers.clear()
+
+    (command,) = main_module.supervise.call_args.args
+    assert command[-2:] == ["--allowed-origin", "http://127.0.0.1:40123"]
+    mock_webview.create_window.assert_called_once_with("whatever.log", "http://127.0.0.1:40123/")

@@ -329,8 +329,15 @@ def test_process_usage_endpoint_rejects_invalid_edges(running_server, edges) -> 
         ("not a url", False),
     ],
 )
-def test_is_trusted_page_accepts_only_the_local_ui_origins(referer: str, trusted: bool) -> None:
-    assert is_trusted_page(referer) is trusted
+def test_is_trusted_page_accepts_only_the_ui_origins(referer: str, trusted: bool) -> None:
+    allowed = {"http://127.0.0.1:8787", "http://localhost:5173", "http://127.0.0.1"}
+    assert is_trusted_page(referer, allowed) is trusted
+
+
+def test_is_trusted_page_does_not_accept_other_local_ports_by_default() -> None:
+    assert is_trusted_page("http://localhost:5173/") is True
+    assert is_trusted_page("http://localhost:3000/") is False
+    assert is_trusted_page("http://127.0.0.1:53412/") is False
 
 
 @pytest.mark.parametrize("path", ["/api/icons/chrome.exe", "/api/icons/unknown.exe"])

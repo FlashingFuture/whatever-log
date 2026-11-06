@@ -55,3 +55,79 @@ export interface ProcessSeries {
   process: string;
   buckets: BucketUsage[];
 }
+
+/** 입력 한 칸의 오류(서버 검증 결과). 화면이 그 칸 옆에 그대로 보여 준다. */
+export interface FieldError {
+  field: string;
+  code: string;
+  message: string;
+}
+
+/** 어느 브라우저(프로세스 이름)에서 본 어느 사이트(도메인)인지. 사용 시간이 브라우저별로 따로 집계돼서 둘을 함께 든다. */
+export interface SiteLink {
+  browser: string;
+  domain: string;
+}
+
+/** 사용자의 목표 하나. 규칙의 원본은 packages/goals다. */
+export interface Goal {
+  id: number;
+  name: string;
+  daily_target_minutes: number;
+  /** 적용 요일(월=0 … 일=6). */
+  weekdays: number[];
+  /** 연결된 프로세스 이름들. 한 프로세스는 하나의 목표에만 연결된다. */
+  processes: string[];
+  /** 연결된 브라우저 사이트(세부 페이지). 브라우저 전체와 그 안의 사이트는 함께 연결할 수 없다. */
+  sites: SiteLink[];
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * 목표를 만들거나 바꿀 때 보내는 값. 화면은 값을 고쳐 주지 않고 사용자가 넣은 그대로 보낸다 —
+ * 형식 검증은 서버가 엄격하게 하므로 숫자 칸에 문자열이 올 수도 있다(그러면 서버가 칸별로 알려 준다).
+ */
+export interface GoalInput {
+  name: string;
+  daily_target_minutes: number | string;
+  weekdays: number[];
+  processes: string[];
+  sites: SiteLink[];
+}
+
+export interface ProcessTime {
+  process: string;
+  active_seconds: number;
+}
+
+export interface SiteTime extends SiteLink {
+  active_seconds: number;
+}
+
+/** 가장 길게 수행한 연결 대상. 사이트면 site에 도메인이 있고 process는 그 사이트를 본 브라우저다. */
+export interface TopTarget extends ProcessTime {
+  site: string | null;
+}
+
+/** 목표 하나의 구간 수행 시간(연결한 프로세스·사이트의 활성 시간 합). */
+export interface GoalProgress {
+  id: number;
+  name: string;
+  active_seconds: number;
+  processes: ProcessTime[];
+  sites: SiteTime[];
+}
+
+/** 구간의 목표별 수행 시간과 요약. 계산(정의)은 서버(packages/goals)가 한다. */
+export interface GoalProgressResponse {
+  start: string;
+  end: string;
+  goals: GoalProgress[];
+  summary: {
+    /** 모든 목표의 수행 시간 합. */
+    active_seconds: number;
+    /** 연결된 프로세스·사이트 중 활성 시간이 가장 긴 것(전부 0이면 null). */
+    top: TopTarget | null;
+  };
+}

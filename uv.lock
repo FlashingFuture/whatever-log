@@ -184,6 +184,7 @@ dependencies = [
     { name = "aggregation" },
     { name = "chromium" },
     { name = "common" },
+    { name = "goals" },
     { name = "recorder" },
     { name = "supervision" },
 ]
@@ -198,6 +199,7 @@ requires-dist = [
     { name = "aggregation", editable = "packages/aggregation" },
     { name = "chromium", editable = "packages/chromium" },
     { name = "common", editable = "packages/common" },
+    { name = "goals", editable = "packages/goals" },
     { name = "recorder", editable = "apps/recorder" },
     { name = "supervision", editable = "packages/supervision" },
 ]
