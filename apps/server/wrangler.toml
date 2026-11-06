@@ -16,5 +16,5 @@ GOOGLE_CLIENT_ID = "506740497505-okl0mm0ge5p7kojam78pdur54ej03j3e.apps.googleuse
 [[d1_databases]]
 binding = "DB"
 database_name = "whatever-log"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "2cecdf26-5daa-474b-84e7-8bc82b2d0f03"
 migrations_dir = "migrations"
