@@ -1,5 +1,5 @@
 import type { Db } from "../db.ts";
-import { errorResponse, jsonResponse } from "../http.ts";
+import { errorResponse, jsonResponse, readJson } from "../http.ts";
 import { loginGoogleUser } from "./accounts.ts";
 import { parseExchangeRequest } from "./exchangeRequest.ts";
 import {
@@ -27,57 +27,6 @@ export interface LoginDeps {
 }
 
 const MAX_BODY_BYTES = 4096;
-const JSON_CONTENT_TYPE = /^application\/json\s*(;.*)?$/i;
-
-async function readJson(
-  request: Request,
-): Promise<{ ok: true; body: unknown } | { ok: false; response: Response }> {
-  if (!JSON_CONTENT_TYPE.test(request.headers.get("Content-Type") ?? "")) {
-    return {
-      ok: false,
-      response: errorResponse(
-        415,
-        "invalid_request",
-        "본문은 application/json이어야 합니다.",
-      ),
-    };
-  }
-  const declared = Number(request.headers.get("Content-Length") ?? "0");
-  if (declared > MAX_BODY_BYTES) {
-    return {
-      ok: false,
-      response: errorResponse(413, "invalid_request", "본문이 너무 큽니다."),
-    };
-  }
-  const raw = await request.arrayBuffer();
-  if (raw.byteLength === 0 || raw.byteLength > MAX_BODY_BYTES) {
-    return {
-      ok: false,
-      response: errorResponse(
-        raw.byteLength === 0 ? 400 : 413,
-        "invalid_request",
-        raw.byteLength === 0 ? "본문이 비어 있습니다." : "본문이 너무 큽니다.",
-      ),
-    };
-  }
-  try {
-    return {
-      ok: true,
-      body: JSON.parse(
-        new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(raw),
-      ),
-    };
-  } catch {
-    return {
-      ok: false,
-      response: errorResponse(
-        400,
-        "invalid_request",
-        "본문이 올바른 JSON이 아닙니다.",
-      ),
-    };
-  }
-}
 
 /**
  * `POST /auth/google`: 데스크톱이 Google 로그인 뒤 받은 인증 코드를 서버 토큰으로 바꿔 준다.
@@ -90,7 +39,7 @@ export async function handleGoogleLogin(
   request: Request,
   deps: LoginDeps,
 ): Promise<Response> {
-  const read = await readJson(request);
+  const read = await readJson(request, MAX_BODY_BYTES);
   if (!read.ok) {
     return read.response;
   }

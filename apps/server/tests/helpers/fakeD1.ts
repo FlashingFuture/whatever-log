@@ -1,7 +1,7 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
-const MIGRATION = new URL("../../migrations/0001_init.sql", import.meta.url);
+const MIGRATIONS = new URL("../../migrations/", import.meta.url);
 
 /**
  * 테스트용 D1. 실제 마이그레이션 SQL을 메모리 SQLite에 적용하고, 서버 코드가 쓰는 D1 모양(prepare·bind·
@@ -10,14 +10,18 @@ const MIGRATION = new URL("../../migrations/0001_init.sql", import.meta.url);
 export function createFakeD1() {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec("PRAGMA foreign_keys = ON");
-  sqlite.exec(readFileSync(MIGRATION, "utf-8"));
+  for (const file of readdirSync(MIGRATIONS).sort()) {
+    if (file.endsWith(".sql")) {
+      sqlite.exec(readFileSync(new URL(file, MIGRATIONS), "utf-8"));
+    }
+  }
 
   function statement(sql: string, values: unknown[] = []) {
     return {
       bind: (...next: unknown[]) => statement(sql, next),
       async run() {
-        sqlite.prepare(sql).run(...(values as never[]));
-        return {};
+        const result = sqlite.prepare(sql).run(...(values as never[]));
+        return { meta: { changes: Number(result.changes) } };
       },
       async first() {
         return sqlite.prepare(sql).get(...(values as never[])) ?? null;
@@ -31,17 +35,18 @@ export function createFakeD1() {
   const db = {
     prepare: (sql: string) => statement(sql),
     async batch(statements: { run(): Promise<unknown> }[]) {
+      const results: unknown[] = [];
       sqlite.exec("BEGIN");
       try {
         for (const item of statements) {
-          await item.run();
+          results.push(await item.run());
         }
         sqlite.exec("COMMIT");
       } catch (error) {
         sqlite.exec("ROLLBACK");
         throw error;
       }
-      return [];
+      return results;
     },
   };
   return { sqlite, db };

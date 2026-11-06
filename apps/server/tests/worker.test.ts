@@ -78,3 +78,18 @@ test("예상하지 못한 오류는 500이고 내용을 응답에 담지 않는�
     globalThis.fetch = original;
   }
 });
+
+test("로그인이 필요한 주소는 Worker를 통해서도 토큰 없이 401이다", async () => {
+  for (const [method, path] of [
+    ["GET", "/goals"],
+    ["PUT", "/progress"],
+    ["DELETE", "/account"],
+    ["POST", "/auth/logout"],
+  ]) {
+    const response = await call(
+      new Request(`https://server.example${path}`, { method }),
+    );
+
+    assert.equal(response.status, 401, `${method} ${path}`);
+  }
+});

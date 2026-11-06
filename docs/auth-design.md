@@ -120,8 +120,10 @@
 
 - 있는 것: `packages/cloud`(`NotSignedIn`·`Session`·`TokenStore`·`Account`·`@require_login`, 위의 로그인 흐름,
   자격 증명 관리자 저장소, 명령줄)와 격리 테스트, `apps/server`의 `POST /auth/google`(배포됨).
-- 없는 것: 서버가 토큰을 받아 쓰는 쪽(인증이 필요한 API), 서버 로그아웃·계정 삭제 API, 요청 횟수 제한, 화면(UI)의
-  로그인 버튼과 hub의 계정 API, 전송 에이전트, 이메일 발송. 각각 만들 때 이 문서를 먼저 고친다.
+  토큰을 받아 쓰는 서버 API(목표·달성도·기기·`POST /auth/logout`·`DELETE /account`)는 서버 코드와 테스트가
+  있다(`docs/sync-design.md`, 배포 전).
+- 없는 것: 데스크톱 쪽 동기화 클라이언트(명령줄 `logout`이 서버 토큰도 폐기하게 하는 것 포함), 요청 횟수 제한,
+  화면(UI)의 로그인 버튼과 hub의 계정 API, 전송 에이전트, 이메일 발송. 각각 만들 때 이 문서를 먼저 고친다.
 
 ## 확인해야 할 것
 

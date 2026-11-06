@@ -2,6 +2,7 @@ import { handleGoogleLogin } from "./auth/handler.ts";
 import { createGoogleKeyProvider } from "./auth/jwks.ts";
 import type { Db } from "./db.ts";
 import { errorResponse, jsonResponse } from "./http.ts";
+import { handleApi } from "./sync/api.ts";
 
 /** Worker가 받는 환경: wrangler.toml의 [vars]·바인딩과 비밀 값(.dev.vars / wrangler secret). */
 export interface Env {
@@ -39,7 +40,11 @@ export default {
           now: () => new Date(),
         });
       }
-      return errorResponse(404, "not_found", "없는 주소입니다.");
+      const handled = await handleApi(request, new URL(request.url), {
+        db: env.DB,
+        now: () => new Date(),
+      });
+      return handled ?? errorResponse(404, "not_found", "없는 주소입니다.");
     } catch (error) {
       // 예상하지 못한 오류. 내용(토큰·코드가 섞일 수 있다)은 응답에 내지 않고 오류 이름만 남긴다.
       console.error(
