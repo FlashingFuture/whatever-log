@@ -31,7 +31,7 @@ from goals.validation import (
 )
 
 # 2: 연결 대상 종류에 `site`(브라우저의 사이트)를 더했다. 1에서 올라올 때 대상 테이블을 새 CHECK로 다시 만든다.
-# 3: 서버와의 연결 칸(remote_id 등)과 동기화 보조 테이블을 더했다(docs/sync-design.md). 기존 목표는 모두 `ask`다.
+# 3: 서버와의 연결 칸(remote_id 등)과 동기화 보조 테이블을 더했다(docs/sync-client.md). 기존 목표는 모두 `ask`다.
 SCHEMA_VERSION = 3
 
 # sync_meta의 키: 동기화를 켰는지, 연결한 계정의 이메일(계정이 바뀌면 연결을 끊는 데 쓴다).

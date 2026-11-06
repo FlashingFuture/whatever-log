@@ -15,7 +15,7 @@ services:
     command: bash
 
   # Cloudflare 쪽(Worker + D1)을 로컬에서 똑같이 띄운다 — 동기화 에이전트를 실제 Cloudflare에 올리지 않고도 끝까지
-  # 시험하려는 용도다(docs/sync-design.md). `wrangler dev`가 D1 대신 로컬 SQLite를 쓰고, 그 파일은 server_state 볼륨에
+  # 시험하려는 용도다(docs/sync-client.md). `wrangler dev`가 D1 대신 로컬 SQLite를 쓰고, 그 파일은 server_state 볼륨에
   # 남는다. 호스트(Windows)의 node_modules는 Linux에서 쓸 수 없으므로 서버 의존성은 따로 볼륨에 설치한다.
   #
   #   docker compose up server                      # 시작(마이그레이션 자동 적용), http://127.0.0.1:8790

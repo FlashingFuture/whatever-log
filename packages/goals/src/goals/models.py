@@ -41,7 +41,7 @@ SYNC_STATES = ("ask", "sync", "local_only")
 
 @dataclass(frozen=True)
 class SyncLink:
-    """목표 하나의 서버 연결 상태(docs/sync-design.md). 서버가 아는 것은 이름·목표 시간·요일뿐이고, 연결한
+    """목표 하나의 서버 연결 상태(docs/sync-client.md). 서버가 아는 것은 이름·목표 시간·요일뿐이고, 연결한
     프로세스·사이트는 여기에 없다.
 
     remote_id가 None이면 아직 서버에 없다. dirty는 연결된 목표를 로컬에서 고쳐 아직 서버에 못 보냈다는 뜻이다.

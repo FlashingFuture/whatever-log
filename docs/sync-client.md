@@ -1,0 +1,252 @@
+# 동기화 클라이언트 구조
+
+로그인한 사용자의 **목표(이름·목표 시간·요일)** 와 **날짜별 달성 시간**을 이 PC에서 서버로 맞추는 쪽의 구조를 설명한다.
+무엇을 서버에 두는지, 서버 API가 어떤지는 [docs/sync-design.md](sync-design.md)가, 로그인은 [docs/auth-design.md](auth-design.md)가,
+사용자에게 약속한 내용은 [docs/data-handling.md](data-handling.md)가 기준이다. 이 문서는 그 약속을 **코드가 어떻게 지키는지**를 다룬다.
+
+> 읽는 사람: 동기화 클라이언트를 고치거나 확장할 개발자.
+
+## 한눈에 보기
+
+```mermaid
+flowchart LR
+  subgraph PC["이 PC"]
+    UI["apps/ui<br/>확인 창"] -->|"/api/sync/*"| HUB["apps/hub<br/>cloud_adapter.py"]
+    HUB --> GS["packages/goalsync"]
+    AGENT["apps/sync<br/>(별개 프로세스)"] --> GS
+    GS --> CLOUD["packages/cloud<br/>ServerApi"]
+    GS --> GOALS[("goals.db")]
+    GS --> REC[("recorder.db<br/>읽기 전용")]
+    AGENT --> STATE[("sync.db")]
+  end
+  CLOUD -->|"HTTPS + Bearer 토큰"| SERVER["apps/server<br/>Worker + D1"]
+```
+
+- **두 입구, 같은 로직.** 사용자가 로그인 직후 고르는 단계는 hub가(화면이 부른다), 주기적으로 맞추는 단계는 에이전트가 한다. 둘 다
+  `goalsync`를 부르므로 규칙이 한 곳에만 있다.
+- **에이전트는 hub와 별개의 프로세스다.** 화면·hub 없이 혼자 돈다. 그래서 hub나 화면이 꺼져 있어도 동기화가 되고, 반대로 에이전트가 죽어도
+  기록·집계·화면에는 영향이 없다.
+- **서버로 가는 것은 하나의 통로(`cloud.ServerApi`)뿐이다.** 서버 응답의 모양을 아는 곳도 그 파일 하나다.
+
+## 구성 요소
+
+| 부분 | 위치 | 책임 | 모르는 것 |
+| --- | --- | --- | --- |
+| 서버 API 클라이언트 | `packages/cloud/src/cloud/api.py` | 토큰을 달아 `/goals`·`/progress`를 부르고, 응답을 엄격히 검사한다. 오류를 종류별 예외로 바꾼다(`NotAuthorized`·`GoalConflict`·`ServerUnreachable`·`ServerError`) | 로컬 DB, 목표의 의미 |
+| 계획·적용 | `packages/goalsync/.../plan.py` | 로컬 목표와 서버 목표를 견줘 "올리기·합치기·가져오기" 계획을 만들고, 사용자의 선택을 적용한다 | 화면, HTTP |
+| 주기 동기화 | `.../runner.py` (`sync_once`) | 올리기·지우기·내려받기·달성도 올리기를 순서대로 한 번 한다 | 언제 부를지(에이전트가 정한다) |
+| 달성 분 계산 | `.../daily.py` | `recorder.db`에서 날짜별 달성 분을 뽑는다(수행 시간의 정의는 `goals.compute_progress`) | 서버 |
+| 에이전트 상태 | `.../state.py` (`sync.db`) | 기기 ID와 서버에 마지막으로 보낸 달성 분 | 목표 |
+| 에이전트 | `apps/sync` | 주기·재시도·백오프·중복 실행 잠금·로그·종료 코드. 토큰 저장소를 고른다 | 동기화 규칙 |
+| hub 어댑터 | `apps/hub/src/hub/cloud_adapter.py` | 화면의 요청을 `goalsync`로 옮기고 실패를 사용자용 문장으로 바꾼다 | 동기화 규칙 |
+| 확인 창 | `apps/ui/src/components/sync/` + `lib/syncBoard.ts` | 두 칸 목록으로 선택을 받는다. 순수 규칙(기본 선택, 문장)은 `lib`에 있다 | 서버, 토큰 |
+| 로컬 저장 | `packages/goals` (`goals.db` 스키마 3) | 목표와 서버 연결 칸을 저장하고 규칙(CHECK·UNIQUE)으로 지킨다 | 서버 |
+
+### 의존 방향과 격리
+
+```
+apps/sync ─┐
+apps/hub ──┼─▶ packages/goalsync ─▶ packages/cloud
+           │            └────────▶ packages/goals, packages/aggregation
+```
+
+- **로컬 기능은 `cloud`도 `goalsync`도 쓰지 않는다.** recorder·aggregation·goals·chromium·supervision·desktop이 import하거나 의존성에 넣으면
+  `packages/cloud/tests/test_isolation.py`가 실패한다(소스·pyproject·`cloud`/`goalsync` import를 막은 프로세스에서의 실제 import를 모두 본다).
+- **hub는 예외 하나**다: 화면의 확인 창이 hub를 거치기 때문이다. 그래도 hub가 서버 쪽을 아는 곳은 어댑터 한 파일이고, 그 import는 함수 안에만
+  있다. `cloud`를 불러오지 못해도 hub는 뜨고 계정·동기화 기능만 "사용할 수 없음"(503)이 된다.
+- `goals`는 서버를 모른다. 서버 연결 칸은 값만 저장하고, 무엇을 언제 보낼지는 `goalsync`가 정한다.
+
+## 데이터
+
+### `goals.db` 스키마 3 — 서버와의 연결 칸
+
+| 칸 | 뜻 |
+| --- | --- |
+| `sync_state` | `ask`(아직 안 물음) / `sync`(서버와 동기화함) / `local_only`(사용자가 올리지 않기로 함) |
+| `remote_id` | 서버의 목표 UUID. 비어 있으면 아직 서버에 없다(`UNIQUE`: 한 서버 목표를 두 목표가 가질 수 없다) |
+| `remote_revision` | 서버와 마지막으로 맞춘 `revision`(낙관적 잠금용) |
+| `dirty` | 연결된 목표의 이름·목표 시간·요일을 이 PC에서 고쳐 아직 서버에 못 보냈다 |
+
+별도 테이블: `sync_deletions`(이 PC에서 지운 연결 목표의 서버 ID — 서버에 알리기 전까지), `sync_meta`(`sync_enabled`, `account_email`).
+v2에서 올라올 때 칸만 더하고 기존 목표는 모두 `ask`다(재실행해도 안전하다 — 이미 있는 칸은 건너뛴다).
+
+**프로세스·사이트 연결 테이블은 동기화와 무관하다.** 프로세스 연결만 바꾸는 수정은 `dirty`를 켜지 않는다(`UPDATE`가 서버가 아는 세 칸이 바뀐
+경우에만 켠다). 그래서 연결을 바꿀 때마다 서버 revision이 올라가는 일이 없다.
+
+### 목표 하나의 동기화 상태
+
+```mermaid
+stateDiagram-v2
+  [*] --> ask: 목표 만들기(동기화 켜기 전)
+  [*] --> sync_new: 목표 만들기(동기화 켠 뒤)
+  ask --> sync_new: 확인 창에서 체크
+  ask --> local_only: 확인 창에서 체크 해제
+  local_only --> sync_new: 확인 창을 다시 열어 체크
+  sync_new --> linked: 서버에 올림(remote_id 받음)
+  ask --> linked: 같은 이름의 서버 목표와 합침
+  linked --> dirty: 이름·목표 시간·요일 수정
+  dirty --> linked: 서버에 보냄
+  linked --> local_only: 서버에서 지워짐(연결만 끊음)
+  linked --> [*]: 이 PC에서 지움(서버 삭제 기록을 남김)
+  linked --> ask: 계정이 바뀜(reset_sync)
+```
+
+`sync_new`는 `sync_state='sync'`이고 `remote_id`가 아직 없는 상태, `linked`는 `remote_id`가 있는 상태, `dirty`는 `linked`에 `dirty=1`이 켜진 상태다.
+
+### `sync.db` (에이전트 전용)
+
+기기 ID(처음 실행할 때 만든 무작위 UUID — 하드웨어 값이 아니다)와, 서버 목표·날짜별로 마지막에 보낸 (분, 목표 분). 같은 값은 다시 보내지
+않는다. `goals.db`와 파일을 나눈 이유는 쓰기 주체를 섞지 않으려는 것이다(`goals.db`는 hub와 에이전트가 함께 쓰는데, WAL 모드와
+`BEGIN IMMEDIATE`로 직렬화한다).
+
+## 흐름 1 — 로그인 직후: 무엇을 올릴지 정한다
+
+```mermaid
+sequenceDiagram
+  participant U as 사용자
+  participant UI as 확인 창
+  participant H as hub
+  participant G as goalsync
+  participant S as 서버
+  U->>UI: 로그인 완료(또는 "목표 동기화" 버튼)
+  UI->>H: GET /api/sync/plan
+  H->>S: GET /goals
+  H->>G: build_plan(로컬 목표, 서버 목표, 이메일)
+  G-->>H: 항목(upload / merge / download)
+  H-->>UI: 올라가는 값만 담은 계획
+  U->>UI: 체크하고 "동기화 시작"
+  UI->>H: POST /api/sync/apply {accepted: [key…]}
+  H->>S: GET /goals (다시 읽는다)
+  H->>G: build_plan → apply_choices
+  G->>S: PUT /goals/{새 UUID} (체크한 업로드만)
+  G-->>H: 개수 + 실패한 항목
+  H-->>UI: 결과 요약
+```
+
+- **계획 항목:** `upload`(이 PC에만 있는 목표), `merge`(같은 이름의 서버 목표가 있음 — 대소문자·유니코드 표현은 무시), `download`(서버에만 있는 목표).
+  이미 연결됐거나 `sync`로 정해 둔 목표는 묻지 않고, 전에 "올리지 않기"를 고른 목표는 목록에 있되 체크가 꺼져 있다.
+- **합치기**는 새로 올리지 않고 그 서버 목표에 연결한다. 목표 시간·요일은 **서버 값**으로 맞추고 이 PC의 프로세스 연결은 그대로 둔다. 값이 다르면 화면이
+  선택 전에 두 값을 함께 보여 준다.
+- **적용은 서버를 다시 읽어 계획을 새로 만든 뒤** 같은 `key`의 항목에 적용한다(계획을 본 사이에 다른 기기가 목표를 만들었어도 안전하다 — 예를 들어
+  업로드하려던 이름이 그 사이 생겼다면 오류 대신 합치기가 된다). 체크하지 않은 이 PC 목표는 `local_only`가 된다.
+- **먼저 `sync_enabled`와 계정 이메일을 기록한 뒤 처리한다.** 처리 도중 네트워크가 끊겨도 사용자는 이미 동의했고, 못 올린 목표는 `sync` 상태로
+  남아 에이전트가 다음 주기에 올린다(재시작해도 이어진다). 항목 하나가 실패해도 나머지는 계속한다.
+- 동시에 두 번 적용하면 두 번째는 409다(hub가 잠금을 둔다).
+
+## 흐름 2 — 주기마다 (`sync_once`)
+
+```mermaid
+flowchart TD
+  A["시작"] --> B{"계정이 바뀌었나?<br/>(저장한 이메일 ≠ 현재)"}
+  B -->|예| X["연결을 모두 끊고 이번 주기는 끝<br/>skipped: account_changed"]
+  B -->|아니오| C{"동기화를 켰나?<br/>(sync_enabled)"}
+  C -->|아니오| Y["아무것도 안 함<br/>skipped: not_enabled"]
+  C -->|예| D["1. 지우기: sync_deletions → DELETE /goals/{id}"]
+  D --> E["2. 올리기: sync 상태인데 remote_id 없는 목표 → PUT(base 0)"]
+  E --> F["3. 올리기: dirty 목표 → PUT(remote_revision)<br/>409면 서버 최신 revision 위에 이 PC 값을 다시 보냄"]
+  F --> G["4. 내려받기: GET /goals → dirty 아닌 연결 목표를 서버 값으로"]
+  G --> H["5. 달성도: 오늘+지난 7일(처음엔 30일) 계산 → 바뀐 줄만 PUT /progress"]
+```
+
+**순서가 규칙이다: 이 PC의 수정을 먼저 올리고 나서 내려받는다.** 그래서 방금 한 수정이 서버의 낡은 값에 덮이지 않는다. 같은 일을 하는 안전장치가 하나 더
+있다 — 내려받기는 `dirty`인 목표를 건너뛴다(올리기가 이름 중복 등으로 실패해 수정이 남아 있어도 사용자의 수정이 사라지지 않는다).
+
+### 충돌과 예외를 어떻게 다루나
+
+| 상황 | 동작 | 이유 |
+| --- | --- | --- |
+| 두 기기가 같은 revision에서 동시에 수정(409 `conflict`) | 서버의 최신 revision 위에 **이 PC의 값을 다시 보낸다**(한 번만). 늦게 올린 쪽의 값이 서버에 남고, 먼저 올린 기기는 다음 주기에 서버 값을 받아 온다 | 이 PC에서 방금 한 수정이 사용자 눈에 보이는 값이라 되돌리면 더 놀랍다. 필드별 병합은 하지 않는다(통합 시험으로 확인) |
+| 수정하려는 목표가 다른 기기에서 지워짐(409 `goal_deleted`, 또는 404) | 지우지 않고 연결만 끊는다(`local_only`) | 프로세스 연결이 사라지는 되돌릴 수 없는 일을 조용히 하지 않는다 |
+| 서버에서 지워졌거나 서버가 전혀 모르는 연결 목표(내려받기에서) | 위와 같이 연결만 끊고, 보낸 달성 기록도 잊는다 | 같은 이유 |
+| 이름이 서버의 다른 목표와 겹침(409 `duplicate_name`) | 새 목표면 `local_only`로 두고 알린다. 수정이면 `dirty`를 유지하고 알린다 | 조용히 합치지 않는다. 사용자가 이름을 바꾸면 다음 주기에 올라간다 |
+| 서버에 목표 20개 초과(`too_many_goals`) | 알리고 `sync` 상태로 남겨 다음 주기에 다시 시도 | 사용자가 정리하면 풀린다 |
+| 이 PC에서 지운 연결 목표 | `sync_deletions`에 서버 ID를 남기고, 서버 삭제에 성공한 뒤에만 지운다. 서버에 이미 없어도 성공으로 본다 | 오프라인에서 지워도 서버 삭제가 사라지지 않는다 |
+| 내려받은 이름이 이 PC의 다른 목표와 겹침 | 반영하지 않고 알린다 | 이름은 목표마다 하나뿐이다 |
+| 네트워크 끊김(`ServerUnreachable`) | 이번 주기를 접고 다음 주기에 다시. 상태는 DB에 남아 이어진다 | 모든 단계가 다시 실행해도 안전하다 |
+| 토큰 만료·폐기(`NotAuthorized`) | 에이전트는 경고만 남기고 계속 돈다(다시 로그인하면 이어진다) | 로그인은 화면에서 한다 |
+| 계정이 바뀜 | 이전 계정의 연결·삭제 기록·보낸 달성 기록을 모두 끊고 확인 창을 다시 열게 한다 | 다른 계정에 이전 계정의 목표가 올라가거나 지워지지 않게 |
+
+### 달성도 계산
+
+- 하루의 경계는 이 PC의 **로컬 시간대 자정**이다(서머타임 날도 다음 날 자정을 직접 구한다). 서버는 날짜(`YYYY-MM-DD`)만 안다 — 몇 시에 했는지는 모른다.
+- 그날의 목표 설정은 하루 스냅샷(`GoalStore.snapshots`)이 있으면 그것을, 없으면 지금 목표를 쓴다. 분은 활성 초를 반올림해 0~1440으로 자른다.
+- 그날 요일에 적용되지 않는 목표는 달성 분이 0이면 줄을 만들지 않는다(쉬는 날의 빈 줄을 서버에 쌓지 않는다).
+- 한 번에 최대 50줄씩 나눠 보낸다. 서버가 "없는 목표"라고 돌려준(`ignored_goal_ids`) 줄은 보낸 것으로 기록하지 않는다.
+- **어떤 프로세스에서 나온 시간인지는 여기서 계산하고 버린다.** 서버로 가는 값에도, 에이전트 로그에도 프로세스·사이트·목표 이름이 없다(시험으로 확인한다).
+
+## 에이전트 (`apps/sync`)
+
+```
+uv run python -m sync_agent                       # 5분마다 계속
+uv run python -m sync_agent --once                # 한 번만(시험·수동)
+uv run python -m sync_agent --once --token-from-env   # 자격 증명 관리자 없이 환경 변수 WHATEVER_LOG_TOKEN으로
+```
+
+| 항목 | 동작 |
+| --- | --- |
+| 토큰 | 기본은 Windows 자격 증명 관리자(`KeyringTokenStore`). `--token-from-env`는 읽기 전용 저장소(`EnvTokenStore`)로, 토큰을 디스크에 남기지 않고 저장·삭제를 거부한다 |
+| 로그인 | 안 되어 있으면 건너뛴다(오류 아님). 로그인은 에이전트가 아니라 화면(또는 `python -m cloud login`)에서 한다 |
+| 주기 | `--interval`(기본 300초, 최소 5초). 연속 실패하면 두 배씩 늘려 최대 1시간, 한 번 성공하면 원래 주기로 돌아온다 |
+| 중복 실행 | `sync.lock`으로 막는다(이미 실행 중이면 종료 코드 3) |
+| 종료 코드 | 0 성공, 1 실패(`--once`) 또는 더 새 버전의 DB, 2 인자 오류 |
+| 로그 | `apps/sync/sync.log`(회전). 개수·종류만 남기고 목표 이름·프로세스·토큰은 남기지 않는다 |
+| 예상 못 한 오류 | 한 주기의 오류가 에이전트를 죽이지 않는다(다음 주기에 다시) |
+| DB 위치 | `--goals-db`(기본 `apps/hub/goals.db`), `--db-path`(recorder.db), `--state-db`(기본 `apps/sync/sync.db`) |
+
+**지금은 desktop이 에이전트를 함께 띄우지 않는다.** 직접 실행해야 하고, 돌지 않으면 이후 수정과 달성 시간이 서버에 반영되지 않는다(확인 창의 "적용"만
+즉시 서버를 부른다). 이 점은 확인 창 안내에도 적혀 있다.
+
+## 화면 쪽
+
+- hub 엔드포인트: `GET /api/sync/plan`(계획), `POST /api/sync/apply`(`{"accepted": [key…]}`). 출처·Host·본문 검사는 다른 쓰기 API와 같다
+  (`docs/auth-design.md`). 응답에는 올라가는 값만 있고 토큰·프로세스·내부 id는 없다. 로그인 전·만료는 409, 서버에 닿지 못하면 503이다.
+- 확인 창의 상태(계획, 체크, 처리 중, 결과)는 창 안의 일시적 상태라 저장소 없이 클로저에 둔다. 계획은 열 때마다 새로 받는다(`docs/ui-state.md`).
+- **언제 자동으로 열리나:** 로그인이 막 끝난 순간(로그인 중 → 로그인됨)에만, 이 계정에서 처음이고 정할 것이 있을 때. 서버에 닿지 못하면 조용히 넘어간다.
+  이후에는 상단 막대의 "목표 동기화" 버튼으로 연다.
+
+## 시험
+
+| 대상 | 위치 | 방법 |
+| --- | --- | --- |
+| `goals.db` 연결 칸·마이그레이션 | `packages/goals/tests/test_sync_links.py` | 실제 SQLite, v2 DB를 직접 만들어 올려 본다 |
+| 서버 API 클라이언트 | `packages/cloud/tests/test_api.py` | 실제 HTTP 서버(응답 모양 검증, 오류 종류, 끊긴 응답) |
+| 계획·적용·주기 동기화 | `packages/goalsync/tests/` | 서버 규칙을 흉내 낸 메모리 서버 + 실제 `goals.db`·`recorder.db` |
+| 에이전트 | `apps/sync/tests/test_main.py` | 주기·백오프·종료 코드·로그에 이름이 없음 |
+| hub 확인 API | `apps/hub/tests/test_sync_api.py` | 실제 hub 서버 + 실제 어댑터 + 가짜 서버 API |
+| 격리 | `packages/cloud/tests/test_isolation.py` | import 스캔, pyproject 스캔, `cloud`·`goalsync`를 막은 프로세스에서 hub 시작 |
+| 실제 서버와의 일치 | `apps/sync/tests/test_e2e_server.py` | 진짜 Worker + D1(서버가 떠 있을 때만) |
+
+메모리 서버는 실제 서버 규칙을 사람이 옮겨 적은 것이라 어긋날 수 있다. 통합 시험이 그 어긋남을 잡는 유일한 시험이다(서버 규칙을 바꾸면 이 시험을 꼭 돌린다).
+핵심 규칙(올리기가 내려받기보다 먼저, `local_only`는 업로드하지 않음, 삭제는 성공 뒤에 기록을 지움, 계정이 바뀌면 중단 등)은 일부러 깨뜨려 시험이 실패하는지
+확인했다.
+
+### 서버를 로컬에서 띄워 통합 시험 하기
+
+```
+docker compose up -d server                                   # Worker + 로컬 D1을 127.0.0.1:8790에(마이그레이션 자동)
+TOKEN=$(docker compose exec -T server node scripts/dev-token.mjs e2e@example.com)
+WHATEVER_LOG_E2E_SERVER=http://127.0.0.1:8790 WHATEVER_LOG_E2E_TOKEN=$TOKEN \
+  uv run pytest apps/sync/tests/test_e2e_server.py
+docker compose down                                           # 로컬 DB는 볼륨에 남는다(지우려면 down -v)
+```
+
+- 로그인(Google)은 비밀 키와 브라우저가 필요해 시험에서 쓰지 않는다. `dev-token.mjs`가 **로컬 D1에만** 시험용 사용자와 토큰을 넣는다(`--remote`는 거부).
+  서버 코드에는 인증을 건너뛰는 길이 없다.
+- `docker-compose.yml`의 `server`는 저장소를 바인드 마운트하므로, 컨테이너의 `pnpm install`이 호스트의 `node_modules`를 건드리지 않게 node_modules가 있는
+  워크스페이스(루트, `apps/server`, `apps/ui`)를 모두 이름 붙은 볼륨으로 가렸다. **새 워크스페이스에 node_modules가 생기면 compose에도 더한다.**
+- 이미지에는 `ca-certificates`가 필요하다(workerd가 시작할 때 시스템 인증서를 읽는다).
+- recorder는 Windows 화면을 읽으므로 컨테이너에서 돌지 않는다. 컨테이너에는 서버만 있다.
+
+## 지금 있는 것 / 없는 것
+
+- 있는 것: 위의 모든 것. 서버 API는 **아직 Cloudflare에 배포되지 않았다**(마이그레이션 `0002`와 `wrangler deploy`가 필요하다).
+- 없는 것(다음 PR 후보): 화면의 **동기화 상태 표시**(마지막 동기화 시각, 연결 끊김), **계정 삭제 버튼**, **기기 목록**, desktop이 에이전트를 함께 띄우고 감시하는 것,
+  모바일 클라이언트, 서버의 요청 횟수 제한.
+
+### 다음 PR이 붙을 자리 (제안, 아직 구현하지 않았다)
+
+| 기능 | 붙일 곳 | 필요한 것 |
+| --- | --- | --- |
+| 동기화 상태 표시 | 에이전트가 주기마다 결과(시각, 성공·실패, 문제 수)를 `sync.db`에 적고, hub가 그것을 읽어 `GET /api/sync/status`로 준다. 화면의 상단 막대가 보여 준다 | 에이전트가 안 돌고 있는 경우("에이전트가 실행 중이 아님")를 구분하는 방법(마지막 기록이 오래됨) |
+| 계정 삭제 | 화면 → hub → 어댑터 → `DELETE /account`. 성공하면 이 PC의 로그인 정보를 지우고 `reset_sync()`를 부른다 | 확인 절차(되돌릴 수 없다는 안내), 서버 삭제가 실패했을 때 로컬을 지우지 않는 순서 |
+| 기기 목록 | 서버에 `GET /devices`(기기 ID, 마지막으로 보낸 날짜)를 더하고, 화면에서 `DELETE /devices/{id}`를 부른다 | 현재 서버에는 기기를 나열하는 API가 없다. 기기에 이름을 붙이면 새 개인 정보가 생기므로(PC 이름 등) 쓸지 먼저 정한다 |

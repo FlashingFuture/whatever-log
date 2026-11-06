@@ -77,7 +77,7 @@ class _CloudBackend:
             raise LogoutProblem("이 PC의 로그인 정보를 지우지 못했습니다.") from None
         return revoked
 
-    # --- 목표 동기화 확인 창(docs/sync-design.md) ---
+    # --- 목표 동기화 확인 창(docs/sync-client.md) ---
 
     def _server(self):
         """로그인한 세션의 토큰으로 서버 API 클라이언트를 만든다. 로그인 전이면 SyncProblem."""
