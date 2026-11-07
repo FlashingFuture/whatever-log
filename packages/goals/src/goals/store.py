@@ -115,6 +115,35 @@ CREATE TABLE IF NOT EXISTS goal_snapshots (
 """
 
 
+def _remote_value_errors(daily_target_minutes: Any, weekdays: Any) -> list[FieldError]:
+    """서버가 준 목표 시간·요일이 이 PC의 규칙(1~1440분, 요일 1개 이상, 0~6)에 맞는지. 맞지 않으면 칸별 오류.
+
+    DB의 CHECK도 같은 값을 거부하지만 그 오류는 이름 중복과 구분되지 않아 원인이 가려진다 — 저장 전에 칸별로 알린다.
+    """
+    errors: list[FieldError] = []
+    if (
+        isinstance(daily_target_minutes, bool)
+        or not isinstance(daily_target_minutes, int)
+        or not 1 <= daily_target_minutes <= 1440
+    ):
+        errors.append(FieldError("daily_target_minutes", "range", "서버의 목표 시간이 1~1440분이 아닙니다."))
+    days = list(weekdays) if isinstance(weekdays, (list, tuple, set, frozenset)) else None
+    if days is None or not days or not all(isinstance(day, int) and not isinstance(day, bool) and 0 <= day <= 6 for day in days):
+        errors.append(FieldError("weekdays", "range", "서버의 요일이 비어 있거나 0(월)~6(일)이 아닙니다."))
+    return errors
+
+
+def _integrity_errors(error: sqlite3.IntegrityError) -> list[FieldError]:
+    """저장 중 난 무결성 오류를 칸별 오류로. 이름 충돌만 "이름 중복"이고, 서버 목표 연결이 겹친 것은 따로 알린다.
+    어느 쪽도 아니면 원인을 숨기지 않고 오류를 그대로 올린다."""
+    message = str(error)
+    if "name_key" in message:
+        return [FieldError("name", "duplicate", "같은 이름의 목표가 이미 있습니다.")]
+    if "remote_id" in message:
+        return [FieldError("remote_id", "duplicate", "이미 다른 목표가 이 서버 목표와 연결되어 있습니다.")]
+    raise error
+
+
 def _weekday_mask(weekdays: frozenset[int]) -> int:
     """요일 집합(월=0 … 일=6)을 저장용 비트 마스크로."""
     return sum(1 << day for day in weekdays)
@@ -458,8 +487,12 @@ class GoalStore:
     ) -> None:
         """서버의 값(이름·목표 시간·요일)으로 이 목표를 맞춘다. 프로세스·사이트 연결은 그대로다.
 
-        같은 이름의 다른 목표가 이 PC에 이미 있으면 GoalValidationError(이름은 목표마다 하나뿐이다).
+        서버의 값이 이 PC의 규칙에 맞지 않거나(목표 시간·요일) 같은 이름의 다른 목표가 이미 있으면 그 칸을 짚어 GoalValidationError를
+        올린다(이름은 목표마다 하나뿐이다). 검사는 저장 전에 하므로 아무것도 바뀌지 않는다.
         """
+        errors = _remote_value_errors(daily_target_minutes, weekdays)
+        if errors:
+            raise GoalValidationError(errors)
         mask = _weekday_mask(frozenset(weekdays))
         with self._write():
             self._require_goal(goal_id)
@@ -469,8 +502,8 @@ class GoalStore:
                     "remote_revision = ?, dirty = 0, updated_at = ? WHERE id = ?",
                     (name, name_key(name), daily_target_minutes, mask, revision, self._timestamp(), goal_id),
                 )
-            except sqlite3.IntegrityError:
-                raise GoalValidationError([FieldError("name", "duplicate", "같은 이름의 목표가 이미 있습니다.")]) from None
+            except sqlite3.IntegrityError as error:
+                raise GoalValidationError(_integrity_errors(error)) from None
 
     def create_from_remote(
         self,
@@ -481,7 +514,11 @@ class GoalStore:
         weekdays: Collection[int],
         revision: int,
     ) -> Goal:
-        """서버에만 있던 목표를 이 PC에 만든다(프로세스·사이트 연결은 비어 있다). 이름 충돌·개수 상한은 GoalValidationError."""
+        """서버에만 있던 목표를 이 PC에 만든다(프로세스·사이트 연결은 비어 있다). 서버 값이 규칙에 맞지 않거나 이름이 겹치거나
+        개수 상한을 넘으면 GoalValidationError."""
+        errors = _remote_value_errors(daily_target_minutes, weekdays)
+        if errors:
+            raise GoalValidationError(errors)
         with self._write():
             (count,) = self._conn.execute("SELECT COUNT(*) FROM goals").fetchone()
             if count >= MAX_GOALS:
@@ -493,8 +530,8 @@ class GoalStore:
                     "remote_id, remote_revision, sync_state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'sync')",
                     (name, name_key(name), daily_target_minutes, _weekday_mask(frozenset(weekdays)), now, now, remote_id, revision),
                 ).lastrowid
-            except sqlite3.IntegrityError:
-                raise GoalValidationError([FieldError("name", "duplicate", "같은 이름의 목표가 이미 있습니다.")]) from None
+            except sqlite3.IntegrityError as error:
+                raise GoalValidationError(_integrity_errors(error)) from None
             created = self.get(goal_id)
         assert created is not None
         return created

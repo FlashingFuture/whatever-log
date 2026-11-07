@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime
 import pytest
 import sync_agent.__main__ as agent
 from cloud import (
+    GoalConflict,
     InMemoryTokenStore,
     NotAuthorized,
     ProgressResult,
@@ -24,6 +25,7 @@ class FakeApi:
 
     instances: list["FakeApi"] = []
     fail: Exception | None = None
+    duplicate_name = False
 
     def __init__(self, url: str, token: str) -> None:
         self.url, self.token = url, token
@@ -41,6 +43,8 @@ class FakeApi:
 
     def put_goal(self, goal_id, *, name, daily_target_minutes, weekdays, base_revision):
         self._do("put_goal")
+        if FakeApi.duplicate_name:
+            raise GoalConflict("duplicate_name", f"'{name}'과 같은 이름의 목표가 있습니다.", None)
         return RemoteGoal(goal_id, False, 1, "t", name, daily_target_minutes, frozenset(weekdays))
 
     def delete_goal(self, goal_id) -> bool:
@@ -56,6 +60,7 @@ class FakeApi:
 def _fake_server(monkeypatch):
     FakeApi.instances = []
     FakeApi.fail = None
+    FakeApi.duplicate_name = False
     monkeypatch.setattr(agent, "ServerApi", FakeApi)
     monkeypatch.delenv("WHATEVER_LOG_SERVER_URL", raising=False)
     monkeypatch.delenv("WHATEVER_LOG_TOKEN", raising=False)
@@ -256,3 +261,19 @@ def test_log_lines_never_contain_goal_names_or_the_token(tmp_path, monkeypatch, 
 
     assert "비밀목표" not in caplog.text and "Secret.exe" not in caplog.text and "super-secret-token" not in caplog.text
     assert "올림 1" in caplog.text
+
+
+def test_a_name_clash_with_the_server_is_logged_as_a_count_never_with_the_goal_name(tmp_path, monkeypatch, caplog) -> None:
+    monkeypatch.setenv("WHATEVER_LOG_TOKEN", "env-token")
+    with GoalStore(tmp_path / "goals.db") as goals:
+        goal = goals.create(name="비밀목표", daily_target_minutes=60, weekdays=[0], processes=[])
+        goals.set_sync_state(goal.id, "sync")
+    _enable(tmp_path / "goals.db")
+    FakeApi.duplicate_name = True
+    caplog.set_level(logging.DEBUG, logger="sync_agent")
+
+    assert agent.main(_args(tmp_path, "--once")) == 0
+
+    assert "비밀목표" not in caplog.text  # 서버의 오류 문장·문제 문장 어디에도 이름이 새지 않는다
+    assert "문제 1건" in caplog.text
+    assert "비밀목표" not in (tmp_path / "sync.log").read_text(encoding="utf-8")

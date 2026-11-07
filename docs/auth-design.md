@@ -131,14 +131,17 @@
 | `GET /api/account` | `{available, signed_in, email, login: {state, message}, providers: [{id, label}]}`. `login.state`는 `idle`·`pending`·`failed`. **토큰은 어디에도 없다** |
 | `POST /api/account/login` | `{"provider": "google"}`. 시스템 브라우저를 열고 202. 이미 진행 중이면 409, 모르는 방식이면 400, 계정 기능이 없으면 503 |
 | `DELETE /api/account/login` | 진행 중인 로그인을 취소한다(진행 중이 아니어도 200) |
-| `POST /api/account/logout` | 서버의 토큰 폐기를 시도하고(`POST /auth/logout`, 5초 제한, 실패해도 계속) 이 PC의 로그인 정보를 지운다. 응답에 `revoked_on_server`. 지우지 못하면 500 |
+| `POST /api/account/logout` | **이 PC의 로그인 정보를 먼저 지우고**(서버 주소 설정이 잘못됐거나 서버가 죽어 있어도 로그아웃은 이 PC에서 끝난다), 그 뒤 서버의 토큰 폐기를 시도한다(`POST /auth/logout`, 5초 제한, 어떤 실패도 무시). 응답에 `revoked_on_server`. 이 PC에서 지우지 못하면 500이고 이때는 서버 토큰도 폐기하지 않는다 |
 | `GET /api/sync/plan` | 로그인 직후 "무엇을 서버에 올릴까요?" 확인 창의 내용: `{email, enabled, items: [{key, kind, name, daily_target_minutes, weekdays, local_*, declined}]}`. hub가 서버에서 목록을 받아 이 PC의 목표와 견준다. 올라가는 값만 있고 프로세스·사이트·내부 id·토큰은 없다. 로그인 전·만료는 409, 서버에 닿지 못하면 503 |
-| `POST /api/sync/apply` | `{"accepted": [key…]}`(최대 100개). 체크한 항목만 서버에 올리고·합치고·가져온다. 체크하지 않은 이 PC 목표는 `local_only`가 된다. 응답 `{uploaded, merged, downloaded, kept_local, errors}`. 동시에 두 번 적용하면 409 |
-| `POST /api/links/open` | `{"link": "privacy"}`. 고정된 목록의 바깥 링크만 시스템 브라우저로 연다(임의 주소는 400) |
+| `POST /api/sync/apply` | `{"accepted": [key…], "email"}`(`accepted`는 최대 100개, `email`은 확인 창의 계획에 있던 계정). 체크한 항목만 서버에 올리고·합치고·가져온다. 체크하지 않은 이 PC 목표는 `local_only`가 된다. **지금 로그인한 계정이 `email`과 다르면 서버를 부르지 않고 거절한다.** 응답 `{uploaded, merged, downloaded, kept_local, errors}`. 동시에 두 번 적용하면 409 |
+| `POST /api/links/open` | `{"link": "privacy"}`. 고정된 목록의 바깥 링크만 시스템 브라우저로 연다(임의 주소는 400). 브라우저가 열리지 못하면 503을 돌려주어 화면이 직접 열기를 시도하게 한다 |
 
 - 쓰기 요청은 기존 목표 API와 같은 방어를 적용한다: Host가 로컬이어야 하고, Origin이 허용된 UI와 **정확히** 같아야
   하며, 본문은 `application/json`(로그아웃·취소는 본문 없음)이다. 그래서 이 PC에서 도는 다른 웹페이지가 로그인을
   시작시키거나 로그아웃시킬 수 없다.
+- **취소·로그아웃과 세션 저장은 한 잠금 안에서 일어난다.** 서버에서 토큰을 받는 사이에 취소·로그아웃이 일어났다면 그 세션은 저장하지 않고
+  발급된 토큰의 폐기를 시도한 뒤(실패해도) 취소로 끝낸다. 로그아웃한 뒤에 로그인 정보가 되살아나는 일이 없다. 서버가 거부한 토큰(401)은 이 PC에서
+  지워 로그인 버튼이 보이게 한다.
 - 로그인 방식 목록은 `cloud.PROVIDERS`에서 오고 화면은 그 목록으로 버튼을 그린다. 새 방식은 `Provider` 한 줄과 서버의
   `/auth/<id>` 추가로 붙는다.
 - 네이티브 창(webview)에서는 `target=_blank` 링크가 기본 브라우저로 열린다고 보장되지 않아서, 화면이 링크 이름만

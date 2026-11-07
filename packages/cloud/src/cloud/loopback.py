@@ -123,5 +123,8 @@ class LoopbackReceiver:
             if self._outcome.error is not None:
                 raise LoginFailed(f"Google 로그인 설정에 문제가 있습니다({self._outcome.error}).")
             if self._outcome.code is not None:
+                # 코드가 도착한 같은 순간에 앱에서 취소했다면 그 코드를 돌려주지 않는다(교환하면 취소한 로그인이 저장된다).
+                if cancelled():
+                    raise LoginCancelled
                 return self._outcome.code
         raise LoginFailed("로그인 시간이 지났습니다. 다시 시도해 주세요.")

@@ -89,7 +89,7 @@ def run_cycle(
 
 
 def _describe(report: SyncReport) -> str:
-    """로그에 남길 한 줄 요약(목표 이름·프로세스 같은 내용은 담지 않는다)."""
+    """로그에 남길 한 줄 요약(목표 이름·프로세스 같은 내용은 담지 않는다 — 문제는 건수만 센다)."""
     if report.skipped:
         return f"건너뜀({report.skipped})"
     return (
@@ -140,9 +140,7 @@ def main(argv: list[str] | None = None, *, sleep: Callable[[float], None] = time
                 )
                 failures = 0
                 logger.info("동기화: %s", "로그인되어 있지 않아 건너뜀" if report is None else _describe(report))
-                if report is not None:
-                    for problem in report.problems:
-                        logger.warning("동기화 문제: %s", problem)
+                # 문제의 문장에는 목표 이름이 들어 있을 수 있다("'공부': 서버에 같은 이름의…"). 로그에는 건수만 남긴다(위 요약).
             except ServerUnreachable:
                 failures += 1
                 logger.warning("서버에 닿지 못했습니다. 다음 주기에 다시 시도합니다(연속 %d회).", failures)

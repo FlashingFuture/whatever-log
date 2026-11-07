@@ -459,3 +459,69 @@ test("서버에 저장되는 칸에는 프로세스·사이트·기기 이름이
     "deleted_at",
   ]);
 });
+
+test("기기 수 제한은 확인과 삽입이 한 문장이라, 확인한 뒤 자리가 찬 경우에도 넘지 않는다", async () => {
+  const { call, token, goalId, deps, sqlite } = await withGoal();
+  for (let n = 0; n < 9; n += 1) {
+    await call("PUT", "/progress", {
+      token,
+      body: { device_id: uuid(), entries: [entry(goalId)] },
+    });
+  }
+  const real = deps.db;
+  deps.db = {
+    prepare: (sql: string) => real.prepare(sql),
+    async batch(statements) {
+      // 이 요청이 "9대 → 자리가 있다"고 확인한 뒤, 다른 새 기기가 마지막 자리를 먼저 차지한 상황
+      sqlite.exec(
+        `INSERT INTO progress (user_id, goal_id, device_id, day, minutes, target_minutes, updated_at)
+         SELECT user_id, goal_id, '${uuid()}', day, 1, 120, 't' FROM progress LIMIT 1`,
+      );
+      return real.batch(statements);
+    },
+  };
+
+  const late = await call("PUT", "/progress", {
+    token,
+    body: { device_id: uuid(), entries: [entry(goalId)] },
+  });
+
+  assert.equal(late.status, 409);
+  assert.equal(late.json.error.code, "too_many_devices");
+  assert.equal(
+    (
+      sqlite
+        .prepare("SELECT COUNT(DISTINCT device_id) AS n FROM progress")
+        .get() as { n: number }
+    ).n,
+    10,
+  );
+});
+
+test("같은 시각에 서로 다른 목표량을 올려도 기기 ID가 큰 쪽으로 정해져 조회마다 같다", async () => {
+  const { call, token, goalId, sqlite } = await withGoal();
+  const low = "00000000-0000-4000-8000-0000000000aa";
+  const high = "00000000-0000-4000-8000-0000000000bb";
+  for (const [device, target] of [
+    [high, 100],
+    [low, 50],
+  ] as const) {
+    await call("PUT", "/progress", {
+      token,
+      body: {
+        device_id: device,
+        entries: [entry(goalId, { minutes: 10, target_minutes: target })],
+      },
+    });
+  }
+  sqlite.exec("UPDATE progress SET updated_at = '2026-11-06T03:00:00.000Z'"); // 같은 시각
+
+  for (let n = 0; n < 3; n += 1) {
+    const [row] = days(
+      (await call("GET", "/progress?from=2026-11-05&to=2026-11-05", { token }))
+        .json,
+    );
+    assert.equal(row.target_minutes, 100);
+    assert.equal(row.minutes, 20);
+  }
+});

@@ -61,7 +61,29 @@ function view(row: GoalRow): GoalView {
 const SELECT =
   "SELECT id, name, daily_target_minutes, weekdays, revision, updated_at, deleted_at FROM goals";
 
-export async function listGoals(db: Db, userId: number): Promise<GoalView[]> {
+/** 30일이 지난 삭제 표시를 지운다. 목록을 읽거나 목표를 지울 때마다 하므로, 더 지울 목표가 없어도 정리된다. */
+async function purgeExpiredTombstones(
+  db: Db,
+  userId: number,
+  now: Date,
+): Promise<void> {
+  const cutoff = new Date(
+    now.getTime() - TOMBSTONE_DAYS * 24 * 60 * 60 * 1000,
+  ).toISOString();
+  await db
+    .prepare(
+      "DELETE FROM goals WHERE user_id = ? AND deleted_at IS NOT NULL AND deleted_at <= ?",
+    )
+    .bind(userId, cutoff)
+    .run();
+}
+
+export async function listGoals(
+  db: Db,
+  userId: number,
+  now: Date,
+): Promise<GoalView[]> {
+  await purgeExpiredTombstones(db, userId, now);
   const { results } = await db
     .prepare(`${SELECT} WHERE user_id = ? ORDER BY created_at, id`)
     .bind(userId)
@@ -217,13 +239,11 @@ export async function deleteGoal(
   id: string,
   now: Date,
 ): Promise<boolean> {
+  await purgeExpiredTombstones(db, userId, now);
   const existing = await find(db, userId, id);
   if (!existing) return false;
   if (existing.deleted_at !== null) return true;
   const stamp = now.toISOString();
-  const cutoff = new Date(
-    now.getTime() - TOMBSTONE_DAYS * 24 * 60 * 60 * 1000,
-  ).toISOString();
   await db.batch([
     db
       .prepare("DELETE FROM progress WHERE user_id = ? AND goal_id = ?")
@@ -234,11 +254,6 @@ export async function deleteGoal(
           "WHERE user_id = ? AND id = ? AND deleted_at IS NULL",
       )
       .bind(stamp, stamp, userId, id),
-    db
-      .prepare(
-        "DELETE FROM goals WHERE user_id = ? AND deleted_at IS NOT NULL AND deleted_at <= ?",
-      )
-      .bind(userId, cutoff),
   ]);
   return true;
 }

@@ -105,8 +105,9 @@ class CloudPort(Protocol):
         """로그인 직후 확인 창의 계획(서버 목표와 이 PC 목표를 견준 것). 서버·로그인 문제는 SyncProblem."""
         ...
 
-    def sync_apply(self, goals_db: Path, accepted: Collection[str]) -> dict[str, Any]:
-        """사용자가 체크한 항목(key)을 적용한다. 서버·로그인 문제는 SyncProblem."""
+    def sync_apply(self, goals_db: Path, accepted: Collection[str], email: str | None) -> dict[str, Any]:
+        """사용자가 체크한 항목(key)을 적용한다. email은 확인 창을 열었을 때의 계정이고, 지금 로그인한 계정과 다르면 적용하지
+        않고 SyncProblem을 올린다. 서버·로그인 문제도 SyncProblem."""
         ...
 
 
@@ -217,13 +218,13 @@ class AccountService:
         """동기화 확인 창에 보여 줄 계획. 계정 기능이 없으면 AccountUnavailable, 서버·로그인 문제는 SyncProblem."""
         return self._get_port().sync_plan(goals_db)
 
-    def sync_apply(self, goals_db: Path, accepted: Collection[str]) -> dict[str, Any]:
+    def sync_apply(self, goals_db: Path, accepted: Collection[str], email: str | None) -> dict[str, Any]:
         """체크한 항목을 적용한다. 같은 시각에 두 번 적용되지 않게 막는다(진행 중이면 SyncBusy)."""
         port = self._get_port()
         if not self._sync_lock.acquire(blocking=False):
             raise SyncBusy
         try:
-            return port.sync_apply(goals_db, accepted)
+            return port.sync_apply(goals_db, accepted, email)
         finally:
             self._sync_lock.release()
 

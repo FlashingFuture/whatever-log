@@ -53,7 +53,7 @@ from hub.account_service import (
     UnknownProvider,
 )
 from hub.cloud_adapter import create_cloud_port
-from hub.external_links import open_link
+from hub.external_links import LINK_FAILED, LINK_OPENED, open_link
 from hub.goals_service import (
     BadRequest,
     browsers_with_sites,
@@ -207,6 +207,7 @@ def _usage_edges(query: dict[str, list[str]]) -> list[datetime]:
 # 동기화 확인 창에서 한 번에 보낼 수 있는 선택 개수와 항목 이름의 길이(목표는 최대 20개씩 두 쪽이다).
 MAX_SYNC_CHOICES = 100
 MAX_SYNC_KEY_LENGTH = 100
+MAX_EMAIL_LENGTH = 320
 _PROCESS_PATH_PREFIX = "/api/processes/"
 _GOAL_PATH = re.compile(r"/api/goals/(\d{1,9})")
 _PROCESS_USAGE_SUFFIX = "/usage"
@@ -565,18 +566,23 @@ class _Handler(BaseHTTPRequestHandler):
         if body is None:
             return
         accepted = body.get("accepted")
+        email = body.get("email")
         if (
-            set(body) != {"accepted"}
+            set(body) != {"accepted", "email"}
+            or not (email is None or (isinstance(email, str) and len(email) <= MAX_EMAIL_LENGTH))
             or not isinstance(accepted, list)
             or len(accepted) > MAX_SYNC_CHOICES
             or not all(isinstance(key, str) and 0 < len(key) <= MAX_SYNC_KEY_LENGTH for key in accepted)
         ):
             self._send_json(
-                400, api_error.error_body(api_error.INVALID_REQUEST, "accepted 칸에 항목 이름 목록만 보내야 합니다.")
+                400,
+                api_error.error_body(
+                    api_error.INVALID_REQUEST, "accepted(항목 이름 목록)와 email(확인한 계정) 칸만 보내야 합니다."
+                ),
             )
             return
         try:
-            result = self.account.sync_apply(self.goals_db_path, accepted)
+            result = self.account.sync_apply(self.goals_db_path, accepted, email)
         except AccountUnavailable:
             self._send_account_unavailable()
             return
@@ -603,12 +609,23 @@ class _Handler(BaseHTTPRequestHandler):
         if body is None:
             return
         link = body.get("link")
-        if set(body) != {"link"} or not isinstance(link, str) or not self.link_opener(link):
+        if set(body) != {"link"} or not isinstance(link, str):
+            self._send_json(
+                400, api_error.error_body(api_error.INVALID_REQUEST, "link 칸 하나만 보내야 합니다.")
+            )
+            return
+        outcome = self.link_opener(link)
+        if outcome == LINK_OPENED:
+            self._send_empty(204)
+        elif outcome == LINK_FAILED:
+            # 화면이 직접 열기를 시도할 수 있게 실패를 알린다(204로 답하면 열린 줄 안다).
+            self._send_json(
+                503, api_error.error_body(api_error.UNAVAILABLE, "브라우저를 열지 못했습니다.")
+            )
+        else:
             self._send_json(
                 400, api_error.error_body(api_error.INVALID_REQUEST, "열 수 없는 링크입니다.")
             )
-            return
-        self._send_empty(204)
 
     def _get_goals(self) -> None:
         """저장된 목표 목록."""

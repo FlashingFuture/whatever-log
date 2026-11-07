@@ -7,6 +7,7 @@ from http.server import ThreadingHTTPServer
 import pytest
 
 from hub.__main__ import _Handler
+from hub.external_links import LINK_OPENED, LINK_UNKNOWN
 from hub.account_service import (
     AccountService,
     AccountUnavailable,
@@ -269,7 +270,7 @@ def account_server():
     opened: list[str] = []
     previous = (_Handler.account, _Handler.link_opener, _Handler.allowed_origins)
     _Handler.account = AccountService(lambda: port)
-    _Handler.link_opener = staticmethod(lambda name: opened.append(name) or name == "privacy")
+    _Handler.link_opener = staticmethod(lambda name: (opened.append(name), LINK_OPENED if name == "privacy" else LINK_UNKNOWN)[1])
     _Handler.allowed_origins = frozenset({UI_ORIGIN})
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -469,6 +470,28 @@ def test_the_real_link_table_has_only_the_privacy_doc() -> None:
 
     assert list(LINKS) == ["privacy"]
     assert LINKS["privacy"].startswith("https://github.com/FlashingFuture/whatever-log/")
-    assert open_link("privacy", opened.append) is True
-    assert open_link("https://evil.example", opened.append) is False
+    assert open_link("privacy", lambda url: opened.append(url) or True) == "opened"
+    assert open_link("https://evil.example", lambda url: opened.append(url) or True) == "unknown"
     assert opened == [LINKS["privacy"]]
+
+
+def test_a_browser_that_cannot_open_is_reported_so_the_ui_can_fall_back(account_server) -> None:
+    from hub.external_links import LINK_FAILED
+
+    port, _, _ = account_server
+    _Handler.link_opener = staticmethod(lambda name: LINK_FAILED)
+
+    status, body, _ = call(port, "POST", "/api/links/open", {"link": "privacy"})
+
+    assert status == 503 and body["error"]["code"] == "unavailable"
+
+
+def test_open_link_reports_a_false_or_raising_browser_as_failed() -> None:
+    from hub.external_links import open_link
+
+    def broken(url):
+        raise OSError("no browser")
+
+    assert open_link("privacy", lambda url: False) == "failed"
+    assert open_link("privacy", broken) == "failed"
+    assert open_link("privacy", lambda url: True) == "opened"

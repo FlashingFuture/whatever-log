@@ -255,3 +255,57 @@ def test_meta_values_can_be_replaced(store) -> None:
     store.set_meta("k", "2")
 
     assert store.get_meta("k") == "2" and store.get_meta("missing") is None
+
+
+@pytest.mark.parametrize(
+    ("minutes", "weekdays", "field"),
+    [
+        (0, [0], "daily_target_minutes"),
+        (1441, [0], "daily_target_minutes"),
+        (True, [0], "daily_target_minutes"),
+        ("60", [0], "daily_target_minutes"),
+        (60, [], "weekdays"),
+        (60, [7], "weekdays"),
+        (60, [-1], "weekdays"),
+        (60, "0", "weekdays"),
+    ],
+)
+def test_a_server_value_that_breaks_the_local_rules_is_reported_on_its_own_field(store, minutes, weekdays, field) -> None:
+    goal = store.create(**_fields())
+
+    with pytest.raises(GoalValidationError) as applied:
+        store.apply_remote(goal.id, name="서버 이름", daily_target_minutes=minutes, weekdays=weekdays, revision=3)
+    with pytest.raises(GoalValidationError) as created:
+        store.create_from_remote(remote_id="r-1", name="독서", daily_target_minutes=minutes, weekdays=weekdays, revision=1)
+
+    for raised in (applied, created):
+        assert [error.field for error in raised.value.errors] == [field]  # 이름 중복으로 둔갑하지 않는다
+    assert store.get(goal.id).name == "공부" and len(store.list_goals()) == 1  # 아무것도 저장되지 않았다
+
+
+def test_both_bad_fields_are_reported_together(store) -> None:
+    goal = store.create(**_fields())
+
+    with pytest.raises(GoalValidationError) as raised:
+        store.apply_remote(goal.id, name="x", daily_target_minutes=0, weekdays=[], revision=1)
+
+    assert sorted(error.field for error in raised.value.errors) == ["daily_target_minutes", "weekdays"]
+
+
+def test_linking_a_server_goal_that_another_goal_already_has_is_not_called_a_duplicate_name(store) -> None:
+    first = store.create(**_fields(name="A"))
+    store.link_remote(first.id, "r-1", 1)
+
+    with pytest.raises(GoalValidationError) as raised:
+        store.create_from_remote(remote_id="r-1", name="B", daily_target_minutes=30, weekdays=[0], revision=1)
+
+    assert [error.field for error in raised.value.errors] == ["remote_id"]
+
+
+def test_a_real_name_clash_is_still_reported_as_a_duplicate_name(store) -> None:
+    store.create(**_fields(name="공부"))
+
+    with pytest.raises(GoalValidationError) as raised:
+        store.create_from_remote(remote_id="r-9", name="공부", daily_target_minutes=30, weekdays=[0], revision=1)
+
+    assert [error.field for error in raised.value.errors] == ["name"]

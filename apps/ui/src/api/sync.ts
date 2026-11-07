@@ -9,7 +9,18 @@ export function fetchSyncPlan(): Promise<SyncPlan> {
   return getJson("/api/sync/plan", SYNC_TIMEOUT_MS);
 }
 
-/** 사용자가 체크한 항목(key)을 적용한다. 체크하지 않은 이 PC 목표는 서버에 올라가지 않는다. */
-export function applySync(accepted: readonly string[]): Promise<SyncResult> {
-  return sendJson("POST", "/api/sync/apply", { accepted }, SYNC_TIMEOUT_MS);
+/**
+ * 사용자가 체크한 항목(key)을 적용한다. 체크하지 않은 이 PC 목표는 서버에 올라가지 않는다. email은 확인 창을 열었을 때의
+ * 계정(`SyncPlan.email`)이고, 그 사이 다른 계정으로 로그인했다면 hub가 적용하지 않고 거절한다.
+ */
+export function applySync(
+  accepted: readonly string[],
+  email: string | null,
+): Promise<SyncResult> {
+  return sendJson(
+    "POST",
+    "/api/sync/apply",
+    { accepted, email },
+    SYNC_TIMEOUT_MS,
+  );
 }

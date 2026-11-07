@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
 
-from cloud.server_client import _USER_AGENT, Opener
+from cloud.server_client import _USER_AGENT, Opener, open_without_redirects
 
 _TIMEOUT_SECONDS = 15
 _MAX_RESPONSE_BYTES = 256 * 1024
@@ -124,7 +124,7 @@ def _parse_goal(item: Any) -> RemoteGoal:
 class ServerApi:
     """Bearer 토큰으로 서버의 목표·달성도 API를 부른다. opener는 테스트용이다."""
 
-    def __init__(self, server_url: str, token: str, *, opener: Opener = urllib.request.urlopen) -> None:
+    def __init__(self, server_url: str, token: str, *, opener: Opener = open_without_redirects) -> None:
         """서버 주소와 로그인 토큰을 받는다."""
         self._base = server_url
         self._token = token
@@ -158,6 +158,8 @@ class ServerApi:
             payload = None
         if error.code == 401:
             return NotAuthorized()
+        if 300 <= error.code < 400:
+            return ServerError(error.code, "redirect", "서버가 다른 주소로 보내려 해서 요청하지 않았습니다.")
         info = payload.get("error", {}) if isinstance(payload, dict) else {}
         code = info.get("code") if isinstance(info.get("code"), str) else "error"
         message = info.get("message") if isinstance(info.get("message"), str) else f"서버가 요청을 거부했습니다({error.code})."

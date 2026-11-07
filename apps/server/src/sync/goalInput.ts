@@ -25,9 +25,14 @@ const UUID_V4 =
 
 export const isUuid = (value: string): boolean => UUID_V4.test(value);
 
-/** 이름의 비교 키: NFC 정규화 + 소문자. 같은 이름의 목표를 둘 못 만들게 한다. */
+/**
+ * 이름의 비교 키. 로컬(`goals.validation.name_key`)은 NFC + 파이썬 `casefold()`이고, 서버의 키가 그보다 느슨하면(`Straße`와
+ * `STRASSE`를 서로 다르다고 보면) 두 목표를 내려받은 PC에서 하나를 저장하지 못한다. JS에는 casefold가 없지만 "대문자로 바꿨다가
+ * 소문자로"가 ß→ss, ς→σ, ſ→s, ﬁ→fi 같은 접기를 똑같이 해 준다. 같은 이름의 목표를 둘 못 만들게 하는 키이므로 두 쪽이 맞아야 한다.
+ */
 export const nameKey = (name: string): string =>
-  name.normalize("NFC").toLowerCase();
+  // 소문자 변환은 어말 시그마를 ς로 바꾸지만 casefold는 항상 σ다.
+  name.normalize("NFC").toUpperCase().toLowerCase().replaceAll("ς", "σ");
 
 const isInt = (value: unknown): value is number => Number.isInteger(value);
 

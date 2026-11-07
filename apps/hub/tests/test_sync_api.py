@@ -16,6 +16,7 @@ from hub.account_service import AccountService, AccountUnavailable, SyncProblem
 from hub.cloud_adapter import create_cloud_port
 
 UI_ORIGIN = "http://127.0.0.1:5173"
+EMAIL = "a@example.com"
 
 
 class MemoryKeyring(keyring.backend.KeyringBackend):
@@ -41,11 +42,13 @@ class FakeApi:
     fail: Exception | None = None
     created: list[tuple[str, str]] = []
     tokens: list[str] = []
+    calls: list[str] = []
 
     def __init__(self, url: str, token: str) -> None:
         FakeApi.tokens.append(token)
 
     def list_goals(self):
+        FakeApi.calls.append("list_goals")
         if FakeApi.fail:
             raise FakeApi.fail
         return list(FakeApi.goals.values())
@@ -74,7 +77,7 @@ def sync_server(tmp_path, monkeypatch):
     backend = MemoryKeyring()
     keyring.set_keyring(backend)
     backend.set_password("whatever.log", "session", json.dumps({"token": "secret-token", "expires_at": None, "email": "a@example.com"}))
-    FakeApi.goals, FakeApi.fail, FakeApi.created, FakeApi.tokens = {}, None, [], []
+    FakeApi.goals, FakeApi.fail, FakeApi.created, FakeApi.tokens, FakeApi.calls = {}, None, [], [], []
     monkeypatch.setattr(cloud, "ServerApi", FakeApi)
 
     goals_db = tmp_path / "goals.db"
@@ -149,7 +152,7 @@ def test_applying_only_what_the_user_checked(sync_server) -> None:
     _, plan = call(port, "GET", "/api/sync/plan")
     upload_keys = {item["name"]: item["key"] for item in plan["items"]}
 
-    status, result = call(port, "POST", "/api/sync/apply", {"accepted": [upload_keys["공부"]]})
+    status, result = call(port, "POST", "/api/sync/apply", {"email": "a@example.com", "accepted": [upload_keys["공부"]]})
 
     assert status == 200
     assert (result["uploaded"], result["kept_local"], result["errors"]) == (1, 1, [])
@@ -166,7 +169,7 @@ def test_downloading_a_server_goal_creates_it_here_without_process_links(sync_se
     FakeApi.goals["r-1"] = RemoteGoal("r-1", False, 3, "t", "독서", 30, frozenset({5, 6}))
     _, plan = call(port, "GET", "/api/sync/plan")
 
-    status, result = call(port, "POST", "/api/sync/apply", {"accepted": [plan["items"][0]["key"]]})
+    status, result = call(port, "POST", "/api/sync/apply", {"email": "a@example.com", "accepted": [plan["items"][0]["key"]]})
 
     assert status == 200 and result["downloaded"] == 1
     with GoalStore(goals_db) as store:
@@ -180,7 +183,7 @@ def test_a_name_taken_after_the_plan_was_shown_becomes_a_merge_not_an_error(sync
     _, plan = call(port, "GET", "/api/sync/plan")
     FakeApi.goals["r-x"] = RemoteGoal("r-x", False, 1, "t", "공부", 10, frozenset({0}))  # 그 사이 다른 기기가 같은 이름을 만들었다
 
-    status, result = call(port, "POST", "/api/sync/apply", {"accepted": [plan["items"][0]["key"]]})
+    status, result = call(port, "POST", "/api/sync/apply", {"email": "a@example.com", "accepted": [plan["items"][0]["key"]]})
 
     # 다시 읽은 계획에서는 같은 이름이라 합치기가 되므로 오류 없이 합쳐진다(두 기기가 같은 목표를 쓰게 된다).
     assert status == 200 and result["merged"] == 1 and result["errors"] == []
@@ -193,7 +196,7 @@ def test_server_trouble_is_a_503_with_a_user_sentence(sync_server, failure) -> N
     FakeApi.fail = failure
 
     plan_status, plan_body = call(port, "GET", "/api/sync/plan")
-    apply_status, apply_body = call(port, "POST", "/api/sync/apply", {"accepted": []})
+    apply_status, apply_body = call(port, "POST", "/api/sync/apply", {"email": "a@example.com", "accepted": []})
 
     assert plan_status == apply_status == 503
     assert plan_body["error"]["code"] == "unavailable" and plan_body["error"]["message"]
@@ -215,14 +218,15 @@ def test_signed_out_users_get_a_login_required_answer_and_nothing_is_sent(sync_s
     _local_goal(goals_db)
 
     assert call(port, "GET", "/api/sync/plan")[0] == 409
-    assert call(port, "POST", "/api/sync/apply", {"accepted": []})[0] == 409
+    assert call(port, "POST", "/api/sync/apply", {"email": "a@example.com", "accepted": []})[0] == 409
     assert FakeApi.tokens == [] and FakeApi.created == []
 
 
 @pytest.mark.parametrize(
     "body",
-    [{}, {"accepted": "all"}, {"accepted": [1]}, {"accepted": [""]}, {"accepted": ["x" * 101]}, {"accepted": ["a"] * 101},
-     {"accepted": [], "extra": 1}],
+    [{}, {"email": "a@example.com", "accepted": "all"}, {"email": "a@example.com", "accepted": [1]}, {"email": "a@example.com", "accepted": [""]}, {"email": "a@example.com", "accepted": ["x" * 101]}, {"email": "a@example.com", "accepted": ["a"] * 101},
+     {"email": "a@example.com", "accepted": [], "extra": 1}, {"accepted": []}, {"email": 5, "accepted": []},
+     {"email": "x" * 321, "accepted": []}],
 )  # fmt: skip
 def test_invalid_apply_bodies_are_400(sync_server, body) -> None:
     port, goals_db, _ = sync_server
@@ -237,15 +241,15 @@ def test_apply_needs_the_exact_ui_origin(sync_server, origin) -> None:
     port, goals_db, _ = sync_server
     _local_goal(goals_db)
 
-    assert call(port, "POST", "/api/sync/apply", {"accepted": []}, origin=origin)[0] == 403
+    assert call(port, "POST", "/api/sync/apply", {"email": "a@example.com", "accepted": []}, origin=origin)[0] == 403
     assert FakeApi.created == []
 
 
 def test_apply_rejects_a_foreign_host_and_a_non_json_body(sync_server) -> None:
     port, _, _ = sync_server
 
-    assert call(port, "POST", "/api/sync/apply", {"accepted": []}, host="evil.example")[0] == 403
-    assert call(port, "POST", "/api/sync/apply", {"accepted": []}, content_type="text/plain")[0] == 415
+    assert call(port, "POST", "/api/sync/apply", {"email": "a@example.com", "accepted": []}, host="evil.example")[0] == 403
+    assert call(port, "POST", "/api/sync/apply", {"email": "a@example.com", "accepted": []}, content_type="text/plain")[0] == 415
 
 
 def test_reading_the_plan_from_a_foreign_host_is_refused(sync_server) -> None:
@@ -263,7 +267,7 @@ def test_without_cloud_the_sync_endpoints_answer_503_and_nothing_else_breaks(syn
     _Handler.account = AccountService(broken)
 
     assert call(port, "GET", "/api/sync/plan")[0] == 503
-    assert call(port, "POST", "/api/sync/apply", {"accepted": []})[0] == 503
+    assert call(port, "POST", "/api/sync/apply", {"email": "a@example.com", "accepted": []})[0] == 503
     assert call(port, "GET", "/api/goals")[0] == 200  # 목표 기능은 그대로
 
 
@@ -278,26 +282,64 @@ def test_a_second_apply_while_one_is_running_is_409() -> None:
         def current(self):
             return None
 
-        def sync_apply(self, goals_db, accepted):
+        def sync_apply(self, goals_db, accepted, email):
             entered.set()
             release.wait(5)
             return {}
 
     service = AccountService(lambda: SlowPort())
-    first = threading.Thread(target=lambda: service.sync_apply(None, []))
+    first = threading.Thread(target=lambda: service.sync_apply(None, [], None))
     first.start()
     assert entered.wait(2)
 
     from hub.account_service import SyncBusy
 
     with pytest.raises(SyncBusy):
-        service.sync_apply(None, [])
+        service.sync_apply(None, [], None)
     release.set()
     first.join()
-    service.sync_apply(None, [])  # 끝난 뒤에는 다시 받는다
+    service.sync_apply(None, [], None)  # 끝난 뒤에는 다시 받는다
 
 
 def test_sync_problem_carries_a_user_sentence() -> None:
     problem = SyncProblem("서버에 연결하지 못했습니다.", signed_out=False)
 
     assert problem.message == "서버에 연결하지 못했습니다." and problem.signed_out is False
+
+
+def test_a_plan_confirmed_for_one_account_is_never_applied_to_another(sync_server) -> None:
+    port, goals_db, backend = sync_server
+    _local_goal(goals_db)
+    _, plan = call(port, "GET", "/api/sync/plan")
+    key = plan["items"][0]["key"]
+    # 확인 창을 연 사이에 다른 계정으로 로그인했다
+    backend.set_password(
+        "whatever.log", "session", json.dumps({"token": "tok-b", "expires_at": None, "email": "b@example.com"})
+    )
+
+    status, body = call(port, "POST", "/api/sync/apply", {"email": plan["email"], "accepted": [key]})
+
+    assert status == 503 and "계정이 바뀌었어요" in body["error"]["message"]
+    assert FakeApi.created == [] and FakeApi.calls == ["list_goals"]  # 계획 때의 한 번뿐 — 적용 때는 서버를 부르지 않았다
+    with GoalStore(goals_db) as store:
+        assert store.get_meta(META_SYNC_ENABLED) is None  # 아무것도 켜지지 않았다
+
+
+def test_a_token_the_server_rejects_is_forgotten_so_the_login_button_shows(sync_server) -> None:
+    port, _, backend = sync_server
+    FakeApi.fail = cloud.NotAuthorized()
+
+    status, _ = call(port, "GET", "/api/sync/plan")
+
+    assert status == 409
+    assert backend.items == {}  # 이 PC의 로그인 정보가 지워졌다
+    assert call(port, "GET", "/api/account")[1]["signed_in"] is False
+
+
+def test_a_bad_server_address_is_a_clear_message_not_a_crash(sync_server, monkeypatch) -> None:
+    port, _, _ = sync_server
+    monkeypatch.setenv("WHATEVER_LOG_SERVER_URL", "ftp://nope")
+
+    status, body = call(port, "GET", "/api/sync/plan")
+
+    assert status == 503 and "서버 주소" in body["error"]["message"]

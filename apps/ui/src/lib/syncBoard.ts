@@ -56,8 +56,16 @@ export function itemMeta(item: BoardItem): string {
   return `${formatTarget(item.daily_target_minutes)} · ${formatWeekdays(item.weekdays)}`;
 }
 
-/** 항목 종류의 짧은 설명(꼬리표). 선택했을 때 무슨 일이 일어나는지를 알려 준다. */
-export function itemTag(item: BoardItem): string {
+/**
+ * 항목의 꼬리표: 지금 이 칸에 있으면 무슨 일이 일어나는지. 선택했을 때는 올리기·합치기·가져오기를 알리고, 선택하지 않았을 때는
+ * 실제로 어디에 남는지를 알린다 — 이 PC의 목표는 이 PC에만 남지만, 서버에만 있는 목표는 서버에 남고 이 PC로 오지 않는다.
+ */
+export function itemTag(item: BoardItem, selected: boolean): string {
+  if (!selected) {
+    return item.kind === "download"
+      ? "서버에만 있음 · 이 PC로 가져오지 않음"
+      : "이 PC에만 둠";
+  }
   switch (item.kind) {
     case "upload":
       return "서버에 새로 추가";

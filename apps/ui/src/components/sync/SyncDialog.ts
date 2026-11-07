@@ -110,7 +110,7 @@ export function createSyncDialog(props: SyncDialogProps): SyncDialog {
     button.dataset.key = itemData.key;
     button.setAttribute(
       "aria-label",
-      `${itemData.name} ${selected ? "이 PC에만 두기" : "서버와 동기화"}`,
+      `${itemData.name} ${selected ? "동기화하지 않기" : "서버와 동기화"}`,
     );
 
     const text = document.createElement("span");
@@ -124,7 +124,7 @@ export function createSyncDialog(props: SyncDialogProps): SyncDialog {
     meta.textContent = itemMeta(itemData);
     const tag = document.createElement("span");
     tag.className = styles.tag;
-    tag.textContent = itemTag(itemData);
+    tag.textContent = itemTag(itemData, selected);
     text.append(name, meta, tag);
     const note = mergeNote(itemData);
     if (note !== null && selected) {
@@ -203,7 +203,7 @@ export function createSyncDialog(props: SyncDialogProps): SyncDialog {
     failure = null;
     render();
     try {
-      result = await applySync([...selection]);
+      result = await applySync([...selection], plan.email);
       if (result.merged > 0 || result.downloaded > 0) {
         props.onGoalsChanged();
       }
@@ -244,8 +244,8 @@ export function createSyncDialog(props: SyncDialogProps): SyncDialog {
         "동기화할 목표가 없어요. 오른쪽에서 눌러 추가하세요.",
       ),
       column(
-        "이 PC에만 둠",
-        "서버로 가지 않는 목표(다시 열면 언제든 바꿀 수 있어요)",
+        "동기화하지 않음",
+        "서버로 보내거나 이 PC로 가져오지 않는 목표(다시 열면 언제든 바꿀 수 있어요)",
         local,
         false,
         "모두 동기화해요.",
@@ -318,7 +318,11 @@ export function createSyncDialog(props: SyncDialogProps): SyncDialog {
       content.append(paragraph(failure ?? "불러오는 중…"));
       if (failure) {
         content.append(
-          createButton({ label: "다시 시도", onClick: () => void load(false) }),
+          createButton({
+            label: "다시 시도",
+            // 응답을 받으면 화면을 다시 그린다(성공하면 계획이, 또 실패하면 새 오류가 보인다).
+            onClick: () => void load(false).then(render),
+          }),
         );
       }
     } else if (result) {
@@ -361,6 +365,13 @@ export function createSyncDialog(props: SyncDialogProps): SyncDialog {
 
   return {
     async open({ afterLogin }) {
+      // 적용을 보낸 채 창을 닫았다가 다시 연 경우: 새 계획을 받지 않고 진행 중인 화면을 그대로 보여 준다. 새로 받으면
+      // 적용 버튼이 다시 살아나 같은 선택을 두 번 보내거나, 먼저 보낸 적용의 결과가 새 계획 화면을 덮을 수 있다.
+      if (busy) {
+        render();
+        modal.open();
+        return;
+      }
       const shown = await load(afterLogin);
       if (!shown) {
         return;
@@ -368,7 +379,6 @@ export function createSyncDialog(props: SyncDialogProps): SyncDialog {
       if (afterLogin && plan && (plan.enabled || plan.items.length === 0)) {
         return; // 이 계정에서 이미 확인했거나 정할 것이 없다
       }
-      busy = false;
       render();
       modal.open();
     },

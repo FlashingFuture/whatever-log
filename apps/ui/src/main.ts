@@ -15,7 +15,11 @@ import {
 } from "./router/router";
 import { type LayoutName, layoutOf } from "./router/routes";
 import { restoreScroll, trackScroll } from "./router/scroll";
-import { type AccountStore, createAccountStore } from "./state/accountStore";
+import {
+  type AccountStore,
+  createAccountStore,
+  createLoginWatcher,
+} from "./state/accountStore";
 import "./styles/global.css";
 
 /** 라우트에 맞는 화면을 content에 그리고, 그 화면을 정리하는 함수를 돌려준다. */
@@ -41,13 +45,13 @@ if (app) {
     onGoalsChanged: () => renderRoute("initial"),
     onSignedOut: () => void account.refresh(),
   });
-  // 로그인이 막 끝난 순간(로그인 중 → 로그인됨)에만 자동으로 연다. 앱을 다시 열 때마다 묻지 않는다.
-  let previousPhase = account.getState().phase;
+  // 사용자가 로그인을 시도해서 로그인됨이 된 순간에만 자동으로 연다(앱을 다시 열 때마다 묻지 않는다).
+  // 로그인이 시작 응답보다 먼저 끝나 "로그인 중"을 거치지 않는 경우도 포함한다.
+  const loginJustFinished = createLoginWatcher();
   account.subscribe((state) => {
-    if (previousPhase === "signingIn" && state.phase === "signedIn") {
+    if (loginJustFinished(state)) {
       void syncDialog.open({ afterLogin: true });
     }
-    previousPhase = state.phase;
   });
   const navBar = createNavBar(account, {
     onOpenSync: () => void syncDialog.open({ afterLogin: false }),

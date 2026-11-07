@@ -8,6 +8,7 @@ dependencies = [
     "chromium",
     "cloud",
     "goals",
+    "goalsync",
     "recorder",
     "common",
     "supervision",
@@ -18,6 +19,7 @@ aggregation = { workspace = true }
 chromium = { workspace = true }
 cloud = { workspace = true }
 goals = { workspace = true }
+goalsync = { workspace = true }
 recorder = { workspace = true }
 common = { workspace = true }
 supervision = { workspace = true }

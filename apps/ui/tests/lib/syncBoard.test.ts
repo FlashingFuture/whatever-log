@@ -70,9 +70,18 @@ test("항목의 값은 목표 시간과 요일을 사람이 읽는 글자로 보
 });
 
 test("꼬리표는 선택했을 때 일어날 일을 알려 준다", () => {
-  assert.equal(itemTag(UPLOAD), "서버에 새로 추가");
-  assert.equal(itemTag(MERGE), "서버의 같은 이름 목표와 합침");
-  assert.equal(itemTag(DOWNLOAD), "서버에서 이 PC로 가져옴");
+  assert.equal(itemTag(UPLOAD, true), "서버에 새로 추가");
+  assert.equal(itemTag(MERGE, true), "서버의 같은 이름 목표와 합침");
+  assert.equal(itemTag(DOWNLOAD, true), "서버에서 이 PC로 가져옴");
+});
+
+test("선택하지 않은 항목은 실제로 어디에 남는지 알려 준다: 서버에만 있던 목표는 이 PC에 없다", () => {
+  assert.equal(itemTag(UPLOAD, false), "이 PC에만 둠");
+  assert.equal(itemTag(MERGE, false), "이 PC에만 둠");
+  assert.equal(
+    itemTag(DOWNLOAD, false),
+    "서버에만 있음 · 이 PC로 가져오지 않음",
+  );
 });
 
 test("합치기에서 값이 다르면 이 PC의 값을 함께 알려 주고, 같거나 합치기가 아니면 알리지 않는다", () => {

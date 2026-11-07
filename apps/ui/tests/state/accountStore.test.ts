@@ -7,6 +7,7 @@ import {
   type AccountApi,
   type AccountState,
   createAccountStore,
+  createLoginWatcher,
   INITIAL_STATE,
   reduce,
 } from "../../src/state/accountStore.ts";
@@ -435,4 +436,125 @@ test("dispose 후에는 타이머가 없고 더 알리지 않는다", async () =
 
   assert.equal(active().length, 0);
   assert.equal(seen.at(-1), "signingIn");
+});
+
+test("변경 요청이 오가는 동안 들어온 조회는 보내지 않고, 끝난 뒤 한 번 보내 결과를 따른다", async () => {
+  let releaseLogout: (value: AccountSnapshot) => void = () => {};
+  const fetches: string[] = [];
+  const { store } = setup({
+    fetchAccount: () => {
+      fetches.push("fetch");
+      return Promise.resolve(snapshot());
+    },
+    logout: () => new Promise((resolve) => (releaseLogout = resolve)),
+  });
+
+  const loggingOut = store.logout();
+  void store.refresh(); // 로그아웃 중 창 포커스로 조회가 시작되는 경우
+  void store.refresh();
+  assert.deepEqual(fetches, [], "변경이 끝나기 전에는 조회를 보내지 않는다");
+
+  releaseLogout(snapshot());
+  await loggingOut;
+  await flush();
+
+  assert.deepEqual(fetches, ["fetch"], "끝난 뒤 한 번만 보낸다");
+  assert.equal(store.getState().phase, "signedOut");
+});
+
+test("조회가 로그아웃 응답을 밀어내 로그인 상태가 계속 보이는 일이 없다", async () => {
+  let stale = SIGNED_IN; // hub가 로그아웃을 처리하기 전에 읽으면 로그인 상태를 준다
+  const { store } = setup({
+    fetchAccount: () => Promise.resolve(stale),
+    logout: () => {
+      stale = snapshot();
+      return Promise.resolve(snapshot());
+    },
+  });
+  await store.refresh();
+  assert.equal(store.getState().phase, "signedIn");
+
+  const loggingOut = store.logout();
+  void store.refresh();
+  await loggingOut;
+  await flush();
+
+  assert.equal(store.getState().phase, "signedOut");
+});
+
+test("변경 요청이 실패해도 보류한 조회는 이어서 보낸다", async () => {
+  let fetched = 0;
+  const { store } = setup({
+    fetchAccount: () => {
+      fetched += 1;
+      return Promise.resolve(SIGNED_IN);
+    },
+    logout: () =>
+      Promise.reject(new ApiError(500, "internal", "지우지 못했습니다.")),
+  });
+
+  const loggingOut = store.logout();
+  void store.refresh();
+  await loggingOut;
+  await flush();
+
+  assert.equal(fetched, 1);
+});
+
+// --- 로그인 시도 감시 ---
+
+const phase = (
+  p: AccountState["phase"],
+  over: Partial<AccountState> = {},
+): AccountState => ({ ...INITIAL_STATE, phase: p, ...over });
+
+test("로그인 중을 거쳐 로그인되면 한 번 알린다", () => {
+  const watch = createLoginWatcher();
+
+  assert.equal(watch(phase("signedOut", { busy: true })), false);
+  assert.equal(watch(phase("signingIn")), false);
+  assert.equal(watch(phase("signedIn")), true);
+  assert.equal(
+    watch(phase("signedIn")),
+    false,
+    "같은 로그인을 두 번 알리지 않는다",
+  );
+});
+
+test("로그인이 시작 응답보다 먼저 끝나 로그인 중을 거치지 않아도 알린다", () => {
+  const watch = createLoginWatcher();
+
+  assert.equal(watch(phase("signedOut", { busy: true })), false); // 요청을 보내는 중
+  assert.equal(watch(phase("signedIn", { email: "a@example.com" })), true);
+});
+
+test("앱을 열 때 이미 로그인되어 있거나 창으로 돌아와 다시 조회한 것은 알리지 않는다", () => {
+  const watch = createLoginWatcher();
+
+  assert.equal(watch(phase("loading")), false);
+  assert.equal(watch(phase("signedIn")), false);
+  assert.equal(watch(phase("signedIn")), false);
+});
+
+test("실패하거나 취소한 로그인 뒤의 시도는 다음 로그인과 섞이지 않는다", () => {
+  const watch = createLoginWatcher();
+  watch(phase("signedOut", { busy: true }));
+  watch(phase("signingIn"));
+  watch(phase("signedOut")); // 취소했거나 실패했다
+
+  assert.equal(
+    watch(phase("signedIn")),
+    false,
+    "시도 없이 로그인됨이 된 것(다른 곳에서 로그인)은 알리지 않는다",
+  );
+});
+
+test("로그아웃은 로그인 시도로 세지 않는다", () => {
+  const watch = createLoginWatcher();
+  watch(phase("signedIn"));
+
+  watch(phase("signedIn", { busy: true })); // 로그아웃 요청 중
+  watch(phase("signedOut"));
+
+  assert.equal(watch(phase("signedIn")), false);
 });

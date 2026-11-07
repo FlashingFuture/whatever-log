@@ -312,6 +312,7 @@ dependencies = [
     { name = "cloud" },
     { name = "common" },
     { name = "goals" },
+    { name = "goalsync" },
     { name = "recorder" },
     { name = "supervision" },
 ]
@@ -328,6 +329,7 @@ requires-dist = [
     { name = "cloud", editable = "packages/cloud" },
     { name = "common", editable = "packages/common" },
     { name = "goals", editable = "packages/goals" },
+    { name = "goalsync", editable = "packages/goalsync" },
     { name = "recorder", editable = "apps/recorder" },
     { name = "supervision", editable = "packages/supervision" },
 ]

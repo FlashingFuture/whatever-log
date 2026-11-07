@@ -174,6 +174,11 @@ export function createAccountStore(options: AccountStoreOptions): AccountStore {
   // (예: 로그인 중 조회 응답이 로그아웃 응답보다 늦게 오는 경우).
   let latest = 0;
   let disposed = false;
+  // 로그인·취소·로그아웃 요청이 오가는 동안에는 조회를 보내지 않고 끝난 뒤에 한 번 보낸다. 변경이 끝나기 전에 보낸 조회가
+  // 변경 전 상태를 읽고 더 최근 요청이 되어 변경의 응답을 밀어내면(예: 로그아웃 응답이 무시되고 로그인 상태가 계속 보임),
+  // 그 뒤에는 다시 묻는 타이머가 없어 화면이 틀린 채로 남는다.
+  let mutating = 0;
+  let refreshAfterMutation = false;
 
   function apply(event: AccountEvent): void {
     if (disposed) {
@@ -235,8 +240,34 @@ export function createAccountStore(options: AccountStoreOptions): AccountStore {
   }
 
   async function refresh(): Promise<void> {
+    if (mutating > 0) {
+      refreshAfterMutation = true;
+      return;
+    }
     // 조회가 실패하면 hub에 닿지 못한 것이다.
     await run(() => api.fetchAccount(), "", { keepStateOnFailure: false });
+  }
+
+  /** 변경 요청(로그인·취소·로그아웃)을 한다. 그동안 들어온 조회는 끝난 뒤에 한 번 보낸다. */
+  async function mutate(
+    request: () => Promise<AccountSnapshot>,
+    failureMessage: string,
+    options: { conflictMeansRefresh?: boolean } = {},
+  ): Promise<void> {
+    mutating += 1;
+    apply({ type: "requestStarted" });
+    try {
+      await run(request, failureMessage, {
+        keepStateOnFailure: true,
+        conflictMeansRefresh: options.conflictMeansRefresh,
+      });
+    } finally {
+      mutating -= 1;
+    }
+    if (mutating === 0 && refreshAfterMutation) {
+      refreshAfterMutation = false;
+      await refresh();
+    }
   }
 
   return {
@@ -246,31 +277,49 @@ export function createAccountStore(options: AccountStoreOptions): AccountStore {
       return () => listeners.delete(listener);
     },
     refresh,
-    async login(providerId) {
-      apply({ type: "requestStarted" });
-      await run(
+    login: (providerId) =>
+      mutate(
         () => api.startLogin(providerId),
         "로그인을 시작하지 못했습니다.",
-        { keepStateOnFailure: true, conflictMeansRefresh: true },
-      );
-    },
-    async cancelLogin() {
-      apply({ type: "requestStarted" });
-      await run(() => api.cancelLogin(), "로그인을 취소하지 못했습니다.", {
-        keepStateOnFailure: true,
-      });
-    },
-    async logout() {
-      apply({ type: "requestStarted" });
-      await run(() => api.logout(), "로그아웃하지 못했습니다.", {
-        keepStateOnFailure: true,
-      });
-    },
+        { conflictMeansRefresh: true },
+      ),
+    cancelLogin: () =>
+      mutate(() => api.cancelLogin(), "로그인을 취소하지 못했습니다."),
+    logout: () => mutate(() => api.logout(), "로그아웃하지 못했습니다."),
     dispose() {
       disposed = true;
       cancelPoll?.();
       cancelPoll = null;
       listeners.clear();
     },
+  };
+}
+
+/**
+ * "로그인이 방금 끝났는가"를 알려 주는 감시자(상태가 바뀔 때마다 부른다). 사용자가 로그인을 시도했고 그 결과 로그인됨이 된
+ * 순간에만 true를 한 번 돌려준다 — 앱을 열 때 이미 로그인되어 있는 경우나 창으로 돌아올 때의 조회는 세지 않는다.
+ *
+ * 시도는 "로그인 중" 단계뿐 아니라 요청이 오가는 동안(`signedOut` + `busy`)도 센다. 브라우저에서 로그인이 시작 응답보다 먼저
+ * 끝나면 `signedOut`에서 `signingIn`을 거치지 않고 바로 `signedIn`이 되는데, 그때도 확인 창을 열어야 한다.
+ */
+export function createLoginWatcher(): (state: AccountState) => boolean {
+  let attempted = false;
+  return (state) => {
+    if (
+      state.phase === "signingIn" ||
+      (state.phase === "signedOut" && state.busy)
+    ) {
+      attempted = true;
+      return false;
+    }
+    if (state.phase === "signedIn") {
+      const finished = attempted;
+      attempted = false;
+      return finished;
+    }
+    if (state.phase === "signedOut" || state.phase === "unavailable") {
+      attempted = false; // 실패·취소했거나 연결이 끊겼다
+    }
+    return false;
   };
 }

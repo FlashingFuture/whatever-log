@@ -6,8 +6,9 @@ from urllib.parse import urlencode
 
 from cloud import pkce
 from cloud.config import CloudConfig
+from cloud.errors import LoginCancelled
 from cloud.loopback import LoopbackReceiver
-from cloud.server_client import Opener, exchange_code
+from cloud.server_client import Opener, exchange_code, revoke_session
 from cloud.session import Session
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -62,5 +63,12 @@ def sign_in_with_google(
             pass
         code = receiver.wait_for_code(timeout, cancelled)
         redirect_uri = receiver.redirect_uri
+    if cancelled():  # 루프백 서버를 닫는 사이에 취소됐다면 코드를 서버에 보내지 않는다
+        raise LoginCancelled
     kwargs = {} if opener is None else {"opener": opener}
-    return exchange_code(config.server_url, code=code, code_verifier=verifier, redirect_uri=redirect_uri, **kwargs)
+    session = exchange_code(config.server_url, code=code, code_verifier=verifier, redirect_uri=redirect_uri, **kwargs)
+    if cancelled():
+        # 교환 중에 취소됐다. 받은 토큰은 저장하지 않고 서버에서 폐기를 시도한다(실패해도 취소로 끝난다).
+        revoke_session(config.server_url, session.token, **kwargs)
+        raise LoginCancelled
+    return session

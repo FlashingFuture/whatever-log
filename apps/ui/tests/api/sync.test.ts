@@ -49,13 +49,15 @@ test("적용은 체크한 key 목록만 JSON으로 보낸다", async () => {
     json({ uploaded: 1, merged: 0, downloaded: 0, kept_local: 0, errors: [] }),
   );
 
-  const result = await applySync(["local:1", "remote:r-1"]);
+  const result = await applySync(["local:1", "remote:r-1"], "a@example.com");
 
   assert.equal(calls[0].method, "POST");
   assert.ok(calls[0].url.endsWith("/api/sync/apply"));
   assert.equal(calls[0].headers["Content-Type"], "application/json");
+  // email은 확인 창을 연 계정이다 — 그 사이 계정이 바뀌면 hub가 적용하지 않는다.
   assert.deepEqual(JSON.parse(calls[0].body ?? ""), {
     accepted: ["local:1", "remote:r-1"],
+    email: "a@example.com",
   });
   assert.equal(result.uploaded, 1);
 });

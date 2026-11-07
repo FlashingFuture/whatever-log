@@ -5,6 +5,7 @@ keyring)가 깨진 환경에서 hub 전체가 뜨지 않아, 기록·집계·목
 packages/cloud/tests/test_isolation.py가 검사한다.
 """
 
+import threading
 import webbrowser
 from collections.abc import Callable, Collection
 from pathlib import Path
@@ -39,6 +40,9 @@ class _CloudBackend:
         self._cloud = cloud_module
         self._goalsync = goalsync_module
         self._account = cloud_module.Account(cloud_module.KeyringTokenStore())
+        # 로그인 스레드가 세션을 저장하는 일과 로그아웃·만료 처리가 세션을 지우는 일을 한 번에 하나만 하게 한다.
+        # 로그아웃이 지운 직후에 취소된 로그인이 뒤늦게 저장하는 일(로그아웃했는데 로그인 정보가 되살아남)을 막는다.
+        self._session_lock = threading.Lock()
 
     def providers(self) -> tuple[ProviderInfo, ...]:
         """cloud가 지원하는 로그인 방식들."""
@@ -53,29 +57,51 @@ class _CloudBackend:
         """시스템 브라우저로 로그인하고 세션을 저장한다."""
         cloud = self._cloud
         try:
-            session = cloud.sign_in(
-                provider_id, cloud.load_config(), open_browser=webbrowser.open, cancelled=cancelled
-            )
-            self._account.sign_in(session)
+            config = cloud.load_config()
+            session = cloud.sign_in(provider_id, config, open_browser=webbrowser.open, cancelled=cancelled)
+            with self._session_lock:
+                # 서버에서 토큰을 받는 사이에 취소·로그아웃이 일어났다면 저장하지 않는다. 취소는 로그아웃보다 먼저 표시되므로
+                # (AccountService.sign_out), 이 확인과 저장이 잠금 안에서 함께 일어나면 로그아웃 뒤의 저장이 없다.
+                if not cancelled():
+                    self._account.sign_in(session)
+                    return
+            # 발급된 토큰은 쓰지 않으니 서버에서 폐기를 시도한다(실패해도 취소로 끝난다).
+            self._revoke_quietly(config.server_url, session.token)
+            raise LoginProblem("로그인을 취소했습니다.", cancelled=True)
         except cloud.LoginCancelled as error:
             raise LoginProblem(str(error), cancelled=True) from None
         except cloud.LoginFailed as error:
             raise LoginProblem(str(error)) from None
         except cloud.StorageError:
             raise LoginProblem("이 PC의 안전한 저장소(Windows 자격 증명 관리자)를 쓸 수 없어 로그인 정보를 저장하지 못했습니다.") from None
+        except ValueError:  # 서버 주소 설정이 잘못됐다(환경 변수)
+            raise LoginProblem("서버 주소 설정이 올바르지 않습니다.") from None
+
+    def _revoke_quietly(self, server_url: str, token: str) -> bool:
+        """서버의 토큰 폐기를 시도한다. 어떤 실패도 예외로 내보내지 않고 False를 돌려준다."""
+        try:
+            return bool(self._cloud.revoke_session(server_url, token))
+        except Exception:
+            return False
 
     def sign_out(self) -> bool:
         """서버의 토큰 폐기를 시도하고(실패해도 계속), 이 PC의 로그인 정보를 지운다."""
         cloud = self._cloud
-        revoked = False
         session = self._account.session()
-        if session is not None:
-            revoked = cloud.revoke_session(cloud.load_config().server_url, session.token)
+        # 이 PC의 로그인 정보를 먼저 지운다(서버 설정이 잘못됐거나 서버가 죽어 있어도 로그아웃은 이 PC에서 끝나야 한다).
+        # 지우지 못했다면 서버 토큰은 폐기하지 않는다 — 이 PC에는 로그인이 남아 있는데 토큰만 죽은 상태가 되지 않게.
+        with self._session_lock:
+            try:
+                self._account.sign_out()
+            except cloud.StorageError:
+                raise LogoutProblem("이 PC의 로그인 정보를 지우지 못했습니다.") from None
+        if session is None:
+            return False
         try:
-            self._account.sign_out()
-        except cloud.StorageError:
-            raise LogoutProblem("이 PC의 로그인 정보를 지우지 못했습니다.") from None
-        return revoked
+            server_url = cloud.load_config().server_url
+        except ValueError:
+            return False
+        return self._revoke_quietly(server_url, session.token)
 
     # --- 목표 동기화 확인 창(docs/sync-client.md) ---
 
@@ -85,7 +111,19 @@ class _CloudBackend:
         session = self._account.session()
         if session is None:
             raise SyncProblem("로그인이 필요합니다.", signed_out=True)
-        return cloud.ServerApi(cloud.load_config().server_url, session.token), session.email
+        try:
+            server_url = cloud.load_config().server_url
+        except ValueError:
+            raise SyncProblem("서버 주소 설정이 올바르지 않습니다.") from None
+        return cloud.ServerApi(server_url, session.token), session.email
+
+    def _forget_rejected_session(self) -> None:
+        """서버가 거부한 세션을 이 PC에서 지운다(지우지 못해도 호출한 쪽의 오류 처리는 계속된다)."""
+        with self._session_lock:
+            try:
+                self._account.sign_out()
+            except self._cloud.StorageError:
+                pass
 
     def _guard(self, action):
         """서버 호출의 실패를 사용자용 SyncProblem으로 바꾼다(토큰·응답 내용은 담지 않는다)."""
@@ -93,6 +131,9 @@ class _CloudBackend:
         try:
             return action()
         except cloud.NotAuthorized:
+            # 서버가 이 토큰을 받지 않는다(만료 전에 폐기됐거나 서버에서 계정이 지워짐). 이 PC에 남겨 두면 로그인 상태로
+            # 보이는데 아무것도 되지 않으므로 지워서 로그인 버튼이 보이게 한다.
+            self._forget_rejected_session()
             raise SyncProblem("로그인이 만료되었습니다. 다시 로그인해 주세요.", signed_out=True) from None
         except cloud.ServerUnreachable:
             raise SyncProblem("서버에 연결하지 못했습니다. 인터넷 연결을 확인해 주세요.") from None
@@ -111,12 +152,18 @@ class _CloudBackend:
 
         return self._guard(run)
 
-    def sync_apply(self, goals_db: Path, accepted: Collection[str]) -> dict[str, Any]:
-        """체크한 항목을 적용한다(서버 상태를 다시 읽어 계획을 새로 만든 뒤, 같은 key의 항목에 적용한다)."""
+    def sync_apply(self, goals_db: Path, accepted: Collection[str], confirmed_email: str | None) -> dict[str, Any]:
+        """체크한 항목을 적용한다(서버 상태를 다시 읽어 계획을 새로 만든 뒤, 같은 key의 항목에 적용한다).
+
+        confirmed_email은 사용자가 확인 창에서 선택한 계정이다. 그 사이 로그인한 계정이 바뀌었다면(다른 계정으로 다시
+        로그인) 계정 A에서 고른 목표가 계정 B에 올라가거나 B의 목표와 합쳐질 수 있으므로 아무것도 하지 않고 다시 확인받는다.
+        """
         goalsync = self._goalsync
 
         def run():
             api, email = self._server()
+            if email != confirmed_email:
+                raise SyncProblem("로그인한 계정이 바뀌었어요. 목표 동기화를 다시 열어 확인해 주세요.")
             with _open_goals(goals_db) as store:
                 plan = goalsync.build_plan(store, api.list_goals(), email)
                 result = goalsync.apply_choices(store, api, plan, set(accepted))

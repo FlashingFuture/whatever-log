@@ -506,3 +506,72 @@ test("읽은 뒤 쓰기 전에 다른 기기가 먼저 고쳐도 덮어쓰지 �
     "다른 기기",
   );
 });
+
+test("30일이 지난 삭제 표시는 다른 목표를 지우지 않아도 목록을 읽을 때 정리된다", async () => {
+  const { call, signIn, clock, sqlite } = setup();
+  const token = await signIn();
+  const id = uuid();
+  await call("PUT", `/goals/${id}`, { token, body: GOAL });
+  await call("DELETE", `/goals/${id}`, { token });
+  assert.equal(
+    (sqlite.prepare("SELECT COUNT(*) AS n FROM goals").get() as { n: number })
+      .n,
+    1,
+  );
+
+  clock.now = new Date(clock.now.getTime() + 31 * DAY_MS);
+  const later = await signIn(); // 처음 토큰은 30일이면 만료된다
+  const listed = await call("GET", "/goals", { token: later });
+
+  assert.deepEqual(listed.json.goals, []);
+  assert.equal(
+    (sqlite.prepare("SELECT COUNT(*) AS n FROM goals").get() as { n: number })
+      .n,
+    0,
+  );
+});
+
+test("이름 비교는 파이썬 casefold처럼 접는다: Straße와 STRASSE는 같은 이름이다", async () => {
+  const { call, signIn } = setup();
+  const token = await signIn();
+  await call("PUT", `/goals/${uuid()}`, {
+    token,
+    body: { ...GOAL, name: "Straße" },
+  });
+
+  const clash = await call("PUT", `/goals/${uuid()}`, {
+    token,
+    body: { ...GOAL, name: "STRASSE" },
+  });
+
+  assert.equal(clash.status, 409);
+  assert.equal(clash.json.error.code, "duplicate_name");
+});
+
+test("서버의 이름 키는 로컬 casefold와 같은 접기를 한다", async () => {
+  const { nameKey } = await import("../src/sync/goalInput.ts");
+
+  // 값은 파이썬 "...".casefold()의 결과다(packages/goals의 name_key와 같아야 두 기기가 같은 목표를 같은 이름으로 본다).
+  for (const [name, folded] of [
+    ["Straße", "strasse"],
+    ["ΣΊΣΥΦΟΣ", "σίσυφοσ"],
+    ["ﬁle", "file"],
+    ["Ǆ", "ǆ"],
+    ["공부", "공부"],
+  ]) {
+    assert.equal(nameKey(name), folded, name);
+  }
+});
+
+test("이름 키는 파이썬 casefold와 어긋나기 쉬운 글자까지 맞춘다(İ, ǅ, ſ, 어말 시그마)", async () => {
+  const { nameKey } = await import("../src/sync/goalInput.ts");
+
+  for (const [name, folded] of [
+    ["İ", "i̇"],
+    ["ǅ", "ǆ"],
+    ["ſ", "s"],
+    ["ΟΔΟΣ", "οδοσ"],
+  ]) {
+    assert.equal(nameKey(name), folded, name);
+  }
+});

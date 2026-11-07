@@ -51,7 +51,9 @@ const ROUTES: { pattern: RegExp; route: Route }[] = [
     route: {
       methods: ["GET"],
       async handle(_request, _url, _params, caller, deps) {
-        return jsonResponse({ goals: await listGoals(deps.db, caller.userId) });
+        return jsonResponse({
+          goals: await listGoals(deps.db, caller.userId, deps.now()),
+        });
       },
     },
   },
