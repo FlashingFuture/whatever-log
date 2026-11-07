@@ -110,6 +110,19 @@ class CloudPort(Protocol):
         않고 SyncProblem을 올린다. 서버·로그인 문제도 SyncProblem."""
         ...
 
+    def list_devices(self, sync_db: Path) -> dict[str, Any]:
+        """달성도를 보낸 기기들. 각 기기에 이 PC의 기기인지(`is_this_device`)를 표시한다. 서버·로그인 문제는 SyncProblem."""
+        ...
+
+    def delete_device(self, sync_db: Path, device_id: str) -> None:
+        """기기가 보낸 달성 기록을 서버에서 지운다. 이 PC의 기기면 SyncProblem(에이전트가 곧 다시 보내므로 지워도 소용이 없다)."""
+        ...
+
+    def delete_account(self, goals_db: Path, confirmed_email: str | None) -> dict[str, Any]:
+        """서버의 계정과 데이터를 지우고, 성공한 뒤에만 이 PC의 로그인·동기화 연결을 정리한다. confirmed_email이 지금 로그인한
+        계정과 다르면 아무것도 하지 않고 SyncProblem. 서버에서 지우지 못했다면 이 PC는 건드리지 않는다."""
+        ...
+
 
 class AccountService:
     """로그인 진행 상태(없음/진행 중/실패)를 들고, 요청에 맞춰 CloudPort를 부른다.
@@ -227,6 +240,28 @@ class AccountService:
             return port.sync_apply(goals_db, accepted, email)
         finally:
             self._sync_lock.release()
+
+    def list_devices(self, sync_db: Path) -> dict[str, Any]:
+        """기기 목록(서버). 계정 기능이 없으면 AccountUnavailable."""
+        return self._get_port().list_devices(sync_db)
+
+    def delete_device(self, sync_db: Path, device_id: str) -> None:
+        """기기 삭제(서버)."""
+        self._get_port().delete_device(sync_db, device_id)
+
+    def delete_account(self, goals_db: Path, confirmed_email: str | None) -> dict[str, Any]:
+        """계정 삭제. 진행 중인 로그인은 먼저 취소하고(지운 계정으로 로그인이 마무리되지 않게), 동기화 적용과는 동시에 하지 않는다."""
+        port = self._get_port()
+        if not self._sync_lock.acquire(blocking=False):
+            raise SyncBusy
+        try:
+            self.cancel_login()
+            result = port.delete_account(goals_db, confirmed_email)
+        finally:
+            self._sync_lock.release()
+        with self._lock:
+            self._state, self._message = "idle", None
+        return result
 
     def wait_for_login(self, timeout: float) -> None:
         """진행 중인 로그인 스레드가 끝나기를 기다린다(테스트용)."""

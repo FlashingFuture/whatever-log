@@ -24,6 +24,21 @@ CREATE TABLE IF NOT EXISTS pushed (
 """
 
 
+def peek_device_id(path: Path) -> str | None:
+    """sync.db에 이미 있는 이 기기의 ID. 파일이나 값이 없으면 None — 읽기 전용으로 열어서 hub가 에이전트의 파일을 만들거나 바꾸지 않는다."""
+    try:
+        conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        row = conn.execute("SELECT device_id FROM device WHERE id = 1").fetchone()
+    except sqlite3.Error:  # 파일이 없거나 아직 스키마가 없다
+        return None
+    finally:
+        conn.close()
+    return row[0] if row else None
+
+
 class SyncState:
     """sync.db를 연다. 쓰고 나면 close()(또는 with)로 닫는다."""
 

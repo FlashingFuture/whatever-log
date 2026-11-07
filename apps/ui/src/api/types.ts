@@ -193,3 +193,33 @@ export interface SyncResult {
   kept_local: number;
   errors: { key: string; message: string }[];
 }
+
+/**
+ * 동기화가 잘 되고 있는지(`GET /api/sync/status`). off(켜지 않음) / waiting(켰지만 에이전트가 아직 한 번도 안 돎) / ok / error(마지막
+ * 시도가 실패, result가 종류) / stale(에이전트가 한동안 돌지 않음). 목표 이름·프로세스는 없다 — 개수와 종류와 시각뿐이다.
+ */
+export interface SyncStatus {
+  enabled: boolean;
+  state: "off" | "waiting" | "ok" | "error" | "stale";
+  /** 마지막 시도의 결과 종류(ok, signed_out, not_enabled, account_changed, unreachable, not_authorized, server_error, internal). */
+  result: string | null;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  /** 이번 주기에 올리지 못한 항목 수. */
+  problems: number;
+}
+
+/** 달성도를 보낸 기기 하나. 이름은 없다 — 무작위 기기 ID와 마지막으로 보낸 시각, 서버에 있는 줄 수뿐이다. */
+export interface DeviceRow {
+  device_id: string;
+  last_sent_at: string;
+  rows: number;
+  is_this_device: boolean;
+}
+
+/** 계정 삭제 결과: 서버에서 지웠고, 이 PC의 정리가 어디까지 됐는지. */
+export interface DeleteAccountResult extends AccountSnapshot {
+  deleted_on_server: boolean;
+  signed_out: boolean;
+  connections_cleared: boolean;
+}

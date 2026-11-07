@@ -177,6 +177,72 @@ class _CloudBackend:
 
         return self._guard(run)
 
+    # --- 기기 목록과 계정 삭제 ---
+
+    def list_devices(self, sync_db: Path) -> dict[str, Any]:
+        """서버에 달성도를 보낸 기기들. 이름은 없고 기기 ID·마지막으로 보낸 시각·줄 수뿐이며, 이 PC의 기기는 에이전트의 기기 ID와 대조해 표시한다."""
+        goalsync = self._goalsync
+
+        def run():
+            api, _ = self._server()
+            mine = goalsync.peek_device_id(sync_db)
+            return {
+                "devices": [
+                    {
+                        "device_id": device.device_id,
+                        "last_sent_at": device.last_sent_at,
+                        "rows": device.rows,
+                        "is_this_device": device.device_id == mine,
+                    }
+                    for device in api.list_devices()
+                ]
+            }
+
+        return self._guard(run)
+
+    def delete_device(self, sync_db: Path, device_id: str) -> None:
+        """기기가 보낸 달성 기록을 서버에서 지운다. 이 PC의 기기는 지우지 않는다(에이전트가 다음 주기에 다시 보낸다)."""
+        goalsync = self._goalsync
+
+        def run():
+            api, _ = self._server()
+            if device_id == goalsync.peek_device_id(sync_db):
+                raise SyncProblem("이 기기의 기록은 지울 수 없어요. 동기화 에이전트가 다음 주기에 다시 보내요. 동기화를 끄려면 로그아웃해 주세요.")
+            api.delete_device(device_id)
+
+        self._guard(run)
+
+    def delete_account(self, goals_db: Path, confirmed_email: str | None) -> dict[str, Any]:
+        """서버의 계정과 모든 데이터를 지운다. 순서가 규칙이다: **서버 삭제가 성공한 뒤에만** 이 PC를 정리한다.
+
+        서버 삭제가 실패하면 이 PC의 로그인·동기화 연결은 그대로 둔다(계정은 남아 있는데 이 PC만 로그아웃되어 지울 방법을 잃지 않게).
+        성공한 뒤에는 이 PC의 로그인 정보를 지우고 목표의 서버 연결을 끊는다 — 목표와 프로세스 연결 자체는 이 PC에 그대로 남는다.
+        확인한 계정(confirmed_email)이 지금 로그인한 계정과 다르면 아무것도 하지 않는다.
+        """
+        cloud = self._cloud
+
+        def run():
+            api, email = self._server()
+            if email != confirmed_email:
+                raise SyncProblem("로그인한 계정이 바뀌었어요. 계정 삭제를 다시 열어 확인해 주세요.")
+            api.delete_account()
+
+        self._guard(run)
+        # 여기부터는 서버에서 이미 지워졌다. 이 PC의 정리가 일부 실패해도 서버 삭제를 되돌릴 수 없으니, 무엇이 남았는지 알린다.
+        signed_out = True
+        with self._session_lock:
+            try:
+                self._account.sign_out()
+            except cloud.StorageError:
+                signed_out = False
+        connections_cleared = True
+        try:
+            with _open_goals(goals_db) as store:
+                store.reset_sync()
+        except Exception:
+            connections_cleared = False
+        return {"deleted_on_server": True, "signed_out": signed_out, "connections_cleared": connections_cleared}
+
 
 def _open_goals(path: Path):
     """goals.db를 연다(함수 안에서 import — 맨 위에서 하면 이 파일이 goals까지 끌어온다는 오해를 부르지만, goals는 로컬 기능이라 무방하다)."""

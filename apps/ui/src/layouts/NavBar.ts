@@ -7,12 +7,18 @@ export const APP_NAME = "whatever.log";
 
 export interface NavBar {
   element: HTMLElement;
+  /** 동기화 상태 칩을 지금 다시 읽는다. */
+  refreshSyncStatus: () => Promise<void>;
   destroy: () => void;
 }
 
 export interface NavBarOptions {
-  /** 로그인한 상태의 "목표 동기화" 버튼을 눌렀다. */
+  /** 계정 메뉴의 "목표 동기화"를 눌렀다. */
   onOpenSync?: () => void;
+  /** 계정 메뉴의 "기기 관리"를 눌렀다. */
+  onOpenDevices?: () => void;
+  /** 계정 메뉴의 "계정 삭제"를 눌렀다(지울 계정의 이메일, 모르면 null). */
+  onDeleteAccount?: (email: string | null) => void;
 }
 
 /**
@@ -30,8 +36,12 @@ export function createNavBar(
   brand.className = styles.brand;
   brand.textContent = APP_NAME;
 
-  const account = createAccountMenu(store, { onOpenSync: options.onOpenSync });
+  const account = createAccountMenu(store, options);
   bar.append(brand, account.element);
 
-  return { element: bar, destroy: account.destroy };
+  return {
+    element: bar,
+    refreshSyncStatus: account.refreshSyncStatus,
+    destroy: account.destroy,
+  };
 }

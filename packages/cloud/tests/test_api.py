@@ -237,3 +237,46 @@ def test_get_progress_parses_days_and_sends_the_range(serve) -> None:
 
     assert (day.minutes, day.percent, day.devices) == (95, 79, 2)
     assert server.requests[0]["path"] == "/progress?from=2026-11-01&to=2026-11-06"
+
+
+def test_list_devices_parses_ids_times_and_row_counts_and_nothing_else(serve) -> None:
+    from cloud import DeviceInfo
+
+    server = serve(
+        200,
+        {"devices": [{"device_id": "d-1", "last_sent_at": "2026-11-06T03:01:00.000Z", "rows": 4}]},
+    )
+
+    assert ServerApi(server.url, TOKEN).list_devices() == [DeviceInfo("d-1", "2026-11-06T03:01:00.000Z", 4)]
+    assert server.requests[0]["method"] == "GET" and server.requests[0]["path"] == "/devices"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [{"devices": [{"device_id": "d", "last_sent_at": "t", "rows": "4"}]}, {"devices": [{"device_id": "d"}]}, {"devices": 5}, {}],
+)
+def test_a_device_list_with_the_wrong_shape_is_rejected(serve, body) -> None:
+    with pytest.raises(ServerError) as raised:
+        ServerApi(serve(200, body).url, TOKEN).list_devices()
+
+    assert raised.value.code == "bad_response"
+
+
+def test_delete_device_and_delete_account_use_the_right_verbs_and_paths(serve) -> None:
+    server = serve(204)
+    api = ServerApi(server.url, TOKEN)
+
+    api.delete_device("d-1")
+    api.delete_account()
+
+    assert [(r["method"], r["path"]) for r in server.requests] == [("DELETE", "/devices/d-1"), ("DELETE", "/account")]
+    assert all(r["auth"] == f"Bearer {TOKEN}" for r in server.requests)
+
+
+def test_delete_account_failures_are_raised_not_swallowed(serve) -> None:
+    with pytest.raises(NotAuthorized):
+        ServerApi(serve(401, {"error": {"code": "invalid_token", "message": "x"}}).url, TOKEN).delete_account()
+    with pytest.raises(ServerError):
+        ServerApi(serve(500, {"error": {"code": "internal_error", "message": "x"}}).url, TOKEN).delete_account()
+    with pytest.raises(ServerUnreachable):
+        ServerApi("http://127.0.0.1:9", TOKEN).delete_account()

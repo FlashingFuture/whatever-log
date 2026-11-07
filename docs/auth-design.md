@@ -134,6 +134,10 @@
 | `POST /api/account/logout` | **이 PC의 로그인 정보를 먼저 지우고**(서버 주소 설정이 잘못됐거나 서버가 죽어 있어도 로그아웃은 이 PC에서 끝난다), 그 뒤 서버의 토큰 폐기를 시도한다(`POST /auth/logout`, 5초 제한, 어떤 실패도 무시). 응답에 `revoked_on_server`. 이 PC에서 지우지 못하면 500이고 이때는 서버 토큰도 폐기하지 않는다 |
 | `GET /api/sync/plan` | 로그인 직후 "무엇을 서버에 올릴까요?" 확인 창의 내용: `{email, enabled, items: [{key, kind, name, daily_target_minutes, weekdays, local_*, declined}]}`. hub가 서버에서 목록을 받아 이 PC의 목표와 견준다. 올라가는 값만 있고 프로세스·사이트·내부 id·토큰은 없다. 로그인 전·만료는 409, 서버에 닿지 못하면 503 |
 | `POST /api/sync/apply` | `{"accepted": [key…], "email"}`(`accepted`는 최대 100개, `email`은 확인 창의 계획에 있던 계정). 체크한 항목만 서버에 올리고·합치고·가져온다. 체크하지 않은 이 PC 목표는 `local_only`가 된다. **지금 로그인한 계정이 `email`과 다르면 서버를 부르지 않고 거절한다.** 응답 `{uploaded, merged, downloaded, kept_local, errors}`. 동시에 두 번 적용하면 409 |
+| `GET /api/sync/status` | 동기화가 잘 되고 있는지: `{enabled, state, result, last_attempt_at, last_success_at, problems}`. `state`는 `off`·`waiting`·`ok`·`error`·`stale`. 이 PC의 `goals.db`만 읽고 서버를 부르지 않으며 로그인하지 않아도 답한다 |
+| `GET /api/devices` | 달성도를 보낸 기기들(서버에서 받는다). 이 PC의 기기에는 `is_this_device`가 켜진다. 이름은 없다 |
+| `DELETE /api/devices/<id>` | 그 기기가 보낸 달성 기록을 서버에서 지운다. 이 PC의 기기는 거절한다(에이전트가 다시 보낸다) |
+| `POST /api/account/delete` | `{"email"}`(사용자가 확인한 계정). **서버의 계정과 모든 데이터를 지운다(되돌릴 수 없다).** 지금 로그인한 계정과 다르면 거절한다. 서버 삭제에 성공한 뒤에만 이 PC의 로그인 정보를 지우고 목표의 서버 연결을 끊는다. 응답 `{deleted_on_server, signed_out, connections_cleared}` |
 | `POST /api/links/open` | `{"link": "privacy"}`. 고정된 목록의 바깥 링크만 시스템 브라우저로 연다(임의 주소는 400). 브라우저가 열리지 못하면 503을 돌려주어 화면이 직접 열기를 시도하게 한다 |
 
 - 쓰기 요청은 기존 목표 API와 같은 방어를 적용한다: Host가 로컬이어야 하고, Origin이 허용된 UI와 **정확히** 같아야
@@ -153,7 +157,7 @@
   로그인 방식 목록, 자격 증명 관리자 저장소, 명령줄)와 격리 테스트, `apps/server`의 `POST /auth/google`(배포됨).
   토큰을 받아 쓰는 서버 API(목표·달성도·기기·`POST /auth/logout`·`DELETE /account`)는 서버 코드와 테스트가
   있다(`docs/sync-design.md`, 배포 전). hub의 계정 API와 화면의 상단 막대(로그인·로그아웃 버튼, 자세히 알아보기).
-- 없는 것: 데스크톱 쪽 동기화 클라이언트(목표·달성도를 서버로 보내는 것), 화면의 계정 삭제 버튼과 기기 목록, 요청
+- 없는 것: desktop이 동기화 에이전트를 함께 띄우는 것, 요청
   횟수 제한, 전송 에이전트, 이메일 발송. 각각 만들 때 이 문서를 먼저 고친다.
 
 ## 확인해야 할 것

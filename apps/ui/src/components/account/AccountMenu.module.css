@@ -77,3 +77,20 @@
   outline: var(--focus-ring);
   outline-offset: 2px;
 }
+
+/* 계정 메뉴 팝업: 세로로 쌓인 버튼들 */
+.menuPanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 10rem;
+}
+.menuPanel > button {
+  text-align: left;
+}
+.dangerItem {
+  color: var(--color-danger);
+}
+.dangerItem:hover:not(:disabled) {
+  background: var(--color-danger-bg);
+}

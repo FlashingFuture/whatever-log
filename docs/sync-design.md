@@ -41,6 +41,7 @@
 | `DELETE /goals/{id}` | 목표 삭제(그 목표의 달성 줄도 삭제). 이미 삭제됐으면 204 |
 | `PUT /progress` | `{device_id, entries: [{goal_id, day, minutes, target_minutes}]}` 최대 50개를 이 기기의 줄로 덮어쓴다. 없는(삭제된) 목표는 `ignored_goal_ids`로 돌려준다. 기기는 사용자당 10대까지 |
 | `GET /progress?from=&to=` | 날짜 구간(최대 400일)의 목표·날짜별 합산: `{goal_id, day, minutes, target_minutes, percent, devices}` |
+| `GET /devices` | 달성도를 보낸 기기들: `{device_id, last_sent_at, rows}`(최근에 보낸 순). **이름은 없다** — 이름을 받으면 PC 이름 같은 새 개인 정보가 서버에 생긴다 |
 | `DELETE /devices/{device_id}` | 그 기기가 보낸 달성 줄을 모두 삭제 |
 | `POST /auth/logout` | 이 토큰을 서버에서 폐기(204) |
 | `DELETE /account` | 사용자와 목표·달성·토큰을 모두 삭제(204). 되돌릴 수 없다 |

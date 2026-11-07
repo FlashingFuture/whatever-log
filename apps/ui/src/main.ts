@@ -1,4 +1,6 @@
 import { cancelLogin, fetchAccount, logout, startLogin } from "./api";
+import { createDeleteAccountDialog } from "./components/account/DeleteAccountDialog";
+import { createDevicesDialog } from "./components/account/DevicesDialog";
 import { createSyncDialog } from "./components/sync/SyncDialog";
 import { mountLayout } from "./layouts/Layouts";
 import { createNavBar } from "./layouts/NavBar";
@@ -44,6 +46,22 @@ if (app) {
   const syncDialog = createSyncDialog({
     onGoalsChanged: () => renderRoute("initial"),
     onSignedOut: () => void account.refresh(),
+    // 동기화를 막 켰거나 적용했다 — 목표 만드는 화면의 안내와 상단 막대의 상태 칩이 바로 따라오게 한다.
+    onApplied: () => {
+      void account.refresh();
+      void navBar.refreshSyncStatus();
+    },
+  });
+  const devicesDialog = createDevicesDialog({
+    onSignedOut: () => void account.refresh(),
+  });
+  const deleteAccountDialog = createDeleteAccountDialog({
+    // 서버에서 계정을 지웠다 — 로그인 상태가 바뀌었을 테니 다시 묻고, 상태 칩도 정리한다.
+    onDeleted: () => {
+      void account.refresh();
+      void navBar.refreshSyncStatus();
+    },
+    onSignedOut: () => void account.refresh(),
   });
   // 사용자가 로그인을 시도해서 로그인됨이 된 순간에만 자동으로 연다(앱을 다시 열 때마다 묻지 않는다).
   // 로그인이 시작 응답보다 먼저 끝나 "로그인 중"을 거치지 않는 경우도 포함한다.
@@ -55,6 +73,8 @@ if (app) {
   });
   const navBar = createNavBar(account, {
     onOpenSync: () => void syncDialog.open({ afterLogin: false }),
+    onOpenDevices: () => void devicesDialog.open(),
+    onDeleteAccount: (email) => deleteAccountDialog.open(email),
   });
   // 상단 막대는 한 번만 그리고, 화면 틀(레이아웃)은 그 아래 자리(stage)에 갈아 끼운다.
   const stage = document.createElement("div");
