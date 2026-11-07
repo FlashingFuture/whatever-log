@@ -56,6 +56,15 @@ class RemoteGoal:
     weekdays: frozenset[int] = frozenset()
 
 
+@dataclass(frozen=True)
+class DeviceInfo:
+    """달성도를 보낸 기기 하나. 이름은 없다 — 기기 ID(무작위 UUID)와 마지막으로 보낸 시각, 서버에 있는 줄 수뿐이다."""
+
+    device_id: str
+    last_sent_at: str
+    rows: int
+
+
 class GoalConflict(ServerError):
     """목표를 보냈지만 서버가 받지 않았다(409). code는 conflict·goal_deleted·duplicate_name·too_many_goals이고,
     current는 서버에 있는 현재 값(없을 수 있다)이다."""
@@ -215,6 +224,25 @@ class ServerApi:
                 return False
             raise
         return True
+
+    def list_devices(self) -> list[DeviceInfo]:
+        """달성도를 보낸 기기들(최근에 보낸 순)."""
+        _, payload = self._call("GET", "/devices")
+        try:
+            return [
+                DeviceInfo(str(item["device_id"]), str(item["last_sent_at"]), _int(item["rows"]))
+                for item in payload["devices"]
+            ]
+        except (KeyError, ValueError, TypeError):
+            raise ServerError(0, "bad_response", "서버 응답을 이해하지 못했습니다.") from None
+
+    def delete_device(self, device_id: str) -> None:
+        """그 기기가 보낸 달성 줄을 서버에서 모두 지운다(이미 없어도 성공)."""
+        self._call("DELETE", f"/devices/{device_id}")
+
+    def delete_account(self) -> None:
+        """계정과 서버의 모든 데이터(목표·달성도·토큰)를 지운다. 되돌릴 수 없다. 성공하면 이 토큰도 더 쓸 수 없다."""
+        self._call("DELETE", "/account")
 
     def put_progress(self, device_id: str, entries: Sequence[ProgressEntry]) -> ProgressResult:
         """이 기기의 (목표, 날짜) 달성 줄을 덮어쓴다(서버는 한 번에 50줄까지 받는다)."""

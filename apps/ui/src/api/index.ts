@@ -22,10 +22,19 @@ export {
   updateGoal,
 } from "./goals";
 export { iconUrl, siteIconUrl } from "./icons";
-export { applySync, fetchSyncPlan } from "./sync";
+export {
+  applySync,
+  deleteAccount,
+  deleteDevice,
+  fetchDevices,
+  fetchSyncPlan,
+  fetchSyncStatus,
+} from "./sync";
 export type {
   AccountSnapshot,
   BucketUsage,
+  DeleteAccountResult,
+  DeviceRow,
   ExternalLink,
   FieldError,
   Goal,
@@ -46,6 +55,7 @@ export type {
   SyncItem,
   SyncPlan,
   SyncResult,
+  SyncStatus,
   TopTarget,
 } from "./types";
 export { fetchProcessUsage, fetchSiteUsage, fetchUsage } from "./usage";

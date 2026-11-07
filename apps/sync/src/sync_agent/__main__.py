@@ -35,6 +35,7 @@ from cloud import (
 )
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
 from goals import GoalStore, SchemaVersionError
+from goals import sync_status as status
 from goalsync import SyncReport, SyncState, sync_once
 from recorder.__main__ import DEFAULT_DB_PATH as DEFAULT_RECORDER_DB
 from supervision.lock import AlreadyRunningError, acquire_lock
@@ -86,6 +87,26 @@ def run_cycle(
             email=session.email,
             today=today(),
         )
+
+
+def _result_of(report: SyncReport | None) -> str:
+    """한 주기의 결과를 상태 종류로(건너뜀도 오류는 아니다)."""
+    if report is None:
+        return status.RESULT_SIGNED_OUT
+    if report.skipped == "not_enabled":
+        return status.RESULT_NOT_ENABLED
+    if report.skipped == "account_changed":
+        return status.RESULT_ACCOUNT_CHANGED
+    return status.RESULT_OK
+
+
+def record_status(goals_db: Path, *, result: str, problems: int, interval: float) -> None:
+    """화면이 보여 줄 상태를 적는다. 상태를 못 적어도 동기화를 멈추지 않는다(상태는 알림일 뿐이다)."""
+    try:
+        with GoalStore(goals_db) as store:
+            status.record(store, result=result, problems=problems, interval=interval)
+    except Exception:  # DB가 잠겼거나 더 새 버전이어도 에이전트는 계속 돈다
+        logger.warning("동기화 상태를 기록하지 못했습니다.")
 
 
 def _describe(report: SyncReport) -> str:
@@ -140,22 +161,32 @@ def main(argv: list[str] | None = None, *, sleep: Callable[[float], None] = time
                 )
                 failures = 0
                 logger.info("동기화: %s", "로그인되어 있지 않아 건너뜀" if report is None else _describe(report))
+                record_status(
+                    args.goals_db,
+                    result=_result_of(report),
+                    problems=0 if report is None else len(report.problems),
+                    interval=args.interval,
+                )
                 # 문제의 문장에는 목표 이름이 들어 있을 수 있다("'공부': 서버에 같은 이름의…"). 로그에는 건수만 남긴다(위 요약).
             except ServerUnreachable:
                 failures += 1
                 logger.warning("서버에 닿지 못했습니다. 다음 주기에 다시 시도합니다(연속 %d회).", failures)
+                record_status(args.goals_db, result=status.RESULT_UNREACHABLE, problems=0, interval=args.interval)
             except NotAuthorized:
                 failures += 1
                 logger.warning("로그인이 만료되었거나 취소되었습니다. 다시 로그인해 주세요.")
+                record_status(args.goals_db, result=status.RESULT_NOT_AUTHORIZED, problems=0, interval=args.interval)
             except ServerError as error:
                 failures += 1
                 logger.error("서버 오류(%s, %s): %s", error.status, error.code, error.message)
+                record_status(args.goals_db, result=status.RESULT_SERVER_ERROR, problems=0, interval=args.interval)
             except SchemaVersionError as error:
                 logger.error("%s", error)
                 return 1  # 더 새 프로그램이 만든 DB — 다시 시도해도 같다
             except Exception:  # 한 주기의 예상 못 한 오류가 에이전트를 죽이지 않게(다음 주기에 다시)
                 failures += 1
                 logger.exception("동기화 중 예상하지 못한 오류가 났습니다.")
+                record_status(args.goals_db, result=status.RESULT_INTERNAL, problems=0, interval=args.interval)
             if args.once:
                 return 0 if failures == 0 else 1
             # 연속 실패가 늘수록 간격을 두 배씩 늘린다(서버가 죽어 있을 때 계속 두드리지 않게).

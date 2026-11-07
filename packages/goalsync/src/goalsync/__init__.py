@@ -22,7 +22,7 @@ from goalsync.plan import (
     ensure_account,
 )
 from goalsync.runner import SyncReport, sync_once
-from goalsync.state import SyncState
+from goalsync.state import SyncState, peek_device_id
 
 __all__ = [
     "KIND_DOWNLOAD",
@@ -37,5 +37,6 @@ __all__ = [
     "apply_choices",
     "build_plan",
     "ensure_account",
+    "peek_device_id",
     "sync_once",
 ]

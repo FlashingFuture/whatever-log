@@ -35,6 +35,7 @@ from common import api_error
 from chromium.browsers import BROWSERS
 from chromium.snapshot import remove_stale_work_dirs
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
+from goals import sync_status
 from goals import (
     META_SYNC_ENABLED,
     GoalNotFoundError,
@@ -80,6 +81,8 @@ DEFAULT_LOG_PATH = _APP_DIR / "hub.log"
 DEFAULT_ICON_CACHE_DIR = _APP_DIR / "icon-cache"
 # 사용자의 목표 설정. recorder.db와 파일을 나눈다(쓰기 주체가 섞이지 않게 — docs/goals-design.md).
 DEFAULT_GOALS_DB_PATH = _APP_DIR / "goals.db"
+# 동기화 에이전트(apps/sync)의 자기 상태. 이 PC의 기기 ID를 알아보려고 읽기 전용으로만 연다.
+DEFAULT_SYNC_DB_PATH = _APP_DIR.parent / "sync" / "sync.db"
 
 logger = logging.getLogger("hub")
 
@@ -209,6 +212,7 @@ def _usage_edges(query: dict[str, list[str]]) -> list[datetime]:
 MAX_SYNC_CHOICES = 100
 MAX_SYNC_KEY_LENGTH = 100
 MAX_EMAIL_LENGTH = 320
+_DEVICE_PATH = re.compile(r"/api/devices/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})")
 _PROCESS_PATH_PREFIX = "/api/processes/"
 _GOAL_PATH = re.compile(r"/api/goals/(\d{1,9})")
 _PROCESS_USAGE_SUFFIX = "/usage"
@@ -236,6 +240,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     db_path: Path = DEFAULT_DB_PATH
     goals_db_path: Path = DEFAULT_GOALS_DB_PATH
+    sync_db_path: Path = DEFAULT_SYNC_DB_PATH
     # 읽기·쓰기를 허용하는 UI의 origin(정확히 일치). main()이 --allowed-origin으로 바꾼다.
     allowed_origins: frozenset[str] = frozenset(DEFAULT_ALLOWED_ORIGINS)
     icon_store: IconStore = IconStore(DEFAULT_ICON_CACHE_DIR)
@@ -325,6 +330,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._open_link()
         elif path == "/api/sync/apply":
             self._apply_sync()
+        elif path == "/api/account/delete":
+            self._delete_account()
         else:
             self._send_json(404, api_error.error_body(api_error.NOT_FOUND, "not found"))
 
@@ -348,6 +355,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._delete_goal(int(match.group(1)))
         elif path == "/api/account/login":
             self._cancel_login()
+        elif _DEVICE_PATH.fullmatch(path):
+            self._delete_device(_DEVICE_PATH.fullmatch(path).group(1))
         else:
             self._send_json(404, api_error.error_body(api_error.NOT_FOUND, "not found"))
 
@@ -369,6 +378,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_account(200)
         elif parsed.path == "/api/sync/plan":
             self._get_sync_plan()
+        elif parsed.path == "/api/sync/status":
+            self._get_sync_status()
+        elif parsed.path == "/api/devices":
+            self._get_devices()
         elif parsed.path == "/api/goals/progress":
             self._get_goal_progress(parsed.query)
         elif parsed.path == "/api/processes":
@@ -605,6 +618,68 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_unavailable("목표 DB", error)
             return
         self._send_json(200, result)
+
+    def _get_sync_status(self) -> None:
+        """GET /api/sync/status — 동기화가 잘 되고 있는지(꺼짐/기다리는 중/정상/오류/에이전트 멈춤). 이 PC의 goals.db만 읽고 서버를 부르지 않는다."""
+        try:
+            with GoalStore(self.goals_db_path) as store:
+                enabled = store.get_meta(META_SYNC_ENABLED) == "1"
+                record = sync_status.read_record(store)
+        except (sqlite3.Error, SchemaVersionError) as error:
+            self._send_unavailable("목표 DB", error)
+            return
+        self._send_json(200, sync_status.describe(record, enabled=enabled, now=datetime.now(UTC)))
+
+    def _get_devices(self) -> None:
+        """GET /api/devices — 달성도를 보낸 기기들(서버에서 받는다). 이 PC의 기기에는 `is_this_device`가 켜진다."""
+        try:
+            result = self.account.list_devices(self.sync_db_path)
+        except AccountUnavailable:
+            self._send_account_unavailable()
+            return
+        except SyncProblem as problem:
+            self._send_sync_problem(problem)
+            return
+        self._send_json(200, result)
+
+    def _delete_device(self, device_id: str) -> None:
+        """DELETE /api/devices/<id> — 그 기기가 보낸 달성 기록을 서버에서 지운다(이 PC의 기기는 거절)."""
+        if self._check_account_write(json_body=False) is None:
+            return
+        try:
+            self.account.delete_device(self.sync_db_path, device_id)
+        except AccountUnavailable:
+            self._send_account_unavailable()
+            return
+        except SyncProblem as problem:
+            self._send_sync_problem(problem)
+            return
+        self._send_empty(204)
+
+    def _delete_account(self) -> None:
+        """POST /api/account/delete {"email"} — 서버의 계정과 모든 데이터를 지운다(되돌릴 수 없다). email은 사용자가 확인한 계정이고,
+        지금 로그인한 계정과 다르면 거절한다. 서버 삭제에 성공한 뒤에만 이 PC의 로그인·동기화 연결을 정리한다."""
+        body = self._check_account_write(json_body=True)
+        if body is None:
+            return
+        email = body.get("email")
+        if set(body) != {"email"} or not (email is None or (isinstance(email, str) and len(email) <= MAX_EMAIL_LENGTH)):
+            self._send_json(
+                400, api_error.error_body(api_error.INVALID_REQUEST, "email 칸 하나만 보내야 합니다.")
+            )
+            return
+        try:
+            result = self.account.delete_account(self.goals_db_path, email)
+        except AccountUnavailable:
+            self._send_account_unavailable()
+            return
+        except SyncBusy:
+            self._send_json(409, api_error.error_body(api_error.INVALID_REQUEST, "다른 동기화 작업을 처리하는 중입니다."))
+            return
+        except SyncProblem as problem:
+            self._send_sync_problem(problem)
+            return
+        self._send_account(200, result)
 
     def _send_account_unavailable(self) -> None:
         """계정 기능을 쓸 수 없는 환경(cloud 없음)의 요청에 503."""
@@ -1006,6 +1081,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--db-path", type=Path, default=DEFAULT_DB_PATH)
     parser.add_argument("--goals-db-path", type=Path, default=DEFAULT_GOALS_DB_PATH)
+    parser.add_argument("--sync-db-path", type=Path, default=DEFAULT_SYNC_DB_PATH, help="동기화 에이전트의 sync.db(이 PC의 기기 ID를 읽기 전용으로 확인한다)")
     parser.add_argument(
         "--allowed-origin",
         action="append",
@@ -1028,6 +1104,7 @@ def main() -> None:
         remove_stale_work_dirs(WORK_DIR_PREFIX)
         _Handler.db_path = args.db_path
         _Handler.goals_db_path = args.goals_db_path
+        _Handler.sync_db_path = args.sync_db_path
         _Handler.allowed_origins = frozenset(args.allowed_origin or DEFAULT_ALLOWED_ORIGINS)
         logger.info("포트 %d에서 집계 API를 시작합니다. DB: %s", args.port, args.db_path)
         server = ThreadingHTTPServer(("127.0.0.1", args.port), _Handler)

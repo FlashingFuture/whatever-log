@@ -277,3 +277,102 @@ def test_a_name_clash_with_the_server_is_logged_as_a_count_never_with_the_goal_n
     assert "비밀목표" not in caplog.text  # 서버의 오류 문장·문제 문장 어디에도 이름이 새지 않는다
     assert "문제 1건" in caplog.text
     assert "비밀목표" not in (tmp_path / "sync.log").read_text(encoding="utf-8")
+
+
+# --- 화면이 읽을 동기화 상태 ---
+
+
+def _status(goals_db):
+    from goals.sync_status import read_record
+
+    with GoalStore(goals_db) as store:
+        return read_record(store)
+
+
+def test_each_cycle_records_its_result_for_the_screen(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("WHATEVER_LOG_TOKEN", "env-token")
+    goals_db = tmp_path / "goals.db"
+    _enable(goals_db)
+
+    assert agent.main(_args(tmp_path, "--once", "--interval", "60")) == 0
+
+    record = _status(goals_db)
+    assert (record.result, record.problems, record.interval) == ("ok", 0, 60.0)
+    assert record.last_success_at == record.at
+
+
+def test_a_cycle_that_cannot_reach_the_server_records_the_kind_and_keeps_the_last_success(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("WHATEVER_LOG_TOKEN", "env-token")
+    goals_db = tmp_path / "goals.db"
+    _enable(goals_db)
+    agent.main(_args(tmp_path, "--once"))
+    first = _status(goals_db)
+
+    FakeApi.fail = ServerUnreachable()
+    assert agent.main(_args(tmp_path, "--once")) == 1
+
+    record = _status(goals_db)
+    assert record.result == "unreachable" and record.last_success_at == first.last_success_at
+
+
+@pytest.mark.parametrize(
+    ("error", "kind"),
+    [
+        (NotAuthorized(), "not_authorized"),
+        (ServerError(500, "internal_error", "서버 오류"), "server_error"),
+        (RuntimeError("boom"), "internal"),
+    ],
+)
+def test_other_failures_are_recorded_by_kind(tmp_path, monkeypatch, error, kind) -> None:
+    monkeypatch.setenv("WHATEVER_LOG_TOKEN", "env-token")
+    goals_db = tmp_path / "goals.db"
+    _enable(goals_db)
+    FakeApi.fail = error
+
+    agent.main(_args(tmp_path, "--once"))
+
+    assert _status(goals_db).result == kind
+
+
+def test_a_signed_out_or_not_enabled_cycle_is_recorded_as_a_skip_not_an_error(tmp_path, monkeypatch) -> None:
+    goals_db = tmp_path / "goals.db"
+    agent.main(_args(tmp_path, "--once"))  # 토큰 없음
+    assert _status(goals_db).result == "signed_out"
+
+    monkeypatch.setenv("WHATEVER_LOG_TOKEN", "env-token")
+    agent.main(_args(tmp_path, "--once"))  # 로그인했지만 동기화를 켜지 않음
+    assert _status(goals_db).result == "not_enabled"
+
+
+def test_the_recorded_status_never_contains_names_or_tokens(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("WHATEVER_LOG_TOKEN", "super-secret-token")
+    goals_db = tmp_path / "goals.db"
+    with GoalStore(goals_db) as goals:
+        goal = goals.create(name="비밀목표", daily_target_minutes=60, weekdays=[0], processes=["Secret.exe"])
+        goals.set_sync_state(goal.id, "sync")
+    _enable(goals_db)
+    FakeApi.duplicate_name = True
+
+    agent.main(_args(tmp_path, "--once"))
+
+    with GoalStore(goals_db) as store:
+        raw = store.get_meta("sync_status")
+    assert raw is not None and "비밀목표" not in raw and "Secret.exe" not in raw and "super-secret-token" not in raw
+    assert _status(goals_db).problems == 1  # 건수만 남는다
+
+
+def test_a_status_that_cannot_be_written_does_not_stop_the_sync(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("WHATEVER_LOG_TOKEN", "env-token")
+    goals_db = tmp_path / "goals.db"
+    with GoalStore(goals_db) as goals:
+        goal = goals.create(name="공부", daily_target_minutes=60, weekdays=[0], processes=[])
+        goals.set_sync_state(goal.id, "sync")
+    _enable(goals_db)
+
+    def broken(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(agent.status, "record", broken)
+
+    assert agent.main(_args(tmp_path, "--once")) == 0
+    assert "put_goal" in FakeApi.instances[0].calls  # 상태는 못 적었어도 동기화는 됐다

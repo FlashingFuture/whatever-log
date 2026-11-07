@@ -259,3 +259,53 @@ def test_the_agent_entry_point_syncs_with_the_token_from_the_environment(tmp_pat
     assert [g.name for g in api.list_goals() if g.name == name] == [name]
     with GoalStore(goals_db) as store:
         assert next(iter(store.sync_links())).remote_id is not None
+
+
+def test_devices_are_listed_by_id_and_deleted_on_the_real_server(tmp_path, api, suffix) -> None:
+    name = f"e2e-기기-{suffix}"
+    with _store(tmp_path, "a") as store, SyncState(tmp_path / "a-sync.db") as state:
+        store.create(**_fields(name, processes=["Code.exe"]))
+        plan = build_plan(store, api.list_goals(), EMAIL)
+        apply_choices(store, api, plan, [item.key for item in plan.items if item.name == name])
+        sync_once(store, state, api, _recorder(tmp_path / "r.db", "Code.exe", 40), email=EMAIL, today=TODAY)
+        mine = state.device_id()
+
+    devices = {device.device_id: device for device in api.list_devices()}
+
+    assert mine in devices and devices[mine].rows >= 1
+    assert devices[mine].last_sent_at.endswith("Z")
+    api.delete_device(mine)
+    assert mine not in {device.device_id for device in api.list_devices()}
+    api.delete_device(mine)  # 이미 없어도 성공이다
+
+
+OTHER_TOKEN = os.environ.get("WHATEVER_LOG_E2E_TOKEN_OTHER")
+DISPOSABLE_TOKEN = os.environ.get("WHATEVER_LOG_E2E_TOKEN_DISPOSABLE")
+
+
+@pytest.mark.skipif(not OTHER_TOKEN, reason="WHATEVER_LOG_E2E_TOKEN_OTHER(다른 사용자의 시험용 토큰)가 있을 때만")
+def test_a_second_account_never_sees_or_deletes_another_accounts_devices(api, suffix) -> None:
+    goal_id = str(uuid.uuid4())
+    api.put_goal(goal_id, name=f"e2e-격리-{suffix}", daily_target_minutes=10, weekdays=[0], base_revision=0)
+    device = str(uuid.uuid4())
+    api.put_progress(device, [ProgressEntry(goal_id, TODAY.isoformat(), 5, 10)])
+    other = ServerApi(SERVER, OTHER_TOKEN)
+
+    assert device not in {d.device_id for d in other.list_devices()}
+    other.delete_device(device)  # 남의 기기 ID라도 내 데이터만 대상이라 아무 일도 없다
+    assert device in {d.device_id for d in api.list_devices()}
+
+
+@pytest.mark.skipif(
+    not DISPOSABLE_TOKEN, reason="WHATEVER_LOG_E2E_TOKEN_DISPOSABLE(지워도 되는 시험용 사용자의 토큰, 한 번 쓰면 사라진다)가 있을 때만"
+)
+def test_deleting_the_account_removes_everything_and_the_token_stops_working() -> None:
+    victim = ServerApi(SERVER, DISPOSABLE_TOKEN)
+    goal_id = str(uuid.uuid4())
+    victim.put_goal(goal_id, name="지워질 목표", daily_target_minutes=10, weekdays=[0], base_revision=0)
+    victim.put_progress(str(uuid.uuid4()), [ProgressEntry(goal_id, TODAY.isoformat(), 5, 10)])
+
+    victim.delete_account()
+
+    with pytest.raises(NotAuthorized):  # 토큰도 함께 지워졌다
+        victim.list_goals()

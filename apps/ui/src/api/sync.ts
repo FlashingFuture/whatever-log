@@ -1,5 +1,11 @@
-import { getJson, sendJson } from "./client.ts";
-import type { SyncPlan, SyncResult } from "./types";
+import { getJson, SHORT_REQUEST_TIMEOUT_MS, sendJson } from "./client.ts";
+import type {
+  DeleteAccountResult,
+  DeviceRow,
+  SyncPlan,
+  SyncResult,
+  SyncStatus,
+} from "./types";
 
 // hub가 서버(Cloudflare)를 한 번 부르고 DB를 쓰므로, 로컬 조회보다 넉넉하게 기다린다.
 const SYNC_TIMEOUT_MS = 30_000;
@@ -23,4 +29,38 @@ export function applySync(
     { accepted, email },
     SYNC_TIMEOUT_MS,
   );
+}
+
+/** 동기화 상태. 이 PC의 설정과 에이전트가 적은 기록만 읽고 서버를 부르지 않는다. */
+export function fetchSyncStatus(): Promise<SyncStatus> {
+  return getJson("/api/sync/status", SHORT_REQUEST_TIMEOUT_MS);
+}
+
+/** 달성도를 보낸 기기들(서버에서 받는다). */
+export async function fetchDevices(): Promise<DeviceRow[]> {
+  const response = await getJson<{ devices: DeviceRow[] }>(
+    "/api/devices",
+    SYNC_TIMEOUT_MS,
+  );
+  return response.devices;
+}
+
+/** 기기가 보낸 달성 기록을 서버에서 지운다(이 PC의 기기는 hub가 거절한다). */
+export async function deleteDevice(deviceId: string): Promise<void> {
+  await sendJson(
+    "DELETE",
+    `/api/devices/${encodeURIComponent(deviceId)}`,
+    undefined,
+    SYNC_TIMEOUT_MS,
+  );
+}
+
+/**
+ * 서버의 계정과 모든 데이터를 지운다(되돌릴 수 없다). email은 사용자가 확인한 계정이고, 지금 로그인한 계정과 다르면 hub가 거절한다.
+ * 서버 삭제에 성공한 뒤에만 이 PC의 로그인·동기화 연결이 정리된다.
+ */
+export function deleteAccount(
+  email: string | null,
+): Promise<DeleteAccountResult> {
+  return sendJson("POST", "/api/account/delete", { email }, SYNC_TIMEOUT_MS);
 }

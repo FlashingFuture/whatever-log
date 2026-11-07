@@ -148,6 +148,32 @@ export async function getProgress(
   }));
 }
 
+export interface DeviceInfo {
+  device_id: string;
+  /** 이 기기가 달성도를 마지막으로 보낸 시각. */
+  last_sent_at: string;
+  /** 서버에 있는 이 기기의 달성 줄(목표·날짜) 수. */
+  rows: number;
+}
+
+/**
+ * 달성도를 보낸 기기들(최근에 보낸 순). 기기에는 이름이 없다 — 이름을 받으면 PC 이름 같은 새 개인 정보가 서버에 생기므로,
+ * 화면은 기기 ID(무작위 UUID)와 마지막으로 보낸 시각만으로 "이 기기"를 알아본다. 기기는 `DELETE /devices/{id}`로 지운다.
+ */
+export async function listDevices(
+  db: Db,
+  userId: number,
+): Promise<DeviceInfo[]> {
+  const { results } = await db
+    .prepare(
+      "SELECT device_id, MAX(updated_at) AS last_sent_at, COUNT(*) AS rows FROM progress " +
+        "WHERE user_id = ? GROUP BY device_id ORDER BY last_sent_at DESC, device_id",
+    )
+    .bind(userId)
+    .all<DeviceInfo>();
+  return results;
+}
+
 /** 기기가 보낸 달성 줄을 모두 지운다(없어도 오류가 아니다). */
 export async function deleteDevice(
   db: Db,

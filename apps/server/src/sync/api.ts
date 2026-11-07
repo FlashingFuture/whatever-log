@@ -4,7 +4,12 @@ import { deleteAccount, revokeToken } from "./account.ts";
 import { authenticate } from "./authenticate.ts";
 import { isUuid, parseGoalInput } from "./goalInput.ts";
 import { deleteGoal, listGoals, putGoal } from "./goals.ts";
-import { deleteDevice, getProgress, putProgress } from "./progress.ts";
+import {
+  deleteDevice,
+  getProgress,
+  listDevices,
+  putProgress,
+} from "./progress.ts";
 import { parsePutProgress, parseRange } from "./progressInput.ts";
 
 export interface ApiDeps {
@@ -137,6 +142,17 @@ const ROUTES: { pattern: RegExp; route: Route }[] = [
         return jsonResponse({
           accepted: result.accepted,
           ignored_goal_ids: result.ignoredGoalIds,
+        });
+      },
+    },
+  },
+  {
+    pattern: /^\/devices$/,
+    route: {
+      methods: ["GET"],
+      async handle(_request, _url, _params, caller, deps) {
+        return jsonResponse({
+          devices: await listDevices(deps.db, caller.userId),
         });
       },
     },
