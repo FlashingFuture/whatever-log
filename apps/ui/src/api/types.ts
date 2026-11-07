@@ -150,6 +150,8 @@ export interface AccountSnapshot {
   email: string | null;
   login: { state: "idle" | "pending" | "failed"; message: string | null };
   providers: LoginProvider[];
+  /** 사용자가 확인 창에서 목표 동기화를 켰는지(이 PC의 설정). 켜기 전에 만든 목표는 서버로 가지 않는다. */
+  sync_enabled: boolean;
 }
 
 /** 로그아웃 응답: 상태에 더해, 서버의 토큰까지 폐기됐는지. */

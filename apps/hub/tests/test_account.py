@@ -309,7 +309,7 @@ def test_get_account_returns_the_state_without_any_token(account_server) -> None
 
     assert status == 200
     assert body["signed_in"] is True and body["email"] == "a@example.com"
-    assert set(body) == {"available", "signed_in", "email", "login", "providers"}
+    assert set(body) == {"available", "signed_in", "email", "login", "providers", "sync_enabled"}
     assert response.getheader("Access-Control-Allow-Origin") == UI_ORIGIN
 
 
@@ -495,3 +495,18 @@ def test_open_link_reports_a_false_or_raising_browser_as_failed() -> None:
     assert open_link("privacy", lambda url: False) == "failed"
     assert open_link("privacy", broken) == "failed"
     assert open_link("privacy", lambda url: True) == "opened"
+
+
+def test_the_account_state_tells_whether_goal_sync_was_turned_on(account_server, tmp_path) -> None:
+    from goals import META_SYNC_ENABLED, GoalStore
+
+    port, _, _ = account_server
+    saved = _Handler.goals_db_path
+    _Handler.goals_db_path = tmp_path / "goals.db"
+    try:
+        assert call(port, "GET", "/api/account")[1]["sync_enabled"] is False
+        with GoalStore(_Handler.goals_db_path) as store:
+            store.set_meta(META_SYNC_ENABLED, "1")
+        assert call(port, "GET", "/api/account")[1]["sync_enabled"] is True
+    finally:
+        _Handler.goals_db_path = saved

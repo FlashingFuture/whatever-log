@@ -36,6 +36,7 @@ from chromium.browsers import BROWSERS
 from chromium.snapshot import remove_stale_work_dirs
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
 from goals import (
+    META_SYNC_ENABLED,
     GoalNotFoundError,
     GoalStore,
     GoalValidationError,
@@ -487,7 +488,15 @@ class _Handler(BaseHTTPRequestHandler):
                 503, api_error.error_body(api_error.UNAVAILABLE, "계정 상태를 읽지 못했습니다.")
             )
             return
-        self._send_json(status, {**payload, **(extra or {})})
+        self._send_json(status, {**payload, "sync_enabled": self._sync_enabled(), **(extra or {})})
+
+    def _sync_enabled(self) -> bool:
+        """사용자가 확인 창에서 동기화를 켰는지(이 PC의 goals.db 값 — 서버와 통신하지 않는다). 읽지 못하면 꺼진 것으로 본다."""
+        try:
+            with GoalStore(self.goals_db_path) as store:
+                return store.get_meta(META_SYNC_ENABLED) == "1"
+        except (sqlite3.Error, SchemaVersionError):
+            return False
 
     def _start_login(self) -> None:
         """POST /api/account/login {"provider"} — 로그인을 시작한다(브라우저가 열린다). 진행은 GET /api/account로 본다."""

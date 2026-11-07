@@ -21,6 +21,7 @@ function snapshot(over: Partial<AccountSnapshot> = {}): AccountSnapshot {
     email: null,
     login: { state: "idle", message: null },
     providers: [GOOGLE],
+    sync_enabled: false,
     ...over,
   };
 }

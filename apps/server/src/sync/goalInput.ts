@@ -26,13 +26,25 @@ const UUID_V4 =
 export const isUuid = (value: string): boolean => UUID_V4.test(value);
 
 /**
- * 이름의 비교 키. 로컬(`goals.validation.name_key`)은 NFC + 파이썬 `casefold()`이고, 서버의 키가 그보다 느슨하면(`Straße`와
- * `STRASSE`를 서로 다르다고 보면) 두 목표를 내려받은 PC에서 하나를 저장하지 못한다. JS에는 casefold가 없지만 "대문자로 바꿨다가
- * 소문자로"가 ß→ss, ς→σ, ſ→s, ﬁ→fi 같은 접기를 똑같이 해 준다. 같은 이름의 목표를 둘 못 만들게 하는 키이므로 두 쪽이 맞아야 한다.
+ * 이름의 비교 키. 로컬(`goals.validation.name_key`)은 NFC + 파이썬 `casefold()`이고, 서버의 키가 그것과 어긋나면 한쪽에서는 같은
+ * 이름이 다른 쪽에서는 다른 이름이 되어 목표를 저장하지 못한다(서버가 더 합치면 로컬에서 만든 두 목표 중 하나가 서버에서 거부되고, 덜 합치면 서버에서
+ * 둘로 올라간 목표를 내려받은 PC가 하나를 저장하지 못한다). JS에는 casefold가 없어서, "대문자로 바꿨다가 소문자로"(ß→ss, ſ→s, ﬁ→fi 등)에
+ * 어말 시그마 정리를 더해 맞추고, 이것으로 다르게 나오는 두 글자만 따로 처리한다:
+ *  - `ı`(점 없는 i): 대문자가 `I`라서 `i`와 합쳐지지만 casefold는 합치지 않는다 → 그대로 둔다.
+ *  - `ẞ`(대문자 ß): 소문자가 `ß`라서 `ss`와 갈라지지만 casefold는 `ss`다 → `ss`로 접는다.
+ * 글자 단위로 접는다(위 두 예외를 글자 단위로 골라내려고. 문맥에 따라 달라지는 어말 시그마는 따로 정리한다).
+ * 두 구현이 같은 묶음을 만드는지는 `packages/goals/tests/test_name_key_parity.py`가 모든 유니코드 글자로 확인한다.
+ * 한계: 파이썬과 Workers 런타임의 유니코드 버전이 다르면, 새 버전에서 추가된 글자의 대소문자 관계가 어긋날 수 있다(극히 드문 문자들).
  */
 export const nameKey = (name: string): string =>
-  // 소문자 변환은 어말 시그마를 ς로 바꾸지만 casefold는 항상 σ다.
-  name.normalize("NFC").toUpperCase().toLowerCase().replaceAll("ς", "σ");
+  [...name.normalize("NFC")]
+    .map((char) => {
+      if (char === "ı") return char;
+      if (char === "ẞ") return "ss";
+      return char.toUpperCase().toLowerCase();
+    })
+    .join("")
+    .replaceAll("ς", "σ");
 
 const isInt = (value: unknown): value is number => Number.isInteger(value);
 

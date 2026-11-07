@@ -32,6 +32,8 @@ export interface AccountState {
   reason: "hub" | "cloud" | null;
   /** 로그인·로그아웃·취소 요청이 오가는 중(버튼을 잠깐 막는 데 쓴다). */
   busy: boolean;
+  /** 목표 동기화를 켰는지(로그인했을 때만 의미가 있다). */
+  syncEnabled: boolean;
 }
 
 export const INITIAL_STATE: AccountState = {
@@ -41,6 +43,7 @@ export const INITIAL_STATE: AccountState = {
   error: null,
   reason: null,
   busy: false,
+  syncEnabled: false,
 };
 
 export type AccountEvent =
@@ -75,6 +78,7 @@ function fromSnapshot(snapshot: AccountSnapshot): AccountState {
       ...base,
       phase: "signedIn",
       email: snapshot.email,
+      syncEnabled: snapshot.sync_enabled,
     };
   }
   if (snapshot.login.state === "pending") {

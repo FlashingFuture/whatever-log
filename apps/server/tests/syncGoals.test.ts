@@ -575,3 +575,13 @@ test("이름 키는 파이썬 casefold와 어긋나기 쉬운 글자까지 맞�
     assert.equal(nameKey(name), folded, name);
   }
 });
+
+test("이름 키: ı는 i와 합치지 않고, ẞ는 ß·ss와 같게 본다(로컬 casefold와 같은 묶음)", async () => {
+  const { nameKey } = await import("../src/sync/goalInput.ts");
+
+  assert.notEqual(nameKey("ı"), nameKey("i"));
+  assert.equal(nameKey("ẞ"), nameKey("ß"));
+  assert.equal(nameKey("ẞ"), nameKey("ss"));
+  assert.equal(nameKey("İ"), "i̇");
+  assert.equal(nameKey("ΟΔΟΣ"), nameKey("οδοσ"));
+});

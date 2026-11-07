@@ -47,6 +47,7 @@ const SNAPSHOT = {
   email: null,
   login: { state: "idle", message: null },
   providers: [{ id: "google", label: "Google" }],
+  sync_enabled: false,
 };
 
 test("상태 조회는 GET /api/account이다", async () => {
