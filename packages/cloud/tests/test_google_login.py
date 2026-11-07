@@ -155,3 +155,77 @@ def test_server_rejections_are_reported_as_login_failed() -> None:
 
     with pytest.raises(LoginFailed, match="연결하지 못했습니다"):
         sign_in_with_google(CONFIG, open_browser=browser, timeout=5, opener=opener)
+
+
+def test_a_login_cancelled_just_as_the_code_arrives_is_not_exchanged() -> None:
+    import time
+
+    calls: list = []
+    started = time.monotonic()
+
+    def respond(query):
+        time.sleep(0.3)  # 콜백은 0.3초에 도착하고, 앱의 취소는 0.35초에 보인다 — 코드가 도착한 직후다
+        _hit(query["redirect_uri"], code="late-code", state=query["state"])
+
+    browser = _Browser(respond)
+
+    with pytest.raises(LoginCancelled):
+        sign_in_with_google(
+            CONFIG,
+            open_browser=browser,
+            timeout=5,
+            cancelled=lambda: time.monotonic() - started > 0.35,
+            opener=lambda *args, **kwargs: calls.append(args),
+        )
+    for thread in browser.threads:
+        thread.join()
+
+    assert calls == []  # 서버에 코드를 보내지 않았다
+
+
+def test_a_login_cancelled_during_the_exchange_discards_and_revokes_the_token() -> None:
+    sent: list[str] = []
+    state = {"cancel": False}
+
+    def opener(request, timeout):
+        sent.append(request.full_url)
+        if request.full_url.endswith("/auth/google"):
+            state["cancel"] = True  # 교환하는 동안 취소 버튼을 눌렀다
+            return _Response({"token": "issued-token", "expires_at": "2026-12-06T03:00:00Z"})
+        assert request.headers["Authorization"] == "Bearer issued-token"
+        revoked = _Response({})
+        revoked.status = 204
+        return revoked
+
+    browser = _Browser(lambda q: _hit(q["redirect_uri"], code="c", state=q["state"]))
+
+    with pytest.raises(LoginCancelled):
+        sign_in_with_google(CONFIG, open_browser=browser, timeout=5, cancelled=lambda: state["cancel"], opener=opener)
+
+    assert sent == ["https://server.example/auth/google", "https://server.example/auth/logout"]
+
+
+def test_a_login_cancelled_while_the_receiver_is_closing_is_not_exchanged(monkeypatch) -> None:
+    import cloud.google_login as module
+
+    calls: list = []
+    state = {"cancel": False}
+    original_exit = module.LoopbackReceiver.__exit__
+
+    def exit_then_cancel(self, *exc_info):
+        original_exit(self, *exc_info)
+        state["cancel"] = True  # 코드를 받고 수신기를 닫은 직후에 취소됐다
+
+    monkeypatch.setattr(module.LoopbackReceiver, "__exit__", exit_then_cancel)
+    browser = _Browser(lambda q: _hit(q["redirect_uri"], code="c", state=q["state"]))
+
+    with pytest.raises(LoginCancelled):
+        sign_in_with_google(
+            CONFIG,
+            open_browser=browser,
+            timeout=5,
+            cancelled=lambda: state["cancel"],
+            opener=lambda *args, **kwargs: calls.append(args),
+        )
+
+    assert calls == []

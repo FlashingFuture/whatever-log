@@ -3,6 +3,8 @@ import { createGoalManager } from "../components/goals/GoalManager";
 import { createPeriodView } from "../components/period/PeriodView";
 import { createUsageChart } from "../components/usage/UsageChart";
 import { createUsageSummary } from "../components/usage/UsageSummary";
+import { syncNotice } from "../lib/syncNotice";
+import type { AccountStore } from "../state/accountStore";
 import styles from "./UsagePage.module.css";
 
 /**
@@ -11,8 +13,13 @@ import styles from "./UsagePage.module.css";
  * 정한다. 목표 관리 모달은 15초마다 다시 그려지는 내용 밖(페이지)에 두어, 열려 있는 동안 갱신에
  * 지워지지 않게 한다. 돌려주는 함수로 화면을 정리한다.
  */
-export function mountUsagePage(root: HTMLElement): () => void {
+export function mountUsagePage(
+  root: HTMLElement,
+  options: { account: AccountStore },
+): () => void {
   const goals = createGoalManager({
+    // 로그인한 상태에서 만드는 목표는 이름·목표 시간·요일이 서버에도 저장되므로, 목표를 만드는 화면에서 알린다.
+    notice: () => syncNotice(options.account.getState()),
     onChange: () => view.refresh(),
     // 15초마다 요약이 다시 그려져 열었던 버튼이 사라졌을 수 있다 — 지금 있는 버튼으로 포커스를 돌려준다.
     onClose: () =>

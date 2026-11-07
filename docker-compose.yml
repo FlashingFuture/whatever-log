@@ -14,5 +14,43 @@ services:
     tty: true
     command: bash
 
+  # Cloudflare 쪽(Worker + D1)을 로컬에서 똑같이 띄운다 — 동기화 에이전트를 실제 Cloudflare에 올리지 않고도 끝까지
+  # 시험하려는 용도다(docs/sync-client.md). `wrangler dev`가 D1 대신 로컬 SQLite를 쓰고, 그 파일은 server_state 볼륨에
+  # 남는다. 호스트(Windows)의 node_modules는 Linux에서 쓸 수 없으므로 서버 의존성은 따로 볼륨에 설치한다.
+  #
+  #   docker compose up server                      # 시작(마이그레이션 자동 적용), http://127.0.0.1:8790
+  #   docker compose exec server node scripts/dev-token.mjs   # 시험용 사용자와 토큰을 로컬 D1에 만든다
+  #   docker compose down -v                        # 끄고 로컬 DB까지 지운다
+  #
+  # 127.0.0.1에만 열어 같은 네트워크의 다른 기기가 시험 서버에 접근하지 못하게 한다.
+  #
+  # 주의: 저장소 전체를 바인드 마운트하므로, 컨테이너 안의 `pnpm install`은 마운트된 모든 워크스페이스의 node_modules를
+  # 건드린다(Linux 링크가 호스트의 Windows node_modules를 덮어써 `tsc` 등이 깨진다). 그래서 node_modules가 있는 워크스페이스
+  # (루트, apps/server, apps/ui)를 모두 이름 붙은 볼륨으로 가려 둔다. 새 워크스페이스에 node_modules가 생기면 여기에도 더한다.
+  server:
+    build: .
+    working_dir: /workspace/apps/server
+    environment:
+      npm_config_store_dir: /workspace/node_modules/.pnpm-store
+      WRANGLER_SEND_METRICS: "false"
+      CI: "1"
+    ports:
+      - "127.0.0.1:8790:8790"
+    volumes:
+      - .:/workspace
+      - node_modules:/workspace/node_modules
+      - server_node_modules:/workspace/apps/server/node_modules
+      - ui_node_modules:/workspace/apps/ui/node_modules
+      - server_state:/workspace/apps/server/.wrangler
+    command: >
+      sh -c "cd /workspace
+      && corepack pnpm install --filter server... --frozen-lockfile
+      && cd apps/server
+      && corepack pnpm exec wrangler d1 migrations apply DB --local
+      && corepack pnpm exec wrangler dev --ip 0.0.0.0 --port 8790"
+
 volumes:
   node_modules:
+  server_node_modules:
+  ui_node_modules:
+  server_state:

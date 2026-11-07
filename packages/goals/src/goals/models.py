@@ -35,6 +35,25 @@ class Goal:
     sites: tuple[SiteTarget, ...] = ()
 
 
+# 목표의 서버 동기화 선택: ask(아직 안 물음) / sync(서버와 동기화) / local_only(사용자가 올리지 않기로 함).
+SYNC_STATES = ("ask", "sync", "local_only")
+
+
+@dataclass(frozen=True)
+class SyncLink:
+    """목표 하나의 서버 연결 상태(docs/sync-client.md). 서버가 아는 것은 이름·목표 시간·요일뿐이고, 연결한
+    프로세스·사이트는 여기에 없다.
+
+    remote_id가 None이면 아직 서버에 없다. dirty는 연결된 목표를 로컬에서 고쳐 아직 서버에 못 보냈다는 뜻이다.
+    """
+
+    goal_id: int
+    state: str
+    remote_id: str | None
+    remote_revision: int | None
+    dirty: bool
+
+
 @dataclass(frozen=True)
 class GoalSnapshot:
     """어떤 날짜에 적용된 목표 설정의 기록. 목표를 나중에 바꿔도 지난 날의 달성률이 바뀌지 않게 한다.

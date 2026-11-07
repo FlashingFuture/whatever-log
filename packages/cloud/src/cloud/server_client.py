@@ -12,9 +12,24 @@ from cloud.errors import LoginFailed
 from cloud.session import Session
 
 _TIMEOUT_SECONDS = 20
+# urllib 기본 User-Agent(Python-urllib)는 Cloudflare가 봇으로 보고 서버에 닿기 전에 403(1010)으로 막는다.
+_USER_AGENT = "whatever-log-desktop"
 _MAX_RESPONSE_BYTES = 16 * 1024
 
 Opener = Callable[..., Any]
+
+
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """리디렉션을 따라가지 않는다. 기본 동작은 3xx를 따라가며 `Authorization` 헤더와 본문까지 새 주소로 보내는데, 서버
+    주소를 아는 쪽(또는 중간 경로)이 다른 출처로 돌려보내면 토큰·인증 코드가 그쪽으로 새어 나간다. 우리 서버는 리디렉션을 쓰지
+    않으므로, 3xx는 그대로 HTTPError로 올려 호출부가 실패로 처리하게 한다."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102, ANN001
+        return None
+
+
+#: 서버 통신에 쓰는 기본 opener(리디렉션 금지). 테스트는 opener를 직접 넣어 바꾼다.
+open_without_redirects: Opener = urllib.request.build_opener(_RefuseRedirects).open
 
 
 def _error_message(body: bytes) -> str | None:
@@ -40,13 +55,35 @@ def _parse_session(body: bytes) -> Session:
     return Session(token=token, expires_at=expires_at, email=email if isinstance(email, str) else None)
 
 
+def revoke_session(
+    server_url: str,
+    token: str,
+    *,
+    opener: Opener = open_without_redirects,
+    timeout: float = 5,
+) -> bool:
+    """서버에서 이 토큰을 폐기한다(`POST /auth/logout`). 폐기됐으면 True. 서버에 닿지 못하거나 거부해도 예외 없이
+    False를 돌려준다 — 로그아웃은 서버가 어떻든 이 PC에서는 끝나야 하기 때문이다(서버의 토큰은 만료까지 남는다)."""
+    request = urllib.request.Request(
+        f"{server_url}/auth/logout",
+        data=b"",
+        headers={"Authorization": f"Bearer {token}", "User-Agent": _USER_AGENT},
+        method="POST",
+    )
+    try:
+        with opener(request, timeout=timeout) as response:
+            return 200 <= response.status < 300
+    except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError):
+        return False
+
+
 def exchange_code(
     server_url: str,
     *,
     code: str,
     code_verifier: str,
     redirect_uri: str,
-    opener: Opener = urllib.request.urlopen,
+    opener: Opener = open_without_redirects,
 ) -> Session:
     """인증 코드·PKCE verifier·리디렉션 주소를 서버에 보내 로그인 토큰을 받는다.
 
@@ -56,8 +93,7 @@ def exchange_code(
     request = urllib.request.Request(
         f"{server_url}/auth/google",
         data=json.dumps({"code": code, "code_verifier": code_verifier, "redirect_uri": redirect_uri}).encode("utf-8"),
-        # urllib 기본 User-Agent(Python-urllib)는 Cloudflare가 봇으로 보고 서버에 닿기 전에 403(1010)으로 막는다.
-        headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "whatever-log-desktop"},
+        headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": _USER_AGENT},
         method="POST",
     )
     try:

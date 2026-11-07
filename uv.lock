@@ -10,10 +10,12 @@ members = [
     "common",
     "desktop",
     "goals",
+    "goalsync",
     "hub",
     "recorder",
     "summary",
     "supervision",
+    "sync",
 ]
 
 [[package]]
@@ -276,14 +278,41 @@ dev = [
 dev = [{ name = "pytest", specifier = ">=9.1.1" }]
 
 [[package]]
+name = "goalsync"
+version = "0.1.0"
+source = { editable = "packages/goalsync" }
+dependencies = [
+    { name = "aggregation" },
+    { name = "cloud" },
+    { name = "goals" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aggregation", editable = "packages/aggregation" },
+    { name = "cloud", editable = "packages/cloud" },
+    { name = "goals", editable = "packages/goals" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=9.1.1" }]
+
+[[package]]
 name = "hub"
 version = "0.1.0"
 source = { editable = "apps/hub" }
 dependencies = [
     { name = "aggregation" },
     { name = "chromium" },
+    { name = "cloud" },
     { name = "common" },
     { name = "goals" },
+    { name = "goalsync" },
     { name = "recorder" },
     { name = "supervision" },
 ]
@@ -297,8 +326,10 @@ dev = [
 requires-dist = [
     { name = "aggregation", editable = "packages/aggregation" },
     { name = "chromium", editable = "packages/chromium" },
+    { name = "cloud", editable = "packages/cloud" },
     { name = "common", editable = "packages/common" },
     { name = "goals", editable = "packages/goals" },
+    { name = "goalsync", editable = "packages/goalsync" },
     { name = "recorder", editable = "apps/recorder" },
     { name = "supervision", editable = "packages/supervision" },
 ]
@@ -666,6 +697,37 @@ dev = [
 
 [package.metadata]
 requires-dist = [{ name = "filelock", specifier = ">=4.2.4" }]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=9.1.1" }]
+
+[[package]]
+name = "sync"
+version = "0.1.0"
+source = { editable = "apps/sync" }
+dependencies = [
+    { name = "cloud" },
+    { name = "common" },
+    { name = "goals" },
+    { name = "goalsync" },
+    { name = "recorder" },
+    { name = "supervision" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cloud", editable = "packages/cloud" },
+    { name = "common", editable = "packages/common" },
+    { name = "goals", editable = "packages/goals" },
+    { name = "goalsync", editable = "packages/goalsync" },
+    { name = "recorder", editable = "apps/recorder" },
+    { name = "supervision", editable = "packages/supervision" },
+]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=9.1.1" }]

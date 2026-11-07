@@ -38,6 +38,8 @@ export interface GoalManager {
 }
 
 export interface GoalManagerProps {
+  /** 목표를 만들고 고치는 화면에 보여 줄 안내(없으면 null). 로그인한 사용자에게 서버에 저장되는 값을 알린다. */
+  notice?: () => string | null;
   /** 목표나 연결 프로세스가 바뀌었다 — 홈의 수행 시간을 다시 불러오게 한다. */
   onChange: () => void;
   /** 모달이 닫혔다(어떤 방식으로든). 열었던 버튼으로 포커스를 돌려주는 데 쓴다. */
@@ -139,6 +141,7 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
       onBack: () => void back(),
       content: createGoalForm({
         goal,
+        notice: props.notice?.() ?? null,
         onCancel: () => void back(),
         onSubmit: async (input: GoalInput) => {
           // 저장 중에 다른 화면으로 옮겼다면(뒤로 가기, 닫기) 저장은 그대로 반영하되 화면은 바꾸지 않는다.

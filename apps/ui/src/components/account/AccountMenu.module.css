@@ -1,0 +1,79 @@
+.menu {
+  display: flex;
+  align-items: center;
+}
+
+.signedIn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.email {
+  color: var(--color-text-muted);
+  font-size: var(--text-md);
+  /* 긴 주소가 navbar를 밀어내지 않게 줄인다. 전체 주소는 title로 본다. */
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inlineError {
+  color: var(--color-danger);
+  font-size: var(--text-sm);
+}
+.inlineError:empty {
+  display: none;
+}
+
+/* 팝업 안쪽 */
+.panel {
+  width: 20rem;
+  max-width: calc(100vw - 2 * var(--space-4));
+  font-size: var(--text-md);
+  /* 한글이 단어 중간에서 줄바꿈되지 않게 한다. */
+  word-break: keep-all;
+}
+
+.panelTitle {
+  margin: 0 0 var(--space-2);
+  font-size: 1rem;
+}
+
+.panel p {
+  margin: 0 0 var(--space-3);
+}
+
+.summary {
+  line-height: 1.5;
+}
+
+.note {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.error {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  font-size: var(--text-sm);
+}
+
+.providers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.link {
+  color: var(--color-link);
+  font-size: var(--text-sm);
+}
+.link:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}

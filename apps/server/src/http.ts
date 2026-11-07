@@ -29,3 +29,57 @@ export function errorResponse(
 ): Response {
   return jsonResponse({ error: { code, message } }, status, headers);
 }
+
+/** 요청 본문을 JSON으로 읽는다. 형식·크기가 맞지 않으면 그대로 돌려줄 오류 응답을 함께 준다. */
+const JSON_CONTENT_TYPE = /^application\/json\s*(;.*)?$/i;
+
+export async function readJson(
+  request: Request,
+  maxBytes: number,
+): Promise<{ ok: true; body: unknown } | { ok: false; response: Response }> {
+  if (!JSON_CONTENT_TYPE.test(request.headers.get("Content-Type") ?? "")) {
+    return {
+      ok: false,
+      response: errorResponse(
+        415,
+        "invalid_request",
+        "본문은 application/json이어야 합니다.",
+      ),
+    };
+  }
+  const declared = Number(request.headers.get("Content-Length") ?? "0");
+  if (declared > maxBytes) {
+    return {
+      ok: false,
+      response: errorResponse(413, "invalid_request", "본문이 너무 큽니다."),
+    };
+  }
+  const raw = await request.arrayBuffer();
+  if (raw.byteLength === 0 || raw.byteLength > maxBytes) {
+    return {
+      ok: false,
+      response: errorResponse(
+        raw.byteLength === 0 ? 400 : 413,
+        "invalid_request",
+        raw.byteLength === 0 ? "본문이 비어 있습니다." : "본문이 너무 큽니다.",
+      ),
+    };
+  }
+  try {
+    return {
+      ok: true,
+      body: JSON.parse(
+        new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(raw),
+      ),
+    };
+  } catch {
+    return {
+      ok: false,
+      response: errorResponse(
+        400,
+        "invalid_request",
+        "본문이 올바른 JSON이 아닙니다.",
+      ),
+    };
+  }
+}

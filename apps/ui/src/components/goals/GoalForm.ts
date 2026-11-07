@@ -11,6 +11,8 @@ import styles from "./GoalForm.module.css";
 export interface GoalFormProps {
   /** 수정이면 그 목표, 새로 만들면 null. */
   goal: Goal | null;
+  /** 폼 위에 보여 줄 안내(없으면 null). */
+  notice?: string | null;
   /** 저장한다. 실패하면 거부된다(칸별 오류가 담긴 ApiError면 그 칸 옆에 보여 준다). */
   onSubmit: (input: GoalInput) => Promise<void>;
   onCancel: () => void;
@@ -113,8 +115,14 @@ export function createGoalForm(props: GoalFormProps): HTMLElement {
     submit,
   );
 
+  const notice = document.createElement("p");
+  notice.className = styles.notice;
+  notice.textContent = props.notice ?? "";
+  notice.hidden = !props.notice;
+
   form.append(
     banner,
+    notice,
     field("name", "이름", nameInput),
     field("daily_target_minutes", "하루 목표 시간(분)", minutesInput),
     field("weekdays", "적용 요일", weekdays),

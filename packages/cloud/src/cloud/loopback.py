@@ -2,6 +2,7 @@
 
 import hmac
 import time
+from collections.abc import Callable
 import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
@@ -109,15 +110,21 @@ class LoopbackReceiver:
         """서버 소켓을 닫는다."""
         self._server.server_close()
 
-    def wait_for_code(self, timeout: float) -> str:
-        """콜백이 올 때까지 기다려 인증 코드를 돌려준다. 취소면 LoginCancelled, 제한 시간이 지나면 LoginFailed."""
+    def wait_for_code(self, timeout: float, cancelled: Callable[[], bool] = lambda: False) -> str:
+        """콜백이 올 때까지 기다려 인증 코드를 돌려준다. 사용자가 Google 화면에서 취소했거나 cancelled()가 True가 되면
+        LoginCancelled, 제한 시간이 지나면 LoginFailed. cancelled는 앱의 "취소" 버튼처럼 밖에서 기다림을 끝낼 때 쓴다."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            if cancelled():
+                raise LoginCancelled
             self._server.handle_request()
             if self._outcome.cancelled:
                 raise LoginCancelled
             if self._outcome.error is not None:
                 raise LoginFailed(f"Google 로그인 설정에 문제가 있습니다({self._outcome.error}).")
             if self._outcome.code is not None:
+                # 코드가 도착한 같은 순간에 앱에서 취소했다면 그 코드를 돌려주지 않는다(교환하면 취소한 로그인이 저장된다).
+                if cancelled():
+                    raise LoginCancelled
                 return self._outcome.code
         raise LoginFailed("로그인 시간이 지났습니다. 다시 시도해 주세요.")

@@ -21,13 +21,14 @@ class _FakeServer:
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:
-                length = int(self.headers["Content-Length"])
+                raw = self.rfile.read(int(self.headers["Content-Length"]))
                 outer.requests.append(
                     {
                         "path": self.path,
                         "type": self.headers["Content-Type"],
                         "agent": self.headers["User-Agent"],
-                        "body": json.loads(self.rfile.read(length)),
+                        "auth": self.headers["Authorization"],
+                        "body": json.loads(raw) if raw else None,
                     }
                 )
                 self.send_response(status)
@@ -147,3 +148,76 @@ def test_an_error_response_cut_off_mid_body_still_becomes_login_failed() -> None
 
     with pytest.raises(LoginFailed, match="502"):
         exchange_code("https://s", opener=opener, **ARGS)
+
+
+def test_revoke_posts_the_bearer_token_and_reports_success(serve) -> None:
+    from cloud.server_client import revoke_session
+
+    server = serve(204, b"")
+
+    assert revoke_session(server.url, "tok-123") is True
+    (request,) = server.requests
+    assert request["path"] == "/auth/logout" and request["auth"] == "Bearer tok-123"
+    assert not request["agent"].startswith("Python-urllib")
+
+
+def test_revoke_never_raises_and_reports_failure(serve) -> None:
+    from cloud.server_client import revoke_session
+
+    assert revoke_session(serve(401, {"error": {"message": "x"}}).url, "tok") is False
+    assert revoke_session("http://127.0.0.1:9", "tok") is False  # 연결할 수 없는 서버
+
+
+class _Redirector:
+    """다른 출처로 3xx를 돌려주는 서버와, 그 다른 출처에서 받은 요청을 기록하는 서버."""
+
+    def __init__(self) -> None:
+        self.elsewhere = _FakeServer(200, {"goals": [], "token": "stolen", "expires_at": "2026-12-06T03:00:00Z"})
+        target = self.elsewhere.url
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def _redirect(self) -> None:
+                length = int(self.headers.get("Content-Length") or 0)
+                self.rfile.read(length)
+                self.send_response(307)  # 307은 메서드·본문·헤더를 그대로 다시 보내라는 뜻이다
+                self.send_header("Location", f"{target}{self.path}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            do_GET = do_POST = do_PUT = do_DELETE = _redirect
+
+            def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+                pass
+
+        self.httpd = HTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.httpd.server_port}"
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.outer = outer
+
+    def close(self) -> None:
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        self.elsewhere.close()
+
+
+@pytest.fixture
+def redirector():
+    server = _Redirector()
+    yield server
+    server.close()
+
+
+def test_a_redirect_to_another_origin_never_carries_the_token_or_the_code(redirector) -> None:
+    from cloud import ServerApi, ServerError
+    from cloud.server_client import revoke_session
+
+    with pytest.raises(ServerError) as raised:
+        ServerApi(redirector.url, "secret-token").list_goals()
+    assert raised.value.code == "redirect"
+
+    assert revoke_session(redirector.url, "secret-token") is False
+    with pytest.raises(LoginFailed):
+        exchange_code(redirector.url, **ARGS)
+
+    assert redirector.elsewhere.requests == []  # 다른 출처는 어떤 요청도 받지 못했다

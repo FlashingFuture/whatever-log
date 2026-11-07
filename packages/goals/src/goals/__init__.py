@@ -8,15 +8,15 @@ goals.db에만 저장되고, 그중 어떤 프로세스가 어느 목표에 속�
 
 - models: Goal, GoalSnapshot (읽기 전용 값 객체)
 - validation: 입력 검증(엄격). 규칙의 상수도 여기 있다
-- store: goals.db(SQLite) 저장소 — CRUD와 하루 스냅샷
+- store: goals.db(SQLite) 저장소 — CRUD, 하루 스냅샷, 서버 연결 칸(docs/sync-design.md)
 - progress: 목표별 수행 시간(연결 프로세스의 활성 시간 합)의 정의
 - errors: 검증·조회 실패
 """
 
 from goals.errors import FieldError, GoalNotFoundError, GoalValidationError, SchemaVersionError
-from goals.models import Goal, GoalSnapshot, SiteTarget
+from goals.models import SYNC_STATES, Goal, GoalSnapshot, SiteTarget, SyncLink
 from goals.progress import GoalProgress, ProcessTime, ProgressSummary, SiteTime, TopTarget, compute_progress
-from goals.store import GoalStore
+from goals.store import META_ACCOUNT_EMAIL, META_SYNC_ENABLED, GoalStore
 from goals.validation import (
     MAX_GOALS,
     MAX_PROCESSES_PER_GOAL,
@@ -32,6 +32,9 @@ __all__ = [
     "MAX_GOALS",
     "MAX_PROCESSES_PER_GOAL",
     "MAX_SITES_PER_GOAL",
+    "META_ACCOUNT_EMAIL",
+    "META_SYNC_ENABLED",
+    "SYNC_STATES",
     "FieldError",
     "Goal",
     "GoalNotFoundError",
@@ -44,6 +47,7 @@ __all__ = [
     "SchemaVersionError",
     "SiteTarget",
     "SiteTime",
+    "SyncLink",
     "TopTarget",
     "process_key",
     "compute_progress",

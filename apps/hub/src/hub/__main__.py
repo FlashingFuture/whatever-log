@@ -36,6 +36,7 @@ from chromium.browsers import BROWSERS
 from chromium.snapshot import remove_stale_work_dirs
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
 from goals import (
+    META_SYNC_ENABLED,
     GoalNotFoundError,
     GoalStore,
     GoalValidationError,
@@ -43,6 +44,17 @@ from goals import (
     is_valid_domain,
     is_valid_process_name,
 )
+from hub.account_service import (
+    AccountService,
+    AccountUnavailable,
+    LoginInProgress,
+    LogoutProblem,
+    SyncBusy,
+    SyncProblem,
+    UnknownProvider,
+)
+from hub.cloud_adapter import create_cloud_port
+from hub.external_links import LINK_FAILED, LINK_OPENED, open_link
 from hub.goals_service import (
     BadRequest,
     browsers_with_sites,
@@ -193,6 +205,10 @@ def _usage_edges(query: dict[str, list[str]]) -> list[datetime]:
         raise ValueError("edges가 표현할 수 있는 날짜 범위를 벗어났습니다.") from exc
 
 
+# 동기화 확인 창에서 한 번에 보낼 수 있는 선택 개수와 항목 이름의 길이(목표는 최대 20개씩 두 쪽이다).
+MAX_SYNC_CHOICES = 100
+MAX_SYNC_KEY_LENGTH = 100
+MAX_EMAIL_LENGTH = 320
 _PROCESS_PATH_PREFIX = "/api/processes/"
 _GOAL_PATH = re.compile(r"/api/goals/(\d{1,9})")
 _PROCESS_USAGE_SUFFIX = "/usage"
@@ -224,6 +240,10 @@ class _Handler(BaseHTTPRequestHandler):
     allowed_origins: frozenset[str] = frozenset(DEFAULT_ALLOWED_ORIGINS)
     icon_store: IconStore = IconStore(DEFAULT_ICON_CACHE_DIR)
     site_icon_store: SiteIconStore = SiteIconStore()
+    # 로그인 상태·진행. `cloud`는 처음 계정 API가 불릴 때에야 불러온다(없거나 깨져도 hub의 나머지는 그대로 뜬다).
+    account: AccountService = AccountService(create_cloud_port)
+    # 화면이 요청한 바깥 링크를 시스템 브라우저로 여는 함수(테스트가 바꾼다).
+    link_opener = staticmethod(open_link)
 
     def _send_json(
         self, status: int, payload: dict, extra_headers: dict[str, str] | None = None
@@ -291,11 +311,20 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_POST(self) -> None:
-        """POST /api/goals — 목표를 만든다."""
+        """POST: /api/goals(목표 만들기), /api/account/login·logout(계정), /api/links/open(바깥 링크 열기)."""
         if not self._host_is_local():
             return
-        if urlparse(self.path).path == "/api/goals":
+        path = urlparse(self.path).path
+        if path == "/api/goals":
             self._write_goal(None)
+        elif path == "/api/account/login":
+            self._start_login()
+        elif path == "/api/account/logout":
+            self._logout()
+        elif path == "/api/links/open":
+            self._open_link()
+        elif path == "/api/sync/apply":
+            self._apply_sync()
         else:
             self._send_json(404, api_error.error_body(api_error.NOT_FOUND, "not found"))
 
@@ -310,12 +339,15 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(404, api_error.error_body(api_error.NOT_FOUND, "not found"))
 
     def do_DELETE(self) -> None:
-        """DELETE /api/goals/<id> — 목표를 지운다."""
+        """DELETE /api/goals/<id>(목표 삭제), /api/account/login(진행 중인 로그인 취소)."""
         if not self._host_is_local():
             return
-        match = _GOAL_PATH.fullmatch(urlparse(self.path).path)
+        path = urlparse(self.path).path
+        match = _GOAL_PATH.fullmatch(path)
         if match:
             self._delete_goal(int(match.group(1)))
+        elif path == "/api/account/login":
+            self._cancel_login()
         else:
             self._send_json(404, api_error.error_body(api_error.NOT_FOUND, "not found"))
 
@@ -333,6 +365,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._get_usage(parsed.query)
         elif parsed.path == "/api/goals":
             self._get_goals()
+        elif parsed.path == "/api/account":
+            self._send_account(200)
+        elif parsed.path == "/api/sync/plan":
+            self._get_sync_plan()
         elif parsed.path == "/api/goals/progress":
             self._get_goal_progress(parsed.query)
         elif parsed.path == "/api/processes":
@@ -429,6 +465,176 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_json(
             200, {"sites": [{"browser": browser, "domain": domain} for browser, domain in linkable]}
         )
+
+    def _check_account_write(self, *, json_body: bool) -> dict | None:
+        """계정 쓰기 요청의 출처·본문 형식을 검사한다. 통과하면 본문(없는 요청이면 빈 dict), 아니면 응답을 보내고 None."""
+        try:
+            check_write_origin(self.headers.get("Origin"), self.allowed_origins)
+            if not json_body:
+                reject_body(self.headers)
+                return {}
+            return read_json_object(self.headers, self.rfile)
+        except BadRequest as error:
+            self._send_bad_request(error)
+            return None
+
+    def _send_account(self, status: int, extra: dict | None = None) -> None:
+        """현재 계정 상태를 응답한다(토큰은 어디에도 없다). 계정 기능을 못 읽으면 503."""
+        try:
+            payload = self.account.snapshot()
+        except Exception as error:  # 자격 증명 관리자 등 환경 문제 — 다른 API에 영향 없이 이 응답만 실패한다
+            logger.error("계정 상태를 읽지 못했습니다: %s", type(error).__name__)
+            self._send_json(
+                503, api_error.error_body(api_error.UNAVAILABLE, "계정 상태를 읽지 못했습니다.")
+            )
+            return
+        self._send_json(status, {**payload, "sync_enabled": self._sync_enabled(), **(extra or {})})
+
+    def _sync_enabled(self) -> bool:
+        """사용자가 확인 창에서 동기화를 켰는지(이 PC의 goals.db 값 — 서버와 통신하지 않는다). 읽지 못하면 꺼진 것으로 본다."""
+        try:
+            with GoalStore(self.goals_db_path) as store:
+                return store.get_meta(META_SYNC_ENABLED) == "1"
+        except (sqlite3.Error, SchemaVersionError):
+            return False
+
+    def _start_login(self) -> None:
+        """POST /api/account/login {"provider"} — 로그인을 시작한다(브라우저가 열린다). 진행은 GET /api/account로 본다."""
+        body = self._check_account_write(json_body=True)
+        if body is None:
+            return
+        provider = body.get("provider")
+        if set(body) != {"provider"} or not isinstance(provider, str):
+            self._send_json(
+                400, api_error.error_body(api_error.INVALID_REQUEST, "provider 칸 하나만 보내야 합니다.")
+            )
+            return
+        try:
+            self.account.start_login(provider)
+        except UnknownProvider:
+            self._send_json(
+                400, api_error.error_body(api_error.INVALID_REQUEST, "지원하지 않는 로그인 방식입니다.")
+            )
+            return
+        except LoginInProgress:
+            self._send_json(
+                409, api_error.error_body(api_error.INVALID_REQUEST, "이미 로그인이 진행 중입니다.")
+            )
+            return
+        except AccountUnavailable:
+            self._send_account_unavailable()
+            return
+        self._send_account(202)
+
+    def _cancel_login(self) -> None:
+        """DELETE /api/account/login — 진행 중인 로그인을 취소한다(진행 중이 아니어도 같다)."""
+        if self._check_account_write(json_body=False) is None:
+            return
+        self.account.cancel_login()
+        self._send_account(200)
+
+    def _logout(self) -> None:
+        """POST /api/account/logout — 이 PC의 로그인 정보를 지운다(서버 토큰 폐기는 가능하면)."""
+        if self._check_account_write(json_body=False) is None:
+            return
+        try:
+            revoked = self.account.sign_out()
+        except AccountUnavailable:
+            self._send_account_unavailable()
+            return
+        except LogoutProblem as error:
+            self._send_json(500, api_error.error_body(api_error.INTERNAL, error.message))
+            return
+        self._send_account(200, {"revoked_on_server": revoked})
+
+    def _send_sync_problem(self, problem: SyncProblem) -> None:
+        """동기화 요청의 실패: 로그인이 필요하면 409, 서버 문제면 503(사유는 사용자용 문장)."""
+        if problem.signed_out:
+            self._send_json(409, api_error.error_body(api_error.INVALID_REQUEST, problem.message))
+        else:
+            self._send_json(503, api_error.error_body(api_error.UNAVAILABLE, problem.message))
+
+    def _get_sync_plan(self) -> None:
+        """GET /api/sync/plan — 로그인 직후 "무엇을 서버에 올릴까요?" 확인 창의 내용(서버 목록과 이 PC 목록을 견준 것)."""
+        try:
+            plan = self.account.sync_plan(self.goals_db_path)
+        except AccountUnavailable:
+            self._send_account_unavailable()
+            return
+        except SyncProblem as problem:
+            self._send_sync_problem(problem)
+            return
+        except (sqlite3.Error, SchemaVersionError) as error:
+            self._send_unavailable("목표 DB", error)
+            return
+        self._send_json(200, plan)
+
+    def _apply_sync(self) -> None:
+        """POST /api/sync/apply {"accepted": [key…]} — 체크한 항목만 서버에 올리고·합치고·가져온다. 체크하지 않은 이 PC 목표는 올리지 않는다."""
+        body = self._check_account_write(json_body=True)
+        if body is None:
+            return
+        accepted = body.get("accepted")
+        email = body.get("email")
+        if (
+            set(body) != {"accepted", "email"}
+            or not (email is None or (isinstance(email, str) and len(email) <= MAX_EMAIL_LENGTH))
+            or not isinstance(accepted, list)
+            or len(accepted) > MAX_SYNC_CHOICES
+            or not all(isinstance(key, str) and 0 < len(key) <= MAX_SYNC_KEY_LENGTH for key in accepted)
+        ):
+            self._send_json(
+                400,
+                api_error.error_body(
+                    api_error.INVALID_REQUEST, "accepted(항목 이름 목록)와 email(확인한 계정) 칸만 보내야 합니다."
+                ),
+            )
+            return
+        try:
+            result = self.account.sync_apply(self.goals_db_path, accepted, email)
+        except AccountUnavailable:
+            self._send_account_unavailable()
+            return
+        except SyncBusy:
+            self._send_json(409, api_error.error_body(api_error.INVALID_REQUEST, "이미 동기화를 처리하는 중입니다."))
+            return
+        except SyncProblem as problem:
+            self._send_sync_problem(problem)
+            return
+        except (sqlite3.Error, SchemaVersionError) as error:
+            self._send_unavailable("목표 DB", error)
+            return
+        self._send_json(200, result)
+
+    def _send_account_unavailable(self) -> None:
+        """계정 기능을 쓸 수 없는 환경(cloud 없음)의 요청에 503."""
+        self._send_json(
+            503, api_error.error_body(api_error.UNAVAILABLE, "이 설치에서는 로그인 기능을 쓸 수 없습니다.")
+        )
+
+    def _open_link(self) -> None:
+        """POST /api/links/open {"link"} — 고정된 목록의 바깥 링크를 시스템 브라우저로 연다."""
+        body = self._check_account_write(json_body=True)
+        if body is None:
+            return
+        link = body.get("link")
+        if set(body) != {"link"} or not isinstance(link, str):
+            self._send_json(
+                400, api_error.error_body(api_error.INVALID_REQUEST, "link 칸 하나만 보내야 합니다.")
+            )
+            return
+        outcome = self.link_opener(link)
+        if outcome == LINK_OPENED:
+            self._send_empty(204)
+        elif outcome == LINK_FAILED:
+            # 화면이 직접 열기를 시도할 수 있게 실패를 알린다(204로 답하면 열린 줄 안다).
+            self._send_json(
+                503, api_error.error_body(api_error.UNAVAILABLE, "브라우저를 열지 못했습니다.")
+            )
+        else:
+            self._send_json(
+                400, api_error.error_body(api_error.INVALID_REQUEST, "열 수 없는 링크입니다.")
+            )
 
     def _get_goals(self) -> None:
         """저장된 목표 목록."""
