@@ -86,7 +86,7 @@ PC에서 실행 중인 프로세스와 활성 창을 주기적으로 기록하�
 - **Node**: 24.x LTS (`package.json`의 `engines.node`, `.mise.toml` 참고)
 - **패키지 매니저**: pnpm — `corepack enable` 후 `pnpm install`
 - **Lint/Format**: `pnpm lint`, `pnpm format` (Biome)
-- **테스트**: `uv run pytest`(파이썬 전체), `pnpm --filter ui test`, `pnpm --filter server test`. PR마다 CI(`.github/workflows/ci.yml`)가 이것들과 lint·타입 검사를 돌린다.
+- **테스트**: `pnpm check` — 바뀐 파일에 해당하는 lint·타입 검사·테스트만 골라 돌린다(파이썬은 의존하는 프로젝트의 테스트까지). 전부는 `pnpm check:all`. PR마다 CI(`.github/workflows/ci.yml`)가 같은 스크립트로 돌린다.
 - **버전 관리(로컬)**: [mise](https://mise.jdx.dev/)로 Node·Python 버전을 고정해뒀습니다 (`.mise.toml`). `mise install`로 맞는 버전을 받고, `mise activate`를 쉘 프로필에 추가하면 디렉터리 진입 시 자동 전환됩니다.
 - **Docker**: `docker-compose.yml` + `Dockerfile`로 개발 환경을 컨테이너화할 수 있습니다. 앱 빌드용이 아니라 여러 디바이스에서 동일한 Node 버전을 보장하는 용도입니다. `docker compose run --rm dev bash`로 들어가서 작업하면 됩니다. (빌드/실행 검증 완료) `docker compose up server`는 Cloudflare 쪽(Worker + 로컬 D1)을 `127.0.0.1:8790`에 띄워 동기화를 시험하는 용도입니다(명령과 통합 시험 방법은 `docs/sync-client.md`의 "서버를 로컬에서 띄워 통합 시험 하기").
 - **저장소에서 바로 실행**: `uv sync` 뒤 `uv run whatever-log install` 한 번이면 자동 시작 등록, 시작 메뉴 바로가기, 화면 빌드까지 한다(데이터는 앱 폴더 안에 쌓인다). 자세한 명령은 `docs/packaging.md`.
