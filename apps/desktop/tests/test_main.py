@@ -176,12 +176,23 @@ def test_main_enables_devtools_in_dev_mode(tmp_path, monkeypatch) -> None:
         monkeypatch.setattr(main_module, "supervise", MagicMock())
 
         try:
+            shown_handlers: list = []
+
+            class _Event:
+                def __iadd__(self, handler):
+                    shown_handlers.append(handler)
+                    return self
+
             with patch("desktop.__main__.webview") as mock_webview:
+                mock_webview.create_window.return_value.events.shown = _Event()
                 main_module.main()
         finally:
             main_module.hub_supervisor_logger.handlers.clear()
 
-        mock_webview.start.assert_called_once_with(debug=True)
+        mock_webview.start.assert_called_once()
+        assert mock_webview.start.call_args.kwargs == {"debug": True}
+        # 아이콘은 창이 실제로 보일 때(shown 이벤트) 붙인다 — 시간을 정해 두고 기다리지 않는다
+        assert len(shown_handlers) == 1
     finally:
         server.close()
 

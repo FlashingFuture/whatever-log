@@ -28,6 +28,7 @@ class AlreadyRunningError(RuntimeError):
 
 def acquire_lock(path: Path) -> FileLock:
     """다른 인스턴스가 이미 실행 중이면 기다리지 않고 바로 실패한다."""
+    path.parent.mkdir(parents=True, exist_ok=True)  # 배포 모양의 데이터 폴더는 처음 쓸 때 만든다
     lock = FileLock(path)
     try:
         lock.acquire(timeout=0)

@@ -44,6 +44,7 @@ class SyncState:
 
     def __init__(self, path: Path) -> None:
         """path의 sync.db를 열고(없으면 만들고) 스키마를 준비한다."""
+        Path(path).parent.mkdir(parents=True, exist_ok=True)  # 배포 모양의 데이터 폴더는 처음 쓸 때 만든다
         self._conn = sqlite3.connect(path, isolation_level=None, timeout=5.0)
         try:
             self._conn.execute("PRAGMA journal_mode = WAL")

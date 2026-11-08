@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
+from common.paths import data_path
 from supervision.log_setup import configure_logging
 from recorder.browser_site import SiteTracker
 from recorder.process_paths import ProcessPathTracker
@@ -31,8 +32,8 @@ DEFAULT_INTERVAL_SECONDS = 15.0
 MIN_INTERVAL_SECONDS = 1.0
 
 _APP_DIR = Path(__file__).resolve().parent.parent.parent
-DEFAULT_DB_PATH = _APP_DIR / "recorder.db"
-DEFAULT_LOG_PATH = _APP_DIR / "recorder.log"
+DEFAULT_DB_PATH = data_path(_APP_DIR, "recorder.db")
+DEFAULT_LOG_PATH = data_path(_APP_DIR, "recorder.log", subdir="logs")
 
 logger = logging.getLogger("recorder")
 

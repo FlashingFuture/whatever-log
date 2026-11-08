@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="whatever.log">
+<rect width="256" height="256" rx="58" fill="#d4e4fb"/>
+<g transform="translate(43.0 130.0) rotate(73.3)">
+  <rect x="-52.2" y="-19.0" width="104.4" height="38.0" rx="4" fill="#2c6bd6"/>
+  <rect x="-35.5" y="-6.8" width="71.0" height="13.7" fill="#ffffff"/>
+</g>
+<g transform="translate(73.0 149.0) rotate(-64.2)">
+  <rect x="-34.4" y="-19.0" width="68.9" height="38.0" rx="4" fill="#1f55b8"/>
+  <rect x="-22.4" y="-6.8" width="44.9" height="13.7" fill="#ffffff"/>
+</g>
+<g transform="translate(103.0 149.0) rotate(64.2)">
+  <rect x="-34.4" y="-19.0" width="68.9" height="38.0" rx="4" fill="#3b7be0"/>
+  <rect x="-22.4" y="-6.8" width="44.9" height="13.7" fill="#ffffff"/>
+</g>
+<g transform="translate(134.0 126.0) rotate(-73.5)">
+  <rect x="-56.3" y="-19.0" width="112.6" height="38.0" rx="4" fill="#2c6bd6"/>
+  <rect x="-38.3" y="-6.8" width="76.6" height="13.7" fill="#ffffff"/>
+</g>
+<g transform="translate(196.0 126.0) rotate(90.0)">
+  <rect x="-80.0" y="-23.0" width="160.0" height="46.0" rx="8" fill="#1f55b8"/>
+  <rect x="-64.0" y="-8.3" width="128.0" height="16.6" fill="#ffffff"/>
+</g>
+</svg>

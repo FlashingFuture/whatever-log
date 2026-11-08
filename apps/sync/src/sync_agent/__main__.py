@@ -34,6 +34,7 @@ from cloud import (
     load_config,
 )
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
+from common.paths import data_path
 from goals import META_DEVICE_ID, GoalStore, SchemaVersionError, StaleSyncError
 from goals import sync_status as status
 from goalsync import SyncReport, SyncState, sync_once
@@ -46,10 +47,10 @@ MIN_INTERVAL_SECONDS = 5.0
 MAX_BACKOFF_SECONDS = 3600.0
 
 _APP_DIR = Path(__file__).resolve().parent.parent.parent
-DEFAULT_STATE_PATH = _APP_DIR / "sync.db"
-DEFAULT_LOG_PATH = _APP_DIR / "sync.log"
+DEFAULT_STATE_PATH = data_path(_APP_DIR, "sync.db")
+DEFAULT_LOG_PATH = data_path(_APP_DIR, "sync.log", subdir="logs")
 # hub와 같은 목표 DB를 쓴다(apps/hub/goals.db). 둘 다 WAL 모드이고 쓰기는 BEGIN IMMEDIATE로 직렬화된다.
-DEFAULT_GOALS_DB = _APP_DIR.parent / "hub" / "goals.db"
+DEFAULT_GOALS_DB = data_path(_APP_DIR.parent / "hub", "goals.db")
 
 logger = logging.getLogger("sync_agent")
 

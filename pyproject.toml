@@ -3,6 +3,7 @@ members = [
     "apps/recorder",
     "apps/desktop",
     "apps/hub",
+    "apps/launcher",
     "apps/sync",
     "packages/aggregation",
     "packages/chromium",
@@ -25,6 +26,7 @@ testpaths = [
     "apps/recorder/tests",
     "apps/desktop/tests",
     "apps/hub/tests",
+    "apps/launcher/tests",
     "apps/sync/tests",
     "packages/aggregation/tests",
     "packages/chromium/tests",
@@ -33,4 +35,5 @@ testpaths = [
     "packages/goals/tests",
     "packages/goalsync/tests",
     "packages/supervision/tests",
+    "scripts/tests",
 ]

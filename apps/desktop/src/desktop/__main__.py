@@ -46,17 +46,21 @@ from urllib.parse import urlparse, urlsplit
 import webview
 from hub.__main__ import DEFAULT_PORT as HUB_PORT
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
+from common.paths import data_path
 from supervision.log_setup import configure_logging
 from supervision.supervisor import supervise
 
+from desktop.window_icon import apply_window_icon, set_app_user_model_id
+
 DEV_SERVER_URL = "http://localhost:5173"
+WINDOW_TITLE = "whatever.log"
 
 _APP_DIR = Path(__file__).resolve().parents[2]
 _UI_DIST_DIR = _APP_DIR.parent / "ui" / "dist"
 _UI_DIST_INDEX = _UI_DIST_DIR / "index.html"
 
 _HUB_READY_TIMEOUT_SECONDS = 5.0
-DEFAULT_HUB_SUPERVISOR_LOG_PATH = _APP_DIR / "hub-supervisor.log"
+DEFAULT_HUB_SUPERVISOR_LOG_PATH = data_path(_APP_DIR, "hub-supervisor.log", subdir="logs")
 
 hub_supervisor_logger = logging.getLogger("desktop.hub_supervisor")
 
@@ -150,6 +154,12 @@ def _wait_for_hub_port(port: int, timeout: float) -> None:
     raise TimeoutError(f"hub가 {timeout}초 안에 포트 {port}를 열지 않았습니다.")
 
 
+def _set_icon(title: str) -> None:
+    """창이 보이게 된 뒤(shown 이벤트) 앱 아이콘을 붙인다. 붙이지 못해도 앱은 그대로 쓸 수 있어 로그만 남긴다."""
+    if not apply_window_icon(title):
+        hub_supervisor_logger.warning("창 아이콘을 붙이지 못했습니다.")
+
+
 def main() -> None:
     """CLI 인자(`--dev`)를 파싱해서 hub를 supervise하며 webview 창을 연다."""
     parser = argparse.ArgumentParser(description="whatever.log 데스크톱 창")
@@ -174,6 +184,8 @@ def main() -> None:
         sys.exit(1)
 
     configure_logging(hub_supervisor_logger, DEFAULT_HUB_SUPERVISOR_LOG_PATH)
+    if not set_app_user_model_id():  # 작업표시줄에서 python.exe의 창과 묶이지 않게(창을 만들기 전에)
+        hub_supervisor_logger.warning("AppUserModelID를 설정하지 못했습니다. 작업표시줄이 이 창을 python.exe와 묶어 보일 수 있습니다.")
 
     # UI를 먼저 서빙해 실제 주소(임의 포트)를 알아낸 뒤, 그 origin을 hub에 넘겨 띄운다.
     ui_url = _resolve_url(args.dev)
@@ -201,7 +213,9 @@ def main() -> None:
             # 못 본다. 로그에만 남기고 창은 그대로 연다 — apps/ui가 fetch
             # 실패를 감지해서 화면에 에러로 보여준다.
             hub_supervisor_logger.exception("hub 준비를 기다리지 못했지만 창은 엽니다.")
-        webview.create_window("whatever.log", ui_url)
+        window = webview.create_window(WINDOW_TITLE, ui_url)
+        # 창이 실제로 만들어졌을 때 아이콘을 붙인다. 시간을 정해 두고 기다리면 창이 늦게 뜰 때(느린 PC, 첫 실행) 아이콘을 놓친다.
+        window.events.shown += partial(_set_icon, WINDOW_TITLE)
         # --dev일 때 DevTools를 켠다 — 이 앱은 콘솔 없는 환경(pythonw.exe)에서
         # 돌아서 평소엔 네트워크 탭/콘솔로 디버깅할 방법이 없다.
         webview.start(debug=args.dev)

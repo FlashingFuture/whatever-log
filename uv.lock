@@ -12,6 +12,7 @@ members = [
     "goals",
     "goalsync",
     "hub",
+    "launcher",
     "recorder",
     "summary",
     "supervision",
@@ -404,6 +405,37 @@ sdist = { url = "https://files.pythonhosted.org/packages/43/4b/674af6ef2f97d56f0
 wheels = [
     { url = "https://files.pythonhosted.org/packages/81/db/e655086b7f3a705df045bf0933bdd9c2f79bb3c97bfef1384598bb79a217/keyring-25.7.0-py3-none-any.whl", hash = "sha256:be4a0b195f149690c166e850609a477c532ddbfbaed96a404d4e43f8d5e2689f", size = 39160, upload-time = "2025-11-16T16:26:08.402Z" },
 ]
+
+[[package]]
+name = "launcher"
+version = "0.1.0"
+source = { editable = "apps/launcher" }
+dependencies = [
+    { name = "common" },
+    { name = "desktop" },
+    { name = "psutil" },
+    { name = "recorder" },
+    { name = "supervision" },
+    { name = "sync" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "common", editable = "packages/common" },
+    { name = "desktop", editable = "apps/desktop" },
+    { name = "psutil", specifier = ">=6.1.0" },
+    { name = "recorder", editable = "apps/recorder" },
+    { name = "supervision", editable = "packages/supervision" },
+    { name = "sync", editable = "apps/sync" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=9.1.1" }]
 
 [[package]]
 name = "more-itertools"
