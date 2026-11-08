@@ -92,7 +92,9 @@ git tag v1.0.0-beta.1
 git push origin v1.0.0-beta.1
 ```
 
-Actions가 태그와 `VERSION`이 같은지 확인하고(다르면 멈춘다), 화면을 빌드해 번들을 만들고, **GitHub Release**에 올린다(하이픈이 든 태그는 *pre-release*로 표시). 릴리스 설명에 zip의 SHA-256이 적힌다.
+Actions가 태그와 `VERSION`이 같은지 확인하고(다르면 멈춘다), 화면을 빌드해 번들을 만들고, **만든 zip을 사용자처럼 풀어 `install.cmd`로 설치해 본 뒤**(`--no-start`, 버전·자동 시작 등록·`uninstall`까지 확인) **GitHub Release**에 올린다(하이픈이 든 태그는 *pre-release*로 표시). 설치 시험이 실패하면 Release를 만들지 않는다. 릴리스 설명에 zip의 SHA-256이 적힌다.
+태그를 만들기 전에 같은 과정을 예행연습하려면 Actions 화면에서 `release` 워크플로를 직접 실행한다(Run workflow). 번들 만들기와 설치 시험까지만 하고 Release는 올리지 않는다.
+- **한 번 공개한 버전 번호는 다시 쓰지 않는다.** 잘못 나간 버전은 Release를 지우고(태그는 남긴다) 다음 번호로 낸다 — `v1.0.0-beta.1`이 그랬다(배포된 `install.cmd`가 LF 줄바꿈이라 cmd가 실행하지 못했다).
 로컬에서 같은 번들을 만들어 보려면: `uv run python scripts/build_release.py`(결과는 `release-out/`, git이 무시한다). 같은 내용이면 같은 해시가 나온다.
 
 ### 사용자가 설치·업데이트하는 법
@@ -107,4 +109,3 @@ Actions가 태그와 `VERSION`이 같은지 확인하고(다르면 멈춘다), �
 - **실행 파일(.exe)·설치 마법사**: 파이썬을 통째로 묶어야 하고(pywebview·pythonnet·WebView2), 서명 없는 exe는 백신 오탐이 잦다. 지금은 uv가 파이썬 환경을 만든다.
   나중에 넣게 되면 `whatever-log`(`launcher`)를 그대로 진입점으로 묶으면 된다.
 - **코드 서명**, **자동 업데이트**(새 버전 알림·내려받기).
-- 이 릴리스 워크플로는 실제 GitHub Actions에서 한 번도 돌려 보지 못했다 — 첫 태그(베타)로 확인한다.

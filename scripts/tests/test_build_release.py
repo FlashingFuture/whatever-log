@@ -175,3 +175,21 @@ def test_the_workflow_picks_the_zip_line_not_the_first_line() -> None:
     workflow = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
     assert "head -n1" not in workflow and "grep '\.zip$'" in workflow
+
+
+def test_the_workflow_installs_the_bundle_before_publishing_it() -> None:
+    """만든 zip을 install.cmd로 설치해 본 뒤에만 Release를 올린다 — v1.0.0-beta.1은 설치되지 않는 채로 나갔다."""
+    workflow = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+    install = workflow.index("call install.cmd")
+    publish = workflow.index("gh release create")
+    assert install < publish
+    assert "shell: cmd" in workflow[:install]  # 사용자가 더블클릭하는 것과 같게 cmd로 실행한다
+
+
+def test_a_manual_run_of_the_workflow_does_not_publish() -> None:
+    workflow = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    publish_step = workflow[workflow.index("- name: GitHub Release 올리기") :]
+
+    assert "workflow_dispatch:" in workflow
+    assert "if: github.ref_type == 'tag'" in publish_step.split("run:")[0]
