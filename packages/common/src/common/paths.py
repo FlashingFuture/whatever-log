@@ -6,7 +6,7 @@
 - **배포 모양(릴리스 번들)**: 번들 루트에 `release.json`이 있다. 이 경우 데이터와 로그는 **사용자 데이터 폴더**
   (`%LOCALAPPDATA%\\whatever.log`)에 둔다 — 새 버전을 새 폴더에 풀어도, 폴더를 지워도 기록과 목표가 남는다.
 
-환경변수 `WHATEVER_LOG_DATA_DIR`이 있으면 두 모양 모두에서 그 폴더를 데이터 폴더로 쓴다(시험·이전 용도).
+환경변수 `WHATEVER_LOG_DATA_DIR`이 있으면 두 모양 모두에서 그 폴더를 데이터 폴더로 쓴다(시험·이전 용도). 상대 경로는 설치 폴더 기준이다.
 
 어느 쪽이든 **같은 이름의 파일은 항상 같은 곳**에 있어야 한다: hub는 recorder.db를 읽고, 동기화 에이전트는 hub의 goals.db를 열기 때문이다.
 그래서 경로를 앱마다 따로 정하지 않고 `data_path`로 통일한다.
@@ -50,31 +50,34 @@ def version(root: Path | None = None) -> str:
 
 
 def data_dir(root: Path | None = None, environ: dict[str, str] | None = None) -> Path | None:
-    """데이터 폴더(없으면 만든다). 개발 모양이고 환경변수도 없으면 None — 호출부가 앱 폴더를 쓴다."""
+    """데이터 폴더의 경로(배포 모양이거나 환경변수가 있을 때). 개발 모양이고 환경변수도 없으면 None — 호출부가 앱 폴더를 쓴다.
+
+    **조회만 하고 폴더를 만들지 않는다**: 앱 모듈이 import될 때 불리므로(`status`·`--version`·`uninstall`도 앱 모듈을 import한다), 여기서
+    폴더를 만들거나 실패하면 관리 명령까지 못 쓰게 된다. 폴더는 실제로 쓰는 쪽(로그·lock·DB를 여는 곳)이 만든다.
+
+    - `WHATEVER_LOG_DATA_DIR`이 **상대 경로**면 설치 폴더(`install_root`)를 기준으로 푼다 — 프로세스마다 작업 디렉터리가 달라도
+      hub·recorder·sync가 같은 폴더를 가리키게 하려는 것이다(작업 디렉터리를 기준으로 하면 프로세스마다 다른 DB를 열게 된다).
+    - 번들인데 `LOCALAPPDATA`가 없으면(드문 환경) 윈도우의 표준 위치(`~/AppData/Local`)로 정한다 — 모든 프로세스가 같은 곳을 가리키고,
+      import가 실패하지 않는다.
+    """
     env = os.environ if environ is None else environ
+    base = root or install_root()
     explicit = env.get(DATA_DIR_ENV)
     if explicit:
-        chosen = Path(explicit)
-    elif bundle_info(root) is not None:
-        base = env.get("LOCALAPPDATA")
-        if not base:
-            raise RuntimeError("LOCALAPPDATA를 알 수 없어 데이터 폴더를 정하지 못했습니다.")
-        chosen = Path(base) / APP_FOLDER_NAME
-    else:
+        chosen = Path(explicit).expanduser()
+        return chosen if chosen.is_absolute() else (base / chosen)
+    if bundle_info(base) is None:
         return None
-    chosen.mkdir(parents=True, exist_ok=True)
-    return chosen
+    local = env.get("LOCALAPPDATA")
+    return (Path(local) if local else Path.home() / "AppData" / "Local") / APP_FOLDER_NAME
 
 
 def data_path(legacy_dir: Path, name: str, *, subdir: str | None = None) -> Path:
-    """데이터 파일의 경로. 배포 모양이면 `<데이터 폴더>/[subdir/]name`, 개발 모양이면 `legacy_dir/name`(기존 위치).
+    """데이터 파일의 경로(만들지 않는다). 배포 모양이면 `<데이터 폴더>/[subdir/]name`, 개발 모양이면 `legacy_dir/name`(기존 위치).
 
-    subdir은 배포 모양에서만 쓰인다(로그를 `logs/` 아래에 모은다). 개발 모양의 위치는 바꾸지 않는다.
+    subdir은 배포 모양에서만 쓰인다(로그를 `logs/` 아래에 모은다). 개발 모양의 위치는 바꾸지 않는다. 폴더는 파일을 만드는 쪽이 만든다.
     """
     folder = data_dir()
     if folder is None:
         return legacy_dir / name
-    if subdir:
-        folder = folder / subdir
-        folder.mkdir(parents=True, exist_ok=True)
-    return folder / name
+    return (folder / subdir if subdir else folder) / name

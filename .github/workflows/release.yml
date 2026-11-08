@@ -30,7 +30,7 @@ jobs:
           uv python install 3.14
           out="$(uv run python scripts/build_release.py --expect-tag "${GITHUB_REF_NAME}")"
           echo "$out"
-          echo "archive=$(echo "$out" | head -n1)" >> "$GITHUB_OUTPUT"
+          echo "archive=$(echo "$out" | grep '\.zip$' | tail -n1)" >> "$GITHUB_OUTPUT"
           echo "sha256=$(echo "$out" | sed -n 's/^sha256: //p')" >> "$GITHUB_OUTPUT"
 
       - name: GitHub Release 올리기

@@ -137,3 +137,22 @@ def test_a_tag_that_differs_from_the_version_stops_the_release(monkeypatch, caps
 
     assert build_release.main(["--skip-ui-build", "--expect-tag", "v1.0.0"]) == 1
     assert "VERSION" in capsys.readouterr().err
+
+
+def test_ui_build_output_goes_to_stderr_so_stdout_only_carries_the_result(monkeypatch, repo) -> None:
+    """워크플로가 표준 출력의 zip 경로 줄을 읽는다 — pnpm의 진행 출력이 섞이면 엉뚱한 파일을 올린다."""
+    calls = []
+    monkeypatch.setattr(build_release.shutil, "which", lambda name: "corepack")
+    monkeypatch.setattr(build_release.subprocess, "run", lambda command, **kwargs: calls.append((command, kwargs)))
+
+    build_release.build_ui(repo)
+
+    assert len(calls) == 2
+    for _, kwargs in calls:
+        assert kwargs["stdout"] is build_release.sys.stderr and kwargs["check"] is True
+
+
+def test_the_workflow_picks_the_zip_line_not_the_first_line() -> None:
+    workflow = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+    assert "head -n1" not in workflow and "grep '\.zip$'" in workflow

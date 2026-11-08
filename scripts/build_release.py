@@ -57,12 +57,13 @@ def python_projects(root: Path = ROOT) -> list[Path]:
 
 
 def build_ui(root: Path = ROOT) -> None:
-    """화면을 빌드한다(화면 쪽 의존성만 설치한다 — 서버용 의존성은 필요 없다)."""
+    """화면을 빌드한다(화면 쪽 의존성만 설치한다 — 서버용 의존성은 필요 없다). pnpm의 출력은 표준 오류로 보낸다 —
+    표준 출력은 마지막의 결과(zip 경로, sha256)만 담아야 워크플로가 그것을 읽을 수 있다."""
     corepack = shutil.which("corepack")
     if corepack is None:
         raise SystemExit("corepack(Node.js)을 찾지 못했어요. Node.js를 설치하거나 --skip-ui-build로 이미 빌드한 화면을 쓰세요.")
-    subprocess.run([corepack, "pnpm", "install", "--frozen-lockfile", "--filter", "ui..."], cwd=root, check=True)
-    subprocess.run([corepack, "pnpm", "build"], cwd=root / "apps" / "ui", check=True)
+    subprocess.run([corepack, "pnpm", "install", "--frozen-lockfile", "--filter", "ui..."], cwd=root, check=True, stdout=sys.stderr)
+    subprocess.run([corepack, "pnpm", "build"], cwd=root / "apps" / "ui", check=True, stdout=sys.stderr)
 
 
 def stage(version: str, target: Path, root: Path = ROOT) -> None:

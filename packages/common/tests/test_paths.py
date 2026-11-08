@@ -20,13 +20,14 @@ def test_a_development_checkout_has_no_data_dir_so_apps_keep_their_own_folders(r
     assert paths.data_dir(root, {}) is None
 
 
-def test_a_release_bundle_keeps_data_in_local_app_data(root, tmp_path) -> None:
+def test_a_release_bundle_keeps_data_in_local_app_data_and_does_not_create_it(root, tmp_path) -> None:
     _bundle(root)
     local = tmp_path / "local"
 
     folder = paths.data_dir(root, {"LOCALAPPDATA": str(local)})
 
-    assert folder == local / "whatever.log" and folder.is_dir()  # 만들어 둔다
+    assert folder == local / "whatever.log"
+    assert not local.exists()  # 조회만 한다 — 앱 모듈이 import될 때 불려서, 여기서 만들면 status·--version도 폴더를 만든다
 
 
 def test_the_environment_variable_overrides_both_shapes(root, tmp_path) -> None:
@@ -36,11 +37,26 @@ def test_the_environment_variable_overrides_both_shapes(root, tmp_path) -> None:
     assert paths.data_dir(root, {paths.DATA_DIR_ENV: str(target), "LOCALAPPDATA": str(tmp_path)}) == target
 
 
-def test_a_bundle_without_local_app_data_fails_loudly_instead_of_writing_beside_the_code(root) -> None:
+def test_a_relative_data_dir_is_resolved_against_the_install_folder_not_the_working_directory(root, tmp_path, monkeypatch) -> None:
+    """작업 디렉터리를 기준으로 하면 프로세스마다 다른 폴더(= 다른 DB)를 가리킨다. 설치 폴더는 모든 프로세스에 같다."""
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    monkeypatch.chdir(other)
+
+    folder = paths.data_dir(root, {paths.DATA_DIR_ENV: "data"})
+
+    assert folder == root / "data"
+    monkeypatch.chdir(tmp_path)
+    assert paths.data_dir(root, {paths.DATA_DIR_ENV: "data"}) == folder  # 어디서 불러도 같다
+
+
+def test_a_bundle_without_local_app_data_still_gets_a_stable_standard_location(root) -> None:
+    """import가 실패하면 status·uninstall도 못 쓴다 — 실패시키지 않고 모든 프로세스가 같은 표준 위치를 쓴다."""
     _bundle(root)
 
-    with pytest.raises(RuntimeError, match="LOCALAPPDATA"):
-        paths.data_dir(root, {})
+    folder = paths.data_dir(root, {})
+
+    assert folder is not None and folder.name == paths.APP_FOLDER_NAME and folder.parent.name == "Local"
 
 
 @pytest.mark.parametrize("content", ["not json", "[1, 2]", ""])
@@ -59,11 +75,11 @@ def test_data_path_uses_the_legacy_folder_in_development(monkeypatch, tmp_path) 
 
 def test_data_path_puts_logs_in_a_subfolder_and_databases_at_the_top_when_deployed(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(paths, "data_dir", lambda *a, **k: tmp_path / "data")
-    (tmp_path / "data").mkdir()
 
     assert paths.data_path(tmp_path / "legacy", "goals.db") == tmp_path / "data" / "goals.db"
     log = paths.data_path(tmp_path / "legacy", "hub.log", subdir="logs")
-    assert log == tmp_path / "data" / "logs" / "hub.log" and log.parent.is_dir()
+    assert log == tmp_path / "data" / "logs" / "hub.log"
+    assert not (tmp_path / "data").exists()  # 경로만 정한다
 
 
 def test_every_app_resolves_the_shared_files_to_the_same_place(monkeypatch, tmp_path) -> None:
@@ -96,3 +112,4 @@ def test_version_comes_from_the_marker_in_a_bundle_and_is_marked_dev_otherwise(r
 
 def test_version_survives_a_missing_file(tmp_path) -> None:
     assert paths.version(tmp_path) == "알 수 없음"
+
