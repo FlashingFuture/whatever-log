@@ -1,5 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="whatever.log">
-  <rect width="256" height="256" rx="58" fill="#2a2f6e"/>
-  <path d="M40 76 L80 176 L128 96 L176 176 L216 76" fill="none" stroke="#ffffff" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="214" cy="204" r="16" fill="#ffc857"/>
+<rect width="256" height="256" rx="58" fill="#d4e4fb"/>
+<g transform="translate(58.0 126.0) rotate(70.2)">
+  <rect x="-53.1" y="-21.0" width="106.3" height="42.0" rx="4" fill="#2c6bd6"/>
+  <rect x="-36.1" y="-7.6" width="72.3" height="15.1" fill="#ffffff"/>
+</g>
+<g transform="translate(102.0 136.0) rotate(-57.0)">
+  <rect x="-47.7" y="-21.0" width="95.4" height="42.0" rx="4" fill="#1f55b8"/>
+  <rect x="-32.4" y="-7.6" width="64.9" height="15.1" fill="#ffffff"/>
+</g>
+<g transform="translate(154.0 136.0) rotate(57.0)">
+  <rect x="-47.7" y="-21.0" width="95.4" height="42.0" rx="4" fill="#3b7be0"/>
+  <rect x="-32.4" y="-7.6" width="64.9" height="15.1" fill="#ffffff"/>
+</g>
+<g transform="translate(198.0 126.0) rotate(-70.2)">
+  <rect x="-53.1" y="-21.0" width="106.3" height="42.0" rx="4" fill="#2c6bd6"/>
+  <rect x="-36.1" y="-7.6" width="72.3" height="15.1" fill="#ffffff"/>
+</g>
 </svg>
