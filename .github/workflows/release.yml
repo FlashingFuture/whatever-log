@@ -1,11 +1,15 @@
 # 태그(v1.0.0, v1.0.0-beta.1 …)를 푸시하면 릴리스 번들을 만들어 GitHub Release에 올린다.
 # 하이픈이 든 태그(v1.0.0-beta.1)는 "시험 버전(pre-release)"으로 표시된다. 절차는 docs/packaging.md의 "릴리스 만들기".
+# 올리기 전에 만든 zip을 사용자처럼 풀어 install.cmd로 설치해 보고, 실패하면 Release를 만들지 않는다
+# (v1.0.0-beta.1은 테스트가 다 통과했는데도 install.cmd가 실행되지 않는 채로 나갔다).
+# Actions 화면에서 직접 실행(workflow_dispatch)하면 번들 만들기와 설치 시험까지만 하고 Release는 올리지 않는다 — 태그 전 예행연습용.
 name: release
 
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -14,13 +18,13 @@ jobs:
   bundle:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10.3.0
 
       - name: 번들 만들기(태그가 VERSION과 같을 때만)
         id: build
@@ -28,12 +32,55 @@ jobs:
         run: |
           corepack enable
           uv python install 3.14
-          out="$(uv run python scripts/build_release.py --expect-tag "${GITHUB_REF_NAME}")"
+          tag_check=()
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then tag_check=(--expect-tag "${GITHUB_REF_NAME}"); fi
+          out="$(uv run python scripts/build_release.py "${tag_check[@]}")"
           echo "$out"
+          echo "version=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
           echo "archive=$(echo "$out" | grep '\.zip$' | tail -n1)" >> "$GITHUB_OUTPUT"
           echo "sha256=$(echo "$out" | sed -n 's/^sha256: //p')" >> "$GITHUB_OUTPUT"
 
+      - name: 설치 시험 — 번들 풀기
+        id: unpack
+        shell: pwsh
+        env:
+          ARCHIVE: ${{ steps.build.outputs.archive }}
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP "install-check"
+          Expand-Archive -LiteralPath $env:ARCHIVE -DestinationPath $dir
+          $app = (Get-ChildItem -LiteralPath $dir -Directory | Select-Object -First 1).FullName
+          "app=$app" >> $env:GITHUB_OUTPUT
+
+      # 사용자가 더블클릭하는 것과 같게 cmd로 실행한다. 러너에서 기록기를 띄울 필요는 없어서 등록까지만 한다(--no-start).
+      - name: 설치 시험 — install.cmd 실행
+        shell: cmd
+        working-directory: ${{ steps.unpack.outputs.app }}
+        run: |
+          call install.cmd --no-start < NUL
+          if errorlevel 1 exit /b 1
+
+      - name: 설치 시험 — 버전·상태 확인 후 제거
+        shell: bash
+        working-directory: ${{ steps.unpack.outputs.app }}
+        env:
+          PYTHONIOENCODING: utf-8
+          VERSION: ${{ steps.build.outputs.version }}
+        run: |
+          run() { uv run --frozen --no-dev whatever-log "$@"; }
+          expected="whatever.log ${VERSION}"
+          version="$(run --version)"
+          [ "$version" = "$expected" ] || { echo "버전이 달라요: '$version' (기대: '$expected')"; exit 1; }
+
+          status="$(run status)"
+          echo "$status"
+          echo "$status" | grep -q "(개발)" && { echo "번들인데 개발용 저장소로 인식했어요(release.json)"; exit 1; }
+          [ "$(echo "$status" | grep -c '자동 시작 등록됨')" -eq 2 ] || { echo "기록기·동기화 에이전트가 자동 시작에 등록되지 않았어요"; exit 1; }
+
+          run uninstall
+          [ "$(run status | grep -c '자동 시작 등록 안 됨')" -eq 2 ] || { echo "uninstall 뒤에도 자동 시작이 남아 있어요"; exit 1; }
+
       - name: GitHub Release 올리기
+        if: github.ref_type == 'tag'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

@@ -84,6 +84,10 @@ def _lock_path_for_db(db_path: Path) -> Path:
     return resolved_db_path.with_name(f"{resolved_db_path.name}.lock")
 
 
+#: 기본 DB의 중복 실행 lock. launcher가 기록기를 띄우기 전에 다른 설치본이 이 lock을 잡고 있는지 확인한다.
+DEFAULT_LOCK_PATH = _lock_path_for_db(DEFAULT_DB_PATH)
+
+
 def run(interval: float, db_path: Path) -> None:
     """lock을 잡고 DB를 열어 interval마다 한 틱씩 기록하는 메인 루프.
 
