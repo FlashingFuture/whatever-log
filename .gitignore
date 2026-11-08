@@ -16,6 +16,11 @@ goals.db-wal
 goals.db-shm
 recorder.lock
 hub-*.lock
+# 동기화 에이전트의 상태(기기 ID, 마지막으로 보낸 값)와 중복 실행 lock
+sync.db
+sync.db-wal
+sync.db-shm
+sync.lock
 icon-cache/
 
 .env
