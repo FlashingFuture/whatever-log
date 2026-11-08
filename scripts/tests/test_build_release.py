@@ -19,9 +19,10 @@ def _write(path: Path, text: str = "x") -> None:
 def repo(tmp_path):
     """번들에 들어가야 할 것과 들어가면 안 되는 것이 섞인 작은 저장소."""
     root = tmp_path / "repo"
-    for name in ("pyproject.toml", "uv.lock", "README.md"):
+    for name in ("pyproject.toml", "uv.lock", "README.md", "LICENSE"):
         _write(root / name)
     _write(root / "VERSION", "1.0.0-beta.1\n")
+    _write(root / ".python-version", "3.14\n")
     for app in build_release.PYTHON_APPS:
         _write(root / "apps" / app / "pyproject.toml")
         _write(root / "apps" / app / "src" / app / "__init__.py")
@@ -78,13 +79,26 @@ def test_the_shipped_version_file_is_valid() -> None:
     assert build_release.read_version()  # 저장소의 VERSION이 SemVer가 아니면 릴리스를 만들 수 없다
 
 
+def test_the_pinned_python_matches_what_ci_and_the_release_build_use() -> None:
+    """번들 설치(uv sync)가 고르는 파이썬이 CI·릴리스 빌드가 시험한 버전과 같아야 한다."""
+    root = Path(__file__).resolve().parents[2]
+    pinned = (root / ".python-version").read_text(encoding="utf-8").strip()
+    workflows = root / ".github" / "workflows"
+
+    for workflow in sorted(workflows.glob("*.yml")):
+        text = workflow.read_text(encoding="utf-8")
+        if "uv python install" in text:
+            assert f"uv python install {pinned}" in text, workflow.name
+
+
 # --- 번들 내용 ---
 
 
 def test_the_bundle_has_what_a_users_pc_needs(repo, tmp_path) -> None:
     _, files = _staged(repo, tmp_path)
 
-    assert {"pyproject.toml", "uv.lock", "VERSION", "README.md", "install.cmd", "release.json"} <= files
+    assert {"pyproject.toml", "uv.lock", "VERSION", "README.md", "LICENSE", "install.cmd", "release.json"} <= files
+    assert ".python-version" in files  # 없으면 사용자 PC의 uv가 CI와 다른(더 새) 파이썬을 고른다
     assert "apps/launcher/pyproject.toml" in files and "apps/launcher/src/launcher/__init__.py" in files
     assert "packages/common/src/common/__init__.py" in files
     assert "apps/ui/dist/index.html" in files
