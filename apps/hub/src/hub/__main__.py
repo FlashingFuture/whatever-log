@@ -626,6 +626,9 @@ class _Handler(BaseHTTPRequestHandler):
         accepted = body.get("accepted")
         email = body.get("email")
         session = body.get("session")
+        if set(body) != {"accepted", "email", "session"}:
+            # 어느 칸이 어긋났는지 로그에 남긴다(값은 남기지 않는다). 화면이 낡은 빌드일 때 원인을 바로 알 수 있다.
+            logger.warning("sync apply 본문 칸이 맞지 않음: 받은 칸=%s", sorted(str(key) for key in body))
         if (
             set(body) != {"accepted", "email", "session"}
             or not _optional_text(email, MAX_EMAIL_LENGTH)
@@ -1151,6 +1154,10 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header(name, value)
         self.end_headers()
         self.wfile.write(png)
+
+    def log_request(self, code: object = "-", size: object = "-") -> None:
+        """요청 한 줄을 hub 로그에 남긴다: 메서드, 경로, 상태 코드만. 쿼리(이메일·세션 키)와 본문은 남기지 않는다."""
+        logger.info("%s %s -> %s", self.command, urlsplit(self.path).path, code)
 
     def log_message(self, log_format: str, *args: object) -> None:
         pass  # 기본 동작(stderr에 접근 로그 출력)을 끈다.

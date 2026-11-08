@@ -18,40 +18,64 @@ const keys = createGoogleKeyProvider(
   () => Date.now(),
 );
 
+/**
+ * 요청 한 줄 로그: 메서드, 경로, 상태 코드, 걸린 시간(ms)만 남긴다. 쿼리·본문·헤더(토큰)·이메일은 남기지 않는다.
+ * `wrangler dev`/`docker compose logs server`에서 보이고, 배포한 Worker에서는 `wrangler tail`·대시보드 로그에서 본다.
+ */
+export function logRequest(
+  method: string,
+  pathname: string,
+  status: number,
+  startedAt: number,
+  now: () => number = () => Date.now(),
+): void {
+  console.log(`${method} ${pathname} ${status} ${now() - startedAt}ms`);
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    const startedAt = Date.now();
+    const response = await route(request, env);
     const { pathname } = new URL(request.url);
-    try {
-      if (pathname === "/health") {
-        return jsonResponse({ ok: true });
-      }
-      if (pathname === "/auth/google") {
-        if (request.method !== "POST") {
-          return errorResponse(405, "method_not_allowed", "POST만 받습니다.", {
-            Allow: "POST",
-          });
-        }
-        return await handleGoogleLogin(request, {
-          clientId: env.GOOGLE_CLIENT_ID,
-          clientSecret: env.GOOGLE_CLIENT_SECRET,
-          db: env.DB,
-          fetch: (input, init) => fetch(input, init),
-          keys,
-          now: () => new Date(),
-        });
-      }
-      const handled = await handleApi(request, new URL(request.url), {
-        db: env.DB,
-        now: () => new Date(),
-      });
-      return handled ?? errorResponse(404, "not_found", "없는 주소입니다.");
-    } catch (error) {
-      // 예상하지 못한 오류. 내용(토큰·코드가 섞일 수 있다)은 응답에 내지 않고 오류 이름만 남긴다.
-      console.error(
-        "unhandled error:",
-        error instanceof Error ? error.name : "unknown",
-      );
-      return errorResponse(500, "internal_error", "서버에서 오류가 났습니다.");
+    if (pathname !== "/health") {
+      logRequest(request.method, pathname, response.status, startedAt);
     }
+    return response;
   },
 } satisfies ExportedHandler<Env>;
+
+async function route(request: Request, env: Env): Promise<Response> {
+  const { pathname } = new URL(request.url);
+  try {
+    if (pathname === "/health") {
+      return jsonResponse({ ok: true });
+    }
+    if (pathname === "/auth/google") {
+      if (request.method !== "POST") {
+        return errorResponse(405, "method_not_allowed", "POST만 받습니다.", {
+          Allow: "POST",
+        });
+      }
+      return await handleGoogleLogin(request, {
+        clientId: env.GOOGLE_CLIENT_ID,
+        clientSecret: env.GOOGLE_CLIENT_SECRET,
+        db: env.DB,
+        fetch: (input, init) => fetch(input, init),
+        keys,
+        now: () => new Date(),
+      });
+    }
+    const handled = await handleApi(request, new URL(request.url), {
+      db: env.DB,
+      now: () => new Date(),
+    });
+    return handled ?? errorResponse(404, "not_found", "없는 주소입니다.");
+  } catch (error) {
+    // 예상하지 못한 오류. 내용(토큰·코드가 섞일 수 있다)은 응답에 내지 않고 오류 이름만 남긴다.
+    console.error(
+      "unhandled error:",
+      error instanceof Error ? error.name : "unknown",
+    );
+    return errorResponse(500, "internal_error", "서버에서 오류가 났습니다.");
+  }
+}

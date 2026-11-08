@@ -1090,3 +1090,24 @@ def test_deleting_the_account_reports_the_real_sync_setting_not_a_guess(sync_ser
 
     assert status == 200 and body["connections_cleared"] is False
     assert body["sync_enabled"] is True  # 실제로 켜져 있다
+
+
+def test_requests_are_logged_without_query_or_body(sync_server, caplog) -> None:
+    port, _, _ = sync_server
+    caplog.set_level("INFO", logger="hub")
+
+    call(port, "DELETE", f"/api/devices/{DEVICE_B}?email=secret@example.com&session=abcdef")
+
+    lines = [record.getMessage() for record in caplog.records if record.name == "hub"]
+    assert any(line.startswith(f"DELETE /api/devices/{DEVICE_B} -> ") for line in lines)
+    assert not any("secret@example.com" in line or "abcdef" in line for line in lines)
+
+
+def test_an_apply_body_with_missing_fields_logs_which_fields_arrived(sync_server, caplog) -> None:
+    port, _, _ = sync_server
+    caplog.set_level("INFO", logger="hub")
+
+    status, _ = call(port, "POST", "/api/sync/apply", {"accepted": [], "email": "a@example.com"})  # 낡은 화면의 본문
+
+    assert status == 400
+    assert any("받은 칸=['accepted', 'email']" in record.getMessage() for record in caplog.records)

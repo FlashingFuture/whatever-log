@@ -241,6 +241,7 @@ docker compose down                                           # 로컬 DB는 볼
 - `docker-compose.yml`의 `server`는 저장소를 바인드 마운트하므로, 컨테이너의 `pnpm install`이 호스트의 `node_modules`를 건드리지 않게 node_modules가 있는
   워크스페이스(루트, `apps/server`, `apps/ui`)를 모두 이름 붙은 볼륨으로 가렸다. **새 워크스페이스에 node_modules가 생기면 compose에도 더한다.**
 - 이미지에는 `ca-certificates`가 필요하다(workerd가 시작할 때 시스템 인증서를 읽는다).
+- **요청 로그:** 서버(Worker)는 요청마다 `메서드 경로 상태 시간` 한 줄을 남기고(`/health` 제외), 쿼리·헤더(토큰)·본문·이메일은 남기지 않는다. 로컬은 `docker compose logs -f server`, 배포한 Worker는 `wrangler tail`로 본다. hub도 같은 모양(`메서드 경로 -> 상태`)으로 hub 로그 파일에 남긴다. **요청이 서버 로그에 없다면 hub 단계에서 막힌 것**이다(예: 400) — hub 로그를 본다.
 - recorder는 Windows 화면을 읽으므로 컨테이너에서 돌지 않는다. 컨테이너에는 서버만 있다.
 
 ## 지금 있는 것 / 없는 것
