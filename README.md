@@ -80,7 +80,7 @@ PC에서 실행 중인 프로세스와 활성 창을 주기적으로 기록하�
 
 ## 설치와 실행
 
-`uv sync` 뒤 `uv run whatever-log install` 한 번이면 기록기·동기화 에이전트의 자동 시작 등록, 시작 메뉴 바로가기(아이콘 포함), 화면 빌드까지 한다. 평소에는 시작 메뉴의 whatever.log를 열면 된다. 자세한 명령과 동작은 `docs/packaging.md`.
+`uv sync` 뒤 `uv run whatever-log install` 한 번이면 기록기·동기화 에이전트의 자동 시작 등록, 시작 메뉴 바로가기(아이콘 포함), 화면 빌드까지 한다. 평소에는 시작 메뉴의 whatever.log를 열면 된다. 자세한 명령과 동작은 `docs/packaging.md`. 사용자용 배포(릴리스 번들, `install.cmd`)와 버전 규칙도 같은 문서에 있다.
 
 ## 라이선스
 

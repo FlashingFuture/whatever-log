@@ -74,7 +74,7 @@ recorder·aggregation·goals·chromium·supervision·desktop은 `cloud`를 impor
 서버로 나가는 값은 `docs/data-handling.md`가 기준이고, 프로세스·사이트 이름과 기록은 서버로 보내지 않습니다.
 화면(`apps/ui`)의 상태는 `docs/ui-state.md`의 전략을 따릅니다(진실은 hub, 브라우저 저장소 미사용, 앱 전체 상태는 `state/`).
 
-설치와 전체 실행(자동 시작 등록·바로가기·화면 빌드·구성 요소 시작/종료)은 `apps/launcher`의 `whatever-log` 명령이 맡습니다(`docs/packaging.md`). 로그인 시 자동으로 띄우는 대상은 recorder와 동기화 에이전트의 **supervisor**이고, Registry Run 키 등록은 `packages/supervision/autostart.py` 한 곳에 있습니다. 앱 아이콘 원본은 `apps/desktop/src/desktop/assets/`(`icon.svg`, `icon-mark.svg`)이고 `icon.ico`는 `apps/desktop/tools/build_icon.py`로 만듭니다.
+설치와 전체 실행(자동 시작 등록·바로가기·화면 빌드·구성 요소 시작/종료)은 `apps/launcher`의 `whatever-log` 명령이 맡습니다(`docs/packaging.md`). 로그인 시 자동으로 띄우는 대상은 recorder와 동기화 에이전트의 **supervisor**이고, Registry Run 키 등록은 `packages/supervision/autostart.py` 한 곳에 있습니다. 사용자 배포는 릴리스 번들(`scripts/build_release.py`, 태그 `v<VERSION>`을 푸시하면 `.github/workflows/release.yml`이 GitHub Release로 올린다)이고 버전은 루트 `VERSION` 한 곳(SemVer)입니다. **DB·로그·lock의 경로는 앱마다 정하지 말고 `common.paths.data_path`로 정하세요** — 번들에서는 `%LOCALAPPDATA%\whatever.log`로 가고, hub·recorder·sync가 같은 DB를 열기 때문에 한 곳에서 정해야 어긋나지 않습니다. 앱 아이콘 원본은 `apps/desktop/src/desktop/assets/`(`icon.svg`, `icon-mark.svg`)이고 `icon.ico`는 `apps/desktop/tools/build_icon.py`로 만듭니다.
 
 프로세스 종료 코드와 HTTP API 에러 응답 형식처럼 앱들이 같은 뜻으로 공유해야 하는 범용
 계약은 `packages/common`에만 둡니다. 특정 앱에서만 쓰는 것은 그 앱 디렉터리에서

@@ -481,3 +481,59 @@ def test_every_documented_command_parses() -> None:
         assert parser.parse_args([name]).command == name
     with pytest.raises(SystemExit):
         parser.parse_args([])
+
+
+# --- 버전·데이터 폴더·다른 설치본 ---
+
+
+def test_version_flag_prints_the_version(capsys) -> None:
+    with pytest.raises(SystemExit) as stopped:
+        build_parser().parse_args(["--version"])
+
+    assert stopped.value.code == 0
+    assert "whatever.log" in capsys.readouterr().out
+
+
+def test_status_shows_the_version_and_where_data_lives(tmp_path) -> None:
+    lines: list[str] = []
+    with (
+        patch("launcher.commands.components.state", return_value=components.STOPPED),
+        patch("launcher.commands.components.running_pids", return_value=[]),
+        patch("launcher.commands.run_key.is_enabled", return_value=False),
+        patch("launcher.commands.paths.data_dir", return_value=tmp_path),
+    ):
+        commands.status(lines.append)
+
+    assert any(line.startswith("버전: ") for line in lines)
+    assert any(line == f"데이터 폴더: {tmp_path}" for line in lines)
+
+
+def test_install_warns_when_it_replaces_another_folders_registration() -> None:
+    """새 버전을 새 폴더에 풀어 install하면, 이전 폴더의 프로그램이 아직 떠 있을 수 있다 — 먼저 stop하라고 알린다."""
+    lines: list[str] = []
+    with (
+        patch("launcher.commands.run_key") as run_key,
+        patch("launcher.commands.shortcuts.create", return_value=Path("x.lnk")),
+        patch("launcher.commands.shortcuts.start_menu_dir", return_value=Path("menu")),
+        patch("launcher.commands.components.start", return_value=components.STARTED),
+        patch("launcher.commands.ui_build.is_built", return_value=True),
+    ):
+        run_key.registered_command.return_value = "C:/old-folder/.venv/Scripts/pythonw.exe -m recorder.supervisor"
+        assert commands.install(lines.append) is True
+
+    assert any("다른 폴더의 설치" in line and "whatever-log stop" in line for line in lines)
+
+
+def test_install_is_quiet_when_the_registration_is_already_this_folders() -> None:
+    lines: list[str] = []
+    with (
+        patch("launcher.commands.run_key") as run_key,
+        patch("launcher.commands.shortcuts.create", return_value=Path("x.lnk")),
+        patch("launcher.commands.shortcuts.start_menu_dir", return_value=Path("menu")),
+        patch("launcher.commands.components.start", return_value=components.STARTED),
+        patch("launcher.commands.ui_build.is_built", return_value=True),
+    ):
+        run_key.registered_command.side_effect = lambda name: {RECORDER.run_key_value: RECORDER, SYNC.run_key_value: SYNC}[name].autostart_command()
+        commands.install(lines.append)
+
+    assert not any("다른 폴더의 설치" in line for line in lines)

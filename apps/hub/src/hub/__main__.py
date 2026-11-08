@@ -35,6 +35,7 @@ from common import api_error
 from chromium.browsers import BROWSERS
 from chromium.snapshot import remove_stale_work_dirs
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
+from common.paths import data_path
 from goals import sync_status
 from goals import (
     META_SYNC_ENABLED,
@@ -77,12 +78,12 @@ from supervision.log_setup import configure_logging
 DEFAULT_PORT = 8787
 
 _APP_DIR = Path(__file__).resolve().parent.parent.parent
-DEFAULT_LOG_PATH = _APP_DIR / "hub.log"
-DEFAULT_ICON_CACHE_DIR = _APP_DIR / "icon-cache"
+DEFAULT_LOG_PATH = data_path(_APP_DIR, "hub.log", subdir="logs")
+DEFAULT_ICON_CACHE_DIR = data_path(_APP_DIR, "icon-cache")
 # 사용자의 목표 설정. recorder.db와 파일을 나눈다(쓰기 주체가 섞이지 않게 — docs/goals-design.md).
-DEFAULT_GOALS_DB_PATH = _APP_DIR / "goals.db"
+DEFAULT_GOALS_DB_PATH = data_path(_APP_DIR, "goals.db")
 # 동기화 에이전트(apps/sync)의 자기 상태. 이 PC의 기기 ID를 알아보려고 읽기 전용으로만 연다.
-DEFAULT_SYNC_DB_PATH = _APP_DIR.parent / "sync" / "sync.db"
+DEFAULT_SYNC_DB_PATH = data_path(_APP_DIR.parent / "sync", "sync.db")
 
 logger = logging.getLogger("hub")
 
@@ -129,7 +130,7 @@ def _lock_path_for_port(port: int) -> Path:
     문제인지 구분하기 어렵다. lock으로 먼저 "이미 실행 중"을 명확하게
     감지한다.
     """
-    return _APP_DIR / f"hub-{port}.lock"
+    return data_path(_APP_DIR, f"hub-{port}.lock")
 
 
 # 월 단위(최대 31일) 조회까지 허용한다. 2시간은 전환이 낀 달의 여유분이다 —

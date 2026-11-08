@@ -35,4 +35,5 @@ testpaths = [
     "packages/goals/tests",
     "packages/goalsync/tests",
     "packages/supervision/tests",
+    "scripts/tests",
 ]

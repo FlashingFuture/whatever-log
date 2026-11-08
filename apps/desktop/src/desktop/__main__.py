@@ -46,6 +46,7 @@ from urllib.parse import urlparse, urlsplit
 import webview
 from hub.__main__ import DEFAULT_PORT as HUB_PORT
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
+from common.paths import data_path
 from supervision.log_setup import configure_logging
 from supervision.supervisor import supervise
 
@@ -59,7 +60,7 @@ _UI_DIST_DIR = _APP_DIR.parent / "ui" / "dist"
 _UI_DIST_INDEX = _UI_DIST_DIR / "index.html"
 
 _HUB_READY_TIMEOUT_SECONDS = 5.0
-DEFAULT_HUB_SUPERVISOR_LOG_PATH = _APP_DIR / "hub-supervisor.log"
+DEFAULT_HUB_SUPERVISOR_LOG_PATH = data_path(_APP_DIR, "hub-supervisor.log", subdir="logs")
 
 hub_supervisor_logger = logging.getLogger("desktop.hub_supervisor")
 

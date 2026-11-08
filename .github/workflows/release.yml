@@ -1,0 +1,48 @@
+# 태그(v1.0.0, v1.0.0-beta.1 …)를 푸시하면 릴리스 번들을 만들어 GitHub Release에 올린다.
+# 하이픈이 든 태그(v1.0.0-beta.1)는 "시험 버전(pre-release)"으로 표시된다. 절차는 docs/packaging.md의 "릴리스 만들기".
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: 번들 만들기(태그가 VERSION과 같을 때만)
+        id: build
+        shell: bash
+        run: |
+          corepack enable
+          uv python install 3.14
+          out="$(uv run python scripts/build_release.py --expect-tag "${GITHUB_REF_NAME}")"
+          echo "$out"
+          echo "archive=$(echo "$out" | head -n1)" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(echo "$out" | sed -n 's/^sha256: //p')" >> "$GITHUB_OUTPUT"
+
+      - name: GitHub Release 올리기
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCHIVE: ${{ steps.build.outputs.archive }}
+          SHA256: ${{ steps.build.outputs.sha256 }}
+        run: |
+          flags=""
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then flags="--prerelease"; fi
+          gh release create "${GITHUB_REF_NAME}" "$ARCHIVE" $flags \
+            --title "whatever.log ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --notes "설치: zip을 풀고 install.cmd를 실행하세요(uv 필요). SHA-256: ${SHA256}"

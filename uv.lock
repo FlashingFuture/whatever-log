@@ -411,6 +411,7 @@ name = "launcher"
 version = "0.1.0"
 source = { editable = "apps/launcher" }
 dependencies = [
+    { name = "common" },
     { name = "desktop" },
     { name = "psutil" },
     { name = "recorder" },
@@ -425,6 +426,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "common", editable = "packages/common" },
     { name = "desktop", editable = "apps/desktop" },
     { name = "psutil", specifier = ">=6.1.0" },
     { name = "recorder", editable = "apps/recorder" },
