@@ -44,14 +44,27 @@ SYNC = Component("sync", "동기화 에이전트", "sync_agent.supervisor", "syn
 COMPONENTS = (RECORDER, SYNC)
 
 
+# 값을 따로 받는 파이썬 옵션(`-X utf8`, `-W ignore`처럼 다음 인자가 그 값이다). 이 값을 `-m`으로 오해하지 않으려고 건너뛴다.
+_OPTIONS_WITH_VALUE = frozenset({"-X", "-W", "--check-hash-based-pycs"})
+
+
 def _runs_module(command_line: list[str], module: str, scripts_dir: Path) -> bool:
-    """명령줄이 "이 가상환경의 파이썬으로 -m module"인지."""
-    if len(command_line) < 3 or "-m" not in command_line[1:]:
+    """명령줄이 "이 가상환경의 파이썬으로 -m module"인지.
+
+    파이썬 **자신의 옵션** 자리의 `-m`만 센다. `python -c '...' -m recorder`나 `python script.py -m recorder`의 `-m recorder`는
+    실행할 코드의 인자일 뿐이라 기록기가 아니다(그걸 기록기로 알아보면 status가 틀리고 stop이 관련 없는 프로세스를 끈다).
+    """
+    if len(command_line) < 3 or Path(command_line[0]).parent.resolve() != scripts_dir:
         return False
-    if Path(command_line[0]).parent.resolve() != scripts_dir:
-        return False
-    position = command_line.index("-m")
-    return position + 1 < len(command_line) and command_line[position + 1] == module
+    options = iter(command_line[1:])
+    for argument in options:
+        if argument == "-m":
+            return next(options, None) == module
+        if argument in _OPTIONS_WITH_VALUE:
+            next(options, None)  # 옵션의 값
+        elif not argument.startswith("-") or argument in ("-c", "-"):
+            return False  # 스크립트 파일이나 -c 코드가 나왔다 — 그 뒤는 코드의 인자다
+    return False
 
 
 def find_processes(module: str, *, scripts_dir: Path | None = None) -> list[psutil.Process]:
@@ -67,16 +80,35 @@ def find_processes(module: str, *, scripts_dir: Path | None = None) -> list[psut
     return found
 
 
+#: 구성 요소의 상태. stopped: 아무것도 안 떠 있음 / supervised: supervisor가 떠 있음(죽으면 다시 띄운다) /
+#: unsupervised: 프로그램만 떠 있음(수동으로 띄웠거나 supervisor만 죽음 — 프로그램이 죽어도 다시 뜨지 않는다)
+STOPPED, SUPERVISED, UNSUPERVISED = "stopped", "supervised", "unsupervised"
+#: start()가 새로 띄웠다는 뜻(이미 떠 있던 경우는 그 상태를 돌려준다)
+STARTED = "started"
+
+
+def state(component: Component) -> str:
+    """구성 요소의 지금 상태(STOPPED / SUPERVISED / UNSUPERVISED)."""
+    if find_processes(component.supervisor_module):
+        return SUPERVISED
+    return UNSUPERVISED if find_processes(component.program_module) else STOPPED
+
+
 def running_pids(component: Component) -> list[int]:
     """구성 요소의 supervisor나 프로그램이 떠 있으면 그 pid들(없으면 빈 목록)."""
     processes = find_processes(component.supervisor_module) + find_processes(component.program_module)
     return sorted({process.pid for process in processes})
 
 
-def start(component: Component) -> bool:
-    """supervisor를 콘솔 창 없이 따로 떼어 띄운다(이 도구가 끝나도 계속 돈다). 이미 떠 있으면 아무것도 하지 않고 False."""
-    if running_pids(component):
-        return False
+def start(component: Component) -> str:
+    """supervisor를 콘솔 창 없이 따로 떼어 띄운다(이 도구가 끝나도 계속 돈다). 돌려주는 값: STARTED / SUPERVISED(이미 감독 중) / UNSUPERVISED.
+
+    프로그램만 단독으로 떠 있으면(UNSUPERVISED) 띄우지 않는다 — supervisor를 새로 띄워도 프로그램의 중복 실행 lock 때문에 곧 멈추고,
+    떠 있는 프로그램을 우리가 마음대로 끌 수도 없다. 호출부가 사용자에게 "stop 뒤에 다시 start"를 안내한다.
+    """
+    current = state(component)
+    if current != STOPPED:
+        return current
     subprocess.Popen(
         [str(pythonw_path()), "-m", component.supervisor_module],
         cwd=REPO_ROOT,
@@ -86,11 +118,11 @@ def start(component: Component) -> bool:
         stderr=subprocess.DEVNULL,
         close_fds=True,
     )
-    return True
+    return STARTED
 
 
-def _terminate(processes: list[psutil.Process]) -> None:
-    """정중히 종료를 요청하고, 시간 안에 안 끝나면 강제로 끝낸다."""
+def _terminate(processes: list[psutil.Process]) -> list[psutil.Process]:
+    """정중히 종료를 요청하고, 시간 안에 안 끝나면 강제로 끝낸다. 끝내 살아 있는(종료 권한이 없는 등) 프로세스들을 돌려준다."""
     for process in processes:
         try:
             process.terminate()
@@ -102,12 +134,28 @@ def _terminate(processes: list[psutil.Process]) -> None:
             process.kill()
         except psutil.Error:
             pass
+    _, still_alive = psutil.wait_procs(alive, timeout=_STOP_WAIT_SECONDS)
+    return still_alive
 
 
-def stop(component: Component) -> int:
-    """supervisor를 먼저, 그다음 프로그램을 끈다. 끈 프로세스 수를 돌려준다."""
+@dataclass(frozen=True)
+class StopResult:
+    """stop의 결과: 끈 프로세스 수와, 끝내 끄지 못한 프로세스 pid들(권한 부족 등)."""
+
+    stopped: int
+    survivors: tuple[int, ...]
+
+    @property
+    def ok(self) -> bool:
+        """하나도 남지 않고 다 껐는가."""
+        return not self.survivors
+
+
+def stop(component: Component) -> StopResult:
+    """supervisor를 먼저, 그다음 프로그램을 끈다. 못 끈 프로세스가 있으면 결과에 담아 알린다(끈 척하지 않는다)."""
     supervisors = find_processes(component.supervisor_module)
-    _terminate(supervisors)
+    left = _terminate(supervisors)
     programs = find_processes(component.program_module)
-    _terminate(programs)
-    return len(supervisors) + len(programs)
+    left += _terminate(programs)
+    total = len(supervisors) + len(programs)
+    return StopResult(total - len(left), tuple(sorted({process.pid for process in left})))

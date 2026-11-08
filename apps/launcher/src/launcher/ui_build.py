@@ -28,7 +28,8 @@ def build() -> None:
         ([corepack, "pnpm", "install", "--frozen-lockfile"], REPO_ROOT),
         ([corepack, "pnpm", "build"], UI_DIR),
     ):
-        result = subprocess.run(command, cwd=cwd, capture_output=True, text=True)
+        # Vite가 ✓ 같은 문자를 UTF-8로 찍는다 — 윈도우 기본 코드 페이지(cp949)로 읽으면 디코딩 오류로 설치가 중단된다.
+        result = subprocess.run(command, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace")
         if result.returncode != 0:
             tail = (result.stdout + result.stderr).strip().splitlines()[-5:]
             raise UiBuildError(f"`{' '.join(command[1:])}`가 실패했어요:\n" + "\n".join(tail))

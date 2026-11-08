@@ -44,7 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """인자에 맞는 동작을 실행한다. 설치가 일부 실패하면 종료 코드 1."""
+    """인자에 맞는 동작을 실행한다. 일부라도 실패하면(설치·제거·시작·종료 모두) 종료 코드 1."""
     if sys.platform != "win32":
         raise NotImplementedError(f"{sys.platform}은 아직 지원하지 않습니다.")
     if sys.stdout is not None:
@@ -61,11 +61,11 @@ def main(argv: list[str] | None = None) -> None:
         )
         sys.exit(0 if ok else 1)
     elif args.command == "uninstall":
-        commands.uninstall(_say, dry_run=args.dry_run)
+        sys.exit(0 if commands.uninstall(_say, dry_run=args.dry_run) else 1)
     elif args.command == "start":
-        commands.start(_say, open_window=not args.no_window)
+        sys.exit(0 if commands.start(_say, open_window=not args.no_window) else 1)
     elif args.command == "stop":
-        commands.stop(_say)
+        sys.exit(0 if commands.stop(_say) else 1)
     else:
         commands.status(_say)
 

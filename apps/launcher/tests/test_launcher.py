@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -27,6 +28,11 @@ def _cmd(*parts: str) -> list[str]:
         (_cmd("-m", "sync_agent.supervisor_other"), False),  # 이름이 비슷한 다른 모듈
         (_cmd("sync_agent.supervisor"), False),  # -m이 없다
         (_cmd("-m"), False),  # 모듈 이름이 없다
+        (_cmd("-c", "print()", "-m", "sync_agent.supervisor"), False),  # -c 코드의 인자일 뿐이다
+        (_cmd("script.py", "-m", "sync_agent.supervisor"), False),  # 스크립트의 인자일 뿐이다
+        (_cmd("-u", "-m", "sync_agent.supervisor"), True),  # 파이썬 옵션 뒤의 -m은 맞다
+        (_cmd("-X", "utf8", "-m", "sync_agent.supervisor"), True),  # 값을 받는 옵션을 건너뛴다
+        (_cmd("-X", "-m", "sync_agent.supervisor"), False),  # -X의 값이 "-m"이다(모듈 실행이 아니다)
         (["C:/elsewhere/.venv/Scripts/pythonw.exe", "-m", "sync_agent.supervisor"], False),  # 다른 설치본
         ([], False),
     ],
@@ -53,19 +59,48 @@ def test_running_pids_merges_supervisor_and_program_and_deduplicates() -> None:
         assert components.running_pids(RECORDER) == [1, 3]
 
 
+def test_state_tells_supervised_unsupervised_and_stopped_apart() -> None:
+    def fake(modules):
+        return lambda module, **_: [MagicMock()] if module in modules else []
+
+    with patch("launcher.components.find_processes", side_effect=fake({"recorder.supervisor"})):
+        assert components.state(RECORDER) == components.SUPERVISED
+    with patch("launcher.components.find_processes", side_effect=fake({"recorder"})):
+        assert components.state(RECORDER) == components.UNSUPERVISED
+    with patch("launcher.components.find_processes", side_effect=fake(set())):
+        assert components.state(RECORDER) == components.STOPPED
+
+
 # --- 띄우고 끄기 ---
 
 
-def test_start_does_nothing_when_the_component_is_already_running() -> None:
-    with patch("launcher.components.running_pids", return_value=[7]), patch("launcher.components.subprocess.Popen") as popen:
-        assert components.start(RECORDER) is False
+def test_start_does_nothing_when_the_component_is_already_supervised() -> None:
+    with (
+        patch("launcher.components.state", return_value=components.SUPERVISED),
+        patch("launcher.components.subprocess.Popen") as popen,
+    ):
+        assert components.start(RECORDER) == components.SUPERVISED
+
+    popen.assert_not_called()
+
+
+def test_a_program_running_without_its_supervisor_is_reported_not_started_over() -> None:
+    """supervisor를 새로 띄워도 프로그램의 중복 실행 lock 때문에 곧 멈춘다 — 감독이 복구된 것처럼 보이면 안 된다."""
+    with (
+        patch("launcher.components.state", return_value=components.UNSUPERVISED),
+        patch("launcher.components.subprocess.Popen") as popen,
+    ):
+        assert components.start(SYNC) == components.UNSUPERVISED
 
     popen.assert_not_called()
 
 
 def test_start_launches_the_supervisor_detached_without_a_console() -> None:
-    with patch("launcher.components.running_pids", return_value=[]), patch("launcher.components.subprocess.Popen") as popen:
-        assert components.start(SYNC) is True
+    with (
+        patch("launcher.components.state", return_value=components.STOPPED),
+        patch("launcher.components.subprocess.Popen") as popen,
+    ):
+        assert components.start(SYNC) == components.STARTED
 
     command = popen.call_args.args[0]
     assert command[1:] == ["-m", "sync_agent.supervisor"] and command[0].endswith("pythonw.exe")
@@ -80,14 +115,38 @@ def test_stop_terminates_the_supervisor_before_the_program() -> None:
     def fake_find(module, **_):
         return [module]
 
+    def fake_terminate(items):
+        order.extend(items)
+        return []
+
     with (
         patch("launcher.components.find_processes", side_effect=fake_find),
-        patch("launcher.components._terminate", side_effect=lambda items: order.extend(items)),
+        patch("launcher.components._terminate", side_effect=fake_terminate),
     ):
-        count = components.stop(SYNC)
+        result = components.stop(SYNC)
 
     assert order == ["sync_agent.supervisor", "sync_agent"]  # supervisor가 먼저여야 프로그램을 다시 띄우지 못한다
-    assert count == 2
+    assert result.stopped == 2 and result.ok
+
+
+def test_stop_reports_processes_it_could_not_end_instead_of_claiming_success() -> None:
+    survivor = MagicMock(pid=42)
+    with (
+        patch("launcher.components.find_processes", side_effect=lambda module, **_: [survivor] if module == "recorder" else []),
+        patch("launcher.components._terminate", side_effect=lambda items: list(items)),
+    ):
+        result = components.stop(RECORDER)
+
+    assert not result.ok and result.survivors == (42,) and result.stopped == 0
+
+
+def test_terminate_kills_what_ignored_terminate_and_returns_the_survivors() -> None:
+    stubborn = MagicMock()
+    with patch("launcher.components.psutil.wait_procs", side_effect=[([], [stubborn]), ([], [stubborn])]):
+        assert components._terminate([stubborn]) == [stubborn]
+
+    stubborn.terminate.assert_called_once()
+    stubborn.kill.assert_called_once()
 
 
 # --- 설치 ---
@@ -98,17 +157,25 @@ def _collect():
     return lines, lines.append
 
 
-def test_a_dry_run_changes_nothing() -> None:
+def _install(*, start_result=components.STARTED, built=True, start_effect=None, **options):
+    """install을 가짜 의존성으로 돌리고 (성공 여부, 출력 줄, mock들)을 돌려준다."""
     lines, say = _collect()
     with (
         patch("launcher.commands.run_key") as run_key,
-        patch("launcher.commands.shortcuts.create") as create,
-        patch("launcher.commands.components.start") as start,
+        patch("launcher.commands.shortcuts.create", return_value=Path("x.lnk")) as create,
+        patch("launcher.commands.shortcuts.start_menu_dir", return_value=Path("menu")),
+        patch("launcher.commands.components.start", return_value=start_result, side_effect=start_effect) as start,
+        patch("launcher.commands.ui_build.is_built", return_value=built),
         patch("launcher.commands.ui_build.build") as build,
-        patch("launcher.commands.ui_build.is_built", return_value=False),
     ):
-        assert commands.install(say, dry_run=True, desktop_shortcut=True) is True
+        ok = commands.install(say, **options)
+    return ok, lines, run_key, create, start, build
 
+
+def test_a_dry_run_changes_nothing() -> None:
+    ok, lines, run_key, create, start, build = _install(built=False, dry_run=True, desktop_shortcut=True)
+
+    assert ok is True
     run_key.enable.assert_not_called()
     create.assert_not_called()
     start.assert_not_called()
@@ -117,18 +184,10 @@ def test_a_dry_run_changes_nothing() -> None:
 
 
 def test_install_registers_both_components_makes_the_shortcut_and_starts_them() -> None:
-    lines, say = _collect()
-    with (
-        patch("launcher.commands.run_key") as run_key,
-        patch("launcher.commands.shortcuts.create", return_value=Path("x.lnk")) as create,
-        patch("launcher.commands.shortcuts.start_menu_dir", return_value=Path("menu")),
-        patch("launcher.commands.components.start", return_value=True) as start,
-        patch("launcher.commands.ui_build.is_built", return_value=True),
-    ):
-        assert commands.install(say) is True
+    ok, _, run_key, create, start, _ = _install()
 
-    registered = [call.args[0] for call in run_key.enable.call_args_list]
-    assert registered == [RECORDER.run_key_value, SYNC.run_key_value]
+    assert ok is True
+    assert [call.args[0] for call in run_key.enable.call_args_list] == [RECORDER.run_key_value, SYNC.run_key_value]
     assert run_key.enable.call_args_list[1].args[1].endswith("-m sync_agent.supervisor")
     create.assert_called_once_with(Path("menu"))
     assert start.call_count == 2
@@ -140,7 +199,7 @@ def test_one_failing_step_does_not_stop_the_rest_and_is_reported() -> None:
         patch("launcher.commands.run_key") as run_key,
         patch("launcher.commands.shortcuts.create", return_value=Path("x.lnk")),
         patch("launcher.commands.shortcuts.start_menu_dir", return_value=Path("menu")),
-        patch("launcher.commands.components.start", return_value=True) as start,
+        patch("launcher.commands.components.start", return_value=components.STARTED) as start,
         patch("launcher.commands.ui_build.is_built", return_value=False),
         patch("launcher.commands.ui_build.build", side_effect=ui_build.UiBuildError("Node.js가 없어요")),
     ):
@@ -152,55 +211,183 @@ def test_one_failing_step_does_not_stop_the_rest_and_is_reported() -> None:
 
 
 def test_install_can_skip_the_ui_build_and_the_start() -> None:
-    lines, say = _collect()
-    with (
-        patch("launcher.commands.run_key"),
-        patch("launcher.commands.shortcuts.create", return_value=Path("x.lnk")),
-        patch("launcher.commands.shortcuts.start_menu_dir", return_value=Path("menu")),
-        patch("launcher.commands.components.start") as start,
-        patch("launcher.commands.ui_build.build") as build,
-        patch("launcher.commands.ui_build.is_built", return_value=False),
-    ):
-        commands.install(say, build_ui=False, start_now=False)
+    _, _, _, _, start, build = _install(built=False, build_ui=False, start_now=False)
 
     build.assert_not_called()
     start.assert_not_called()
 
 
-def test_uninstall_stops_unregisters_and_keeps_the_data() -> None:
-    lines, say = _collect()
+def test_install_collects_a_start_failure_and_keeps_going() -> None:
+    calls: list[str] = []
+
+    def start(component):
+        calls.append(component.name)
+        if component is RECORDER:
+            raise OSError("pythonw.exe를 실행할 수 없어요")
+        return components.STARTED
+
+    ok, lines, *_ = _install(start_effect=start)
+
+    assert ok is False and calls == ["recorder", "sync"]  # 기록기가 실패해도 동기화 에이전트는 시작했다
+    assert any(line.startswith("문제: 기록기 시작") for line in lines)
+
+
+def test_install_reports_a_program_running_without_its_supervisor() -> None:
+    ok, lines, *_ = _install(start_result=components.UNSUPERVISED)
+
+    assert ok is False and any("감독" in line for line in lines)
+
+
+# --- 제거 ---
+
+
+def _own_registration(component):
+    return component.autostart_command()
+
+
+def _uninstall(*, stop_result=None, registered=_own_registration, remove=lambda directory: True):
+    """uninstall을 가짜 의존성으로 돌리고 (성공 여부, 출력 줄, run_key mock)을 돌려준다."""
+    lines: list[str] = []
+    result = stop_result or components.StopResult(2, ())
+    by_name = {RECORDER.run_key_value: RECORDER, SYNC.run_key_value: SYNC}
     with (
         patch("launcher.commands.run_key") as run_key,
-        patch("launcher.commands.components.stop", return_value=2) as stop,
-        patch("launcher.commands.shortcuts.remove", return_value=True),
+        patch("launcher.commands.components.stop", return_value=result),
+        patch("launcher.commands.shortcuts.remove", side_effect=remove),
         patch("launcher.commands.shortcuts.start_menu_dir", return_value=Path("menu")),
         patch("launcher.commands.shortcuts.desktop_dir", return_value=Path("desk")),
     ):
-        commands.uninstall(say)
+        run_key.registered_command.side_effect = lambda name: registered(by_name[name])
+        ok = commands.uninstall(lines.append)
+    return ok, lines, run_key
 
-    assert stop.call_count == 2
+
+def test_uninstall_stops_unregisters_and_keeps_the_data() -> None:
+    ok, lines, run_key = _uninstall()
+
+    assert ok is True
     assert [call.args[0] for call in run_key.disable.call_args_list] == [RECORDER.run_key_value, SYNC.run_key_value]
     assert any("지우지 않았어요" in line for line in lines)
 
 
-def test_start_without_a_window_only_starts_the_components() -> None:
-    with (
-        patch("launcher.commands.components.start", return_value=False),
-        patch("launcher.commands.subprocess.run") as run,
-    ):
-        commands.start(lambda _: None, open_window=False)
+def test_uninstall_leaves_another_clones_autostart_registration_alone() -> None:
+    """다른 clone이 등록한 자동 시작을 지우면 그쪽이 다음 로그인부터 안 뜬다."""
+    ok, lines, run_key = _uninstall(registered=lambda component: "C:/other-clone/.venv/Scripts/pythonw.exe -m recorder.supervisor")
 
+    assert ok is True
+    run_key.disable.assert_not_called()
+    assert any("다른 설치본" in line for line in lines)
+
+
+def test_uninstall_does_nothing_for_a_registration_that_does_not_exist() -> None:
+    ok, lines, run_key = _uninstall(registered=lambda component: None)
+
+    assert ok is True
+    run_key.disable.assert_not_called()
+    assert any("등록이 없어요" in line for line in lines)
+
+
+def test_uninstall_leaves_another_clones_shortcut_alone() -> None:
+    def foreign(directory):
+        raise shortcuts.ForeignShortcut("x.lnk")
+
+    ok, lines, _ = _uninstall(remove=foreign)
+
+    assert ok is True and any("다른 설치본이 만든 바로가기" in line for line in lines)
+
+
+def test_uninstall_reports_a_shortcut_it_could_not_delete_and_fails() -> None:
+    def denied(directory):
+        raise PermissionError("access denied")
+
+    ok, lines, run_key = _uninstall(remove=denied)
+
+    assert ok is False
+    assert any(line.startswith("문제: 시작 메뉴 바로가기 삭제") and "access denied" in line for line in lines)
+    assert not any("바로가기를 지웠어요" in line for line in lines)  # 못 지웠는데 지웠다고 하지 않는다
+    assert run_key.disable.call_count == 2  # 하나가 실패해도 나머지는 계속했다
+
+
+def test_uninstall_fails_when_a_process_could_not_be_ended() -> None:
+    ok, lines, _ = _uninstall(stop_result=components.StopResult(0, (42,)))
+
+    assert ok is False and any("pid 42" in line and "끝내지 못했어요" in line for line in lines)
+
+
+def test_a_dry_uninstall_changes_nothing() -> None:
+    lines: list[str] = []
+    with (
+        patch("launcher.commands.run_key") as run_key,
+        patch("launcher.commands.components.stop") as stop,
+        patch("launcher.commands.shortcuts.remove") as remove,
+    ):
+        assert commands.uninstall(lines.append, dry_run=True) is True
+
+    run_key.disable.assert_not_called()
+    stop.assert_not_called()
+    remove.assert_not_called()
+
+
+# --- 시작·종료 ---
+
+
+def _start(*, open_window=True, built=True, returncode=0, start_result=components.SUPERVISED, console=True):
+    lines: list[str] = []
+    with (
+        patch("launcher.commands.components.start", return_value=start_result),
+        patch("launcher.commands.ui_build.is_built", return_value=built),
+        patch("launcher.commands.subprocess.run", return_value=MagicMock(returncode=returncode)) as run,
+        patch("launcher.commands._show_message") as message,
+        patch("launcher.commands.sys.stdout", MagicMock() if console else None),
+    ):
+        ok = commands.start(lines.append, open_window=open_window)
+    return ok, lines, run, message
+
+
+def test_start_without_a_window_only_starts_the_components() -> None:
+    ok, _, run, _ = _start(open_window=False)
+
+    assert ok is True
     run.assert_not_called()
 
 
 def test_start_opens_the_desktop_window_with_pythonw() -> None:
-    with (
-        patch("launcher.commands.components.start", return_value=True),
-        patch("launcher.commands.subprocess.run") as run,
-    ):
-        commands.start(lambda _: None)
+    ok, _, run, _ = _start()
 
-    assert run.call_args.args[0][1:] == ["-m", "desktop"]
+    assert ok is True and run.call_args.args[0][1:] == ["-m", "desktop"]
+
+
+def test_start_tells_how_to_recover_when_the_ui_is_not_built_and_shows_a_dialog_without_a_console() -> None:
+    ok, lines, run, message = _start(built=False, console=False)
+
+    assert ok is False
+    run.assert_not_called()  # 창이 열리지도 못하고 죽는 일을 미리 막는다
+    assert any("whatever-log install" in line for line in lines)
+    message.assert_called_once()
+    assert "whatever-log install" in message.call_args.args[0]
+
+
+def test_start_propagates_a_window_that_exits_with_an_error() -> None:
+    ok, lines, _, message = _start(returncode=3, console=True)
+
+    assert ok is False and any("종료 코드 3" in line for line in lines)
+    message.assert_not_called()  # 콘솔이 있으면 대화 상자는 띄우지 않는다
+
+
+def test_start_reports_a_program_running_without_its_supervisor() -> None:
+    ok, lines, _, _ = _start(start_result=components.UNSUPERVISED, open_window=False)
+
+    assert ok is False and any("감독" in line and "whatever-log stop" in line for line in lines)
+
+
+def test_stop_reports_failure_and_still_tries_every_component() -> None:
+    lines: list[str] = []
+    results = iter([components.StopResult(0, (7,)), components.StopResult(1, ())])
+    with patch("launcher.commands.components.stop", side_effect=lambda component: next(results)):
+        ok = commands.stop(lines.append)
+
+    assert ok is False
+    assert any("pid 7" in line for line in lines) and any("껐어요" in line for line in lines)
 
 
 # --- 화면 빌드 ---
@@ -210,6 +397,20 @@ def test_ui_build_reports_missing_node_in_plain_words() -> None:
     with patch("launcher.ui_build.shutil.which", return_value=None):
         with pytest.raises(ui_build.UiBuildError, match="Node.js"):
             ui_build.build()
+
+
+def test_ui_build_reads_the_output_as_utf8_so_a_checkmark_cannot_break_the_install() -> None:
+    """Vite가 찍는 ✓를 cp949로 읽으면 디코딩 오류로 설치가 중단된다."""
+    ok = MagicMock(returncode=0, stdout="✓ built", stderr="")
+    with (
+        patch("launcher.ui_build.shutil.which", return_value="corepack"),
+        patch("launcher.ui_build.subprocess.run", return_value=ok) as run,
+    ):
+        ui_build.build()
+
+    assert run.call_count == 2
+    for call in run.call_args_list:
+        assert call.kwargs["encoding"] == "utf-8" and call.kwargs["errors"] == "replace"
 
 
 def test_ui_build_failure_shows_the_tail_of_the_output() -> None:
@@ -234,7 +435,7 @@ def test_a_real_shortcut_points_at_pythonw_with_the_app_icon(tmp_path) -> None:
     )
     result = subprocess.run(
         ["powershell", "-NoProfile", "-Command", script],
-        env={**__import__("os").environ, "WL_LINK": str(link)},
+        env={**os.environ, "WL_LINK": str(link)},
         capture_output=True,
         text=True,
         check=True,
@@ -243,6 +444,29 @@ def test_a_real_shortcut_points_at_pythonw_with_the_app_icon(tmp_path) -> None:
     assert target.endswith("pythonw.exe") and arguments == "-m launcher start"
     assert icon.endswith("icon.ico,0") and Path(icon.rsplit(",", 1)[0]).is_file()
     assert shortcuts.remove(tmp_path / "menu") is True and shortcuts.remove(tmp_path / "menu") is False
+
+
+def test_a_shortcut_made_by_this_install_is_recognized_as_ours(tmp_path) -> None:
+    shortcuts.create(tmp_path)
+
+    assert shortcuts.is_ours(tmp_path / shortcuts.SHORTCUT_NAME) is True
+
+
+def test_a_shortcut_from_another_install_is_left_alone(tmp_path) -> None:
+    """다른 clone이 만든 같은 이름의 바로가기를 지우면 그쪽 시작 메뉴 항목이 사라진다."""
+    shortcuts.create(tmp_path)
+    with patch("launcher.shortcuts.REPO_ROOT", Path("C:/somewhere/else")):
+        with pytest.raises(shortcuts.ForeignShortcut):
+            shortcuts.remove(tmp_path)
+
+    assert (tmp_path / shortcuts.SHORTCUT_NAME).exists()
+
+
+def test_the_desktop_folder_comes_from_the_windows_api() -> None:
+    """PowerShell 출력을 문자열로 받으면 코드 페이지에 따라 한글 경로가 깨질 수 있어서 API를 유니코드 그대로 쓴다."""
+    folder = shortcuts.desktop_dir()
+
+    assert folder.is_dir() and folder.is_absolute()
 
 
 # --- 명령줄 ---

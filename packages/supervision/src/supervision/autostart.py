@@ -5,6 +5,7 @@ Windows 서비스는 쓰지 않는다: 서비스는 Session 0에 격리돼 사�
 띄우지 않으므로(로그는 각 프로그램이 파일로 남긴다) Run 키에 pythonw.exe로 등록한다.
 """
 
+import subprocess
 import sys
 import winreg
 from pathlib import Path
@@ -18,9 +19,12 @@ def pythonw_path() -> Path:
 
 
 def module_command(module: str, *args: str) -> str:
-    """`pythonw.exe -m <module> <args…>` 형태의 실행 명령(경로에 공백이 있어도 되게 따옴표로 감싼다)."""
-    parts = [f'"{pythonw_path()}"', "-m", module, *args]
-    return " ".join(parts)
+    """`pythonw.exe -m <module> <args…>` 형태의 실행 명령. 각 인자를 Windows 명령줄 규칙으로 직렬화한다.
+
+    공백이나 따옴표가 든 인자(예: 공백이 든 `--db-path` 경로)도 한 인자로 보존된다 — 그냥 공백으로 이어 붙이면 둘로 쪼개져
+    자동 시작 때 인자 오류로 죽는다.
+    """
+    return subprocess.list2cmdline([str(pythonw_path()), "-m", module, *args])
 
 
 def enable(value_name: str, command: str) -> None:
@@ -44,6 +48,16 @@ def disable(value_name: str) -> None:
             winreg.DeleteValue(key, value_name)
     except FileNotFoundError:
         pass
+
+
+def registered_command(value_name: str) -> str | None:
+    """value_name으로 등록된 명령(없으면 None). 다른 설치본의 등록인지 가려내는 데 쓴다."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY_PATH, 0, winreg.KEY_READ) as key:
+            value, _ = winreg.QueryValueEx(key, value_name)
+            return str(value)
+    except FileNotFoundError:
+        return None
 
 
 def is_enabled(value_name: str) -> bool:

@@ -7,6 +7,7 @@
 환경변수로 넘겨서 경로에 따옴표나 공백이 있어도 스크립트가 깨지지 않게 한다.
 """
 
+import ctypes
 import os
 import subprocess
 from pathlib import Path
@@ -35,14 +36,30 @@ def start_menu_dir() -> Path:
 
 
 def desktop_dir() -> Path:
-    """현재 사용자의 바탕화면 폴더(OneDrive로 옮겨진 경우도 윈도우에 물어서 맞춘다)."""
-    result = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", "[Environment]::GetFolderPath('Desktop')"],
-        capture_output=True,
-        text=True,
-        check=True,
+    """현재 사용자의 바탕화면 폴더. OneDrive로 옮겨진 경우도 윈도우에 직접 물어서 맞춘다.
+
+    PowerShell의 출력을 문자열로 받으면 콘솔 코드 페이지에 따라 한글 경로가 깨질 수 있어서, 윈도우 API(SHGetKnownFolderPath)를 유니코드 그대로 부른다.
+    """
+    folder_id = _Guid(0xB4BFCC3A, 0xDB2C, 0x424C, (ctypes.c_ubyte * 8)(0xB0, 0x29, 0x7F, 0xE9, 0x9A, 0x87, 0xC6, 0x41))  # FOLDERID_Desktop
+    path = ctypes.c_wchar_p()
+    result = ctypes.windll.shell32.SHGetKnownFolderPath(ctypes.byref(folder_id), 0, None, ctypes.byref(path))
+    if result != 0 or not path.value:
+        raise OSError(f"바탕화면 폴더를 찾지 못했어요(HRESULT {result:#x}).")
+    try:
+        return Path(path.value)
+    finally:
+        ctypes.windll.ole32.CoTaskMemFree(path)
+
+
+class _Guid(ctypes.Structure):
+    """윈도우 GUID 구조체(폴더 ID를 API에 넘기는 데 쓴다)."""
+
+    _fields_ = (
+        ("Data1", ctypes.c_ulong),
+        ("Data2", ctypes.c_ushort),
+        ("Data3", ctypes.c_ushort),
+        ("Data4", ctypes.c_ubyte * 8),
     )
-    return Path(result.stdout.strip())
 
 
 def create(directory: Path) -> Path:
@@ -61,10 +78,42 @@ def create(directory: Path) -> Path:
     return link
 
 
+_READ_SCRIPT = (
+    "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:WL_LINK);"
+    "[Console]::OutputEncoding = [Text.Encoding]::UTF8;"
+    "$s.WorkingDirectory"
+)
+
+
+def working_directory(link: Path) -> Path | None:
+    """바로가기가 가리키는 작업 폴더(어느 설치본의 바로가기인지 알아보는 데 쓴다). 읽지 못하면 None."""
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", _READ_SCRIPT],
+        env={**os.environ, "WL_LINK": str(link)},
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    text = result.stdout.strip()
+    return Path(text) if result.returncode == 0 and text else None
+
+
+def is_ours(link: Path) -> bool:
+    """이 설치본(REPO_ROOT)이 만든 바로가기인지. 다른 clone이 만든 같은 이름의 바로가기는 우리 것이 아니다."""
+    folder = working_directory(link)
+    return folder is not None and folder.resolve() == REPO_ROOT.resolve()
+
+
+class ForeignShortcut(Exception):
+    """같은 이름의 바로가기가 있지만 다른 설치본의 것이라 지우지 않았다."""
+
+
 def remove(directory: Path) -> bool:
-    """directory의 바로가기를 지운다. 없었으면 False."""
+    """directory의 바로가기를 지운다. 없었으면 False, 다른 설치본의 것이면 ForeignShortcut, 지우지 못하면 OSError."""
     link = directory / SHORTCUT_NAME
     if not link.exists():
         return False
+    if not is_ours(link):
+        raise ForeignShortcut(str(link))
     link.unlink()
     return True
