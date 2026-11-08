@@ -28,7 +28,7 @@ jobs:
         shell: bash
         run: |
           uv python install 3.14
-          uv sync --frozen --all-packages
+          uv sync --locked --all-packages
 
       - name: pytest
         shell: bash
