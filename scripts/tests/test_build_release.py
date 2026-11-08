@@ -101,6 +101,25 @@ def test_the_bundle_leaves_out_the_server_the_ui_sources_tests_docs_and_local_da
     assert "packages/notes/README.md" not in files
 
 
+def test_the_install_script_ships_with_crlf_line_endings(repo, tmp_path, monkeypatch) -> None:
+    """원본이 LF여도 번들의 install.cmd는 CRLF여야 한다 — cmd는 LF 배치 파일을 실행하다 구문 오류로 멈춘다."""
+    script = tmp_path / "install.cmd"
+    script.write_bytes("@echo off\nif errorlevel 1 (\n  echo 한글\n)\r\n".encode())
+    monkeypatch.setattr(build_release, "INSTALL_SCRIPT", script)
+
+    target, _ = _staged(repo, tmp_path)
+    shipped = (target / "install.cmd").read_bytes()
+
+    assert shipped == "@echo off\r\nif errorlevel 1 (\r\n  echo 한글\r\n)\r\n".encode()
+
+
+def test_the_real_install_script_ships_with_only_crlf(repo, tmp_path) -> None:
+    target, _ = _staged(repo, tmp_path)
+    shipped = (target / "install.cmd").read_bytes()
+
+    assert shipped.count(b"\n") == shipped.count(b"\r\n") > 0
+
+
 def test_the_marker_records_the_version_and_channel(repo, tmp_path) -> None:
     target, _ = _staged(repo, tmp_path)
 
