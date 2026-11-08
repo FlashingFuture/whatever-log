@@ -52,6 +52,15 @@ DEFAULT_LOG_PATH = data_path(_APP_DIR, "sync.log", subdir="logs")
 # hub와 같은 목표 DB를 쓴다(apps/hub/goals.db). 둘 다 WAL 모드이고 쓰기는 BEGIN IMMEDIATE로 직렬화된다.
 DEFAULT_GOALS_DB = data_path(_APP_DIR.parent / "hub", "goals.db")
 
+
+def lock_path_for(state_db: Path) -> Path:
+    """동기화 상태 DB 옆의 중복 실행 lock(`sync.db` → `sync.lock`)."""
+    return state_db.with_suffix(".lock")
+
+
+#: 기본 상태 DB의 lock. launcher가 에이전트를 띄우기 전에 다른 설치본이 이 lock을 잡고 있는지 확인한다.
+DEFAULT_LOCK_PATH = lock_path_for(DEFAULT_STATE_PATH)
+
 logger = logging.getLogger("sync_agent")
 
 
@@ -192,7 +201,7 @@ def main(argv: list[str] | None = None, *, sleep: Callable[[float], None] = time
         return EXIT_ARGUMENT_ERROR
 
     try:
-        lock = acquire_lock(args.state_db.with_suffix(".lock"))
+        lock = acquire_lock(lock_path_for(args.state_db))
     except AlreadyRunningError:
         logger.exception("시작하지 못했습니다.")
         return EXIT_ALREADY_RUNNING
