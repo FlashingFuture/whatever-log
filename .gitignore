@@ -1,38 +1,64 @@
+# ── 의존성·빌드 결과 ─────────────────────────────────────────────
 node_modules/
 .pnpm-store/
 dist/
 build/
+*.tsbuildinfo
+.vite/
 
+# Python 가상환경·캐시·패키징 산출물
 .venv/
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
 .pytest_cache/
-recorder.db
-recorder.db-wal
-recorder.db-shm
-recorder.db.lock
-goals.db
-goals.db-wal
-goals.db-shm
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# ── 실행하면 생기는 로컬 데이터(저장소에 들어가면 안 된다) ─────────
+# 데이터베이스: recorder.db(기록), goals.db(목표), sync.db(동기화 에이전트의 상태) — SQLite의 -wal/-shm/-journal 파일 포함.
+# 기록에는 프로세스·창 제목이 들어 있어 절대 커밋하지 않는다(docs/data-handling.md).
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite-*
+
+# 중복 실행 방지 lock(recorder.db.lock, recorder.lock, hub-<포트>.lock, sync.lock). uv.lock·pnpm-lock.yaml은 추적한다.
+*.db.lock
 recorder.lock
 hub-*.lock
-# 동기화 에이전트의 상태(기기 ID, 마지막으로 보낸 값)와 중복 실행 lock
-sync.db
-sync.db-wal
-sync.db-shm
 sync.lock
+
+# 로그(recorder·supervisor·hub·hub-supervisor·sync·sync-supervisor)와 설치 도구가 남기는 임시 파일
+*.log
+*.log.*
+*.tmp
+
+# hub가 프로세스·사이트에서 뽑아 둔 아이콘 캐시
 icon-cache/
 
+# ── 비밀 값·서버(Cloudflare Workers) 로컬 상태 ────────────────────
 .env
 .env.*
 !.env.example
 
-# Cloudflare Workers(wrangler)의 로컬 비밀 값과 로컬 상태
 .dev.vars
 .dev.vars.*
 !.dev.vars.example
 .wrangler/
 
-*.log
-*.log.*
+# ── 운영체제·편집기 ──────────────────────────────────────────────
 .DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*.swo
+*~
