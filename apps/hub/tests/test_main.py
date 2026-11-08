@@ -51,7 +51,7 @@ def running_server(tmp_path):
     # 실제 Win32 추출 대신 가짜 추출기를 써서 플랫폼과 무관하게 응답 규약만 본다.
     _Handler.icon_store = IconStore(tmp_path / "icons", lambda path: b"PNG-fake")
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         yield f"http://127.0.0.1:{server.server_port}"
@@ -93,7 +93,7 @@ def test_usage_endpoint_returns_503_when_db_is_missing(tmp_path) -> None:
     끊기는 대신 503으로 알려야 한다."""
     _Handler.db_path = tmp_path / "missing.db"
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
         with pytest.raises(urllib.error.HTTPError) as exc_info:
@@ -230,7 +230,7 @@ def test_icon_endpoint_treats_a_pre_migration_database_as_no_icon(
     _Handler.db_path = old_db
     _Handler.icon_store = IconStore(tmp_path / "icons", lambda path: b"PNG-fake")
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     url = f"http://127.0.0.1:{server.server_port}/api/icons/chrome.exe"
     try:
         with pytest.raises(urllib.error.HTTPError) as exc_info:

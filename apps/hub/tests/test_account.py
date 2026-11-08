@@ -274,7 +274,7 @@ def account_server():
     _Handler.link_opener = staticmethod(lambda name: (opened.append(name), LINK_OPENED if name == "privacy" else LINK_UNKNOWN)[1])
     _Handler.allowed_origins = frozenset({UI_ORIGIN})
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     try:
         yield server.server_port, port, opened
     finally:
