@@ -43,11 +43,11 @@
   - `node_modules`는 named volume(`node_modules`)으로 분리되어 있습니다. 호스트(Windows)와 컨테이너(Linux)는 네이티브 바이너리가 다르므로(예: `@biomejs/cli-win32-x64` vs `cli-linux-x64`) **절대 호스트의 `node_modules`를 컨테이너와 공유(bind mount)하지 마세요** — 서로의 설치를 깨뜨립니다.
   - pnpm store 위치도 `npm_config_store_dir` 환경변수로 `node_modules` volume 안쪽에 고정되어 있습니다. 이게 없으면 컨테이너의 pnpm이 store를 프로젝트 루트(호스트 bind mount)에 흘려서 `.pnpm-store/`가 커밋 대상에 섞여 들어갑니다. 이 설정을 건드릴 때는 이 사실을 기억하세요.
   - Python 등 다른 스택이 들어오면 `Dockerfile`에 추가하되, 아직 쓰이지 않는 스택을 미리 넣지 마세요.
-- **mise (`.mise.toml`, 루트)**: Node 버전만 고정되어 있습니다(`node = "24.22.1"`). `engines.node`/Dockerfile의 Node 버전과 반드시 같이 맞추세요. 다른 스택(Python 등)이 들어오면 여기에도 추가.
+- **mise (`.mise.toml`, 루트)**: Node와 Python 버전이 고정되어 있습니다(`node = "24.22.1"`, `python = "3.14.8"`). `engines.node`/Dockerfile의 Node 버전과 반드시 같이 맞추세요.
+- **Python 버전**: 3.14. uv가 읽는 `.python-version`(`3.14`)이 기준이고 릴리스 번들에도 들어갑니다 — 사용자 PC의 `install.cmd`가 CI·릴리스 빌드가 시험한 것과 같은 파이썬을 고르게 하려는 것입니다. 올릴 때는 `.python-version`, 워크플로들의 `uv python install`, `.mise.toml`, Dockerfile을 함께 바꾸세요(`scripts/tests/test_build_release.py`가 `.python-version`과 워크플로가 같은지 검사).
+- **테스트·검사**: `uv run pytest`(파이썬 전체, 루트에서), `pnpm lint`, `pnpm --filter ui build`(tsc 포함)·`test`, `pnpm --filter server typecheck`·`test`. PR과 main 커밋마다 `.github/workflows/ci.yml`이 같은 것을 돌립니다(파이썬은 Windows 러너). 테스트는 실제 개발 폴더의 DB·lock을 건드리지 않게 임시 폴더를 쓰세요.
 
 ## 아직 정해지지 않은 것
-
-앱/패키지별 빌드·테스트 명령은 이후 Phase에서 구현하면서 채웁니다.
 
 데스크톱 앱 프레임워크는 Vite(`apps/ui`) + pywebview(`apps/desktop`)로 정했습니다
 (`docs/2026-10-desktop-ui-framework.md` 참고). `apps/ui`는 조회 화면(TS, pnpm 워크스페이스

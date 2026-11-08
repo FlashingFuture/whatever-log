@@ -5,7 +5,8 @@
     uv run python scripts/build_release.py --expect-tag v1.0.0-beta.1   # 태그가 VERSION과 다르면 실패(CI용)
 
 번들에 들어가는 것: 파이썬 앱·패키지의 `pyproject.toml`과 `src/`, 미리 빌드한 화면(`apps/ui/dist`), 루트의 `pyproject.toml`·`uv.lock`·
-`VERSION`·`README.md`, 설치 스크립트(`install.cmd`), 배포 표시(`release.json`).
+`VERSION`·`README.md`·`LICENSE`·`.python-version`(설치할 때 uv가 CI와 같은 파이썬을 고르게 한다), 설치 스크립트(`install.cmd`),
+배포 표시(`release.json`).
 들어가지 않는 것: 서버(`apps/server`, Cloudflare는 사용자 PC에서 쓰지 않는다), 화면 소스와 Node 의존성, 테스트, 문서, Docker 파일, 개발 설정.
 
 결과는 `release-out/whatever-log-<버전>-win64.zip`이다(저장소의 .gitignore에 들어 있다).
@@ -26,7 +27,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "release-out"
 PYTHON_APPS = ("launcher", "desktop", "hub", "recorder", "sync")
-ROOT_FILES = ("pyproject.toml", "uv.lock", "VERSION", "README.md")
+ROOT_FILES = ("pyproject.toml", "uv.lock", "VERSION", "README.md", "LICENSE", ".python-version")
 INSTALL_SCRIPT = ROOT / "scripts" / "release" / "install.cmd"
 SKIP_NAMES = shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", "*.egg-info")
 SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*))?$")
