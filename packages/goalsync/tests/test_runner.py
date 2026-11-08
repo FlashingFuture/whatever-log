@@ -430,3 +430,71 @@ def test_a_local_edit_that_could_not_be_pushed_is_not_overwritten_by_a_newer_ser
     kept = store.get(goal.id)
     assert (kept.name, kept.daily_target_minutes) == ("운동", 90)  # 사용자의 수정이 사라지지 않았다
     assert store.sync_links()[0].dirty is True
+
+
+# --- 주기 도중 계정이 정리되는 경우 ---
+
+
+class _ResetsMidCycle:
+    """서버 호출이 끝나는 순간(응답을 받은 직후) 다른 프로세스(화면)가 계정을 정리한 상황을 흉내 낸다."""
+
+    def __init__(self, server, store, on: str) -> None:
+        self._server, self._store, self._on = server, store, on
+
+    def __getattr__(self, name):
+        attribute = getattr(self._server, name)
+        if name != self._on:
+            return attribute
+
+        def call(*args, **kwargs):
+            result = attribute(*args, **kwargs)
+            self._store.reset_sync()  # 서버 응답은 받았지만 저장하기 전에 계정이 정리되었다
+            return result
+
+        return call
+
+
+def test_an_upload_answered_just_before_the_account_was_cleared_is_not_linked_afterwards(store, state, server, recorder_db) -> None:
+    goal = store.create(**goal_fields())
+    store.set_sync_state(goal.id, "sync")
+    _enable(store)
+
+    report = _run(store, state, _ResetsMidCycle(server, store, "put_goal"), recorder_db, new_id=lambda: "r-new")
+
+    assert report.skipped == "account_changed"
+    link = store.sync_links()[0]
+    assert (link.remote_id, link.state) == (None, "ask")  # 이전 계정의 연결이 정리된 DB에 되살아나지 않았다
+    assert store.get_meta(META_SYNC_ENABLED) is None
+
+
+def test_a_pull_that_finishes_after_the_account_was_cleared_changes_nothing(store, state, server, recorder_db) -> None:
+    goal = _linked(store, server)
+    _enable(store)
+    server.edit("r-1", name="서버 새 이름")
+
+    report = _run(store, state, _ResetsMidCycle(server, store, "list_goals"), recorder_db)
+
+    # 정리된 뒤에는 이어서 쓸 연결이 없어 아무것도 쓰지 않는다. 낡은 세대로 상태를 적으려는 시도는 호출부(에이전트)가 거절당한다.
+    assert store.get(goal.id).name == "공부" and store.sync_links()[0].remote_id is None
+    assert report.generation != store.generation()
+
+
+def test_the_cycle_reports_its_generation_so_a_late_status_can_be_refused(store, state, server, recorder_db) -> None:
+    _enable(store)
+
+    first = _run(store, state, server, recorder_db)
+    store.reset_sync()
+
+    assert first.generation is not None and first.generation != store.generation()
+
+
+def test_a_cycle_cut_off_by_an_account_reset_still_reports_the_generation_it_started_with(store, state, server, recorder_db) -> None:
+    goal = store.create(**goal_fields())
+    store.set_sync_state(goal.id, "sync")
+    _enable(store)
+    started = store.generation()
+
+    report = _run(store, state, _ResetsMidCycle(server, store, "put_goal"), recorder_db, new_id=lambda: "r-new")
+
+    assert report.skipped == "account_changed"
+    assert report.generation == started != store.generation()  # 호출부가 이 세대로 상태 기록을 거절시킬 수 있다

@@ -27,3 +27,10 @@ class GoalNotFoundError(LookupError):
 
 class SchemaVersionError(RuntimeError):
     """goals.db가 이 코드보다 새 버전으로 만들어졌다 — 옛 코드가 새 스키마를 잘못 다루지 않게 연결을 거부한다."""
+
+
+class StaleSyncError(RuntimeError):
+    """동기화가 시작된 뒤에 계정 정리(`reset_sync`)가 일어났다 — 이전 계정의 주기가 낡은 결과를 저장하지 못하게 거절한다.
+
+    에이전트는 이것을 받으면 이번 주기를 버리고 다음 주기에 새 세대로 다시 시작한다.
+    """

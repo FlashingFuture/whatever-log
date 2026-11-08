@@ -48,6 +48,8 @@ const SNAPSHOT = {
   login: { state: "idle", message: null },
   providers: [{ id: "google", label: "Google" }],
   sync_enabled: false,
+  session: null,
+  deletion_uncertain: false,
 };
 
 test("상태 조회는 GET /api/account이다", async () => {

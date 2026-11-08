@@ -93,3 +93,37 @@ test("로그인이 필요한 주소는 Worker를 통해서도 토큰 없이 401�
     assert.equal(response.status, 401, `${method} ${path}`);
   }
 });
+
+test("요청은 메서드·경로·상태·시간 한 줄로 기록되고, 쿼리·헤더·본문은 기록되지 않는다", async () => {
+  const lines: string[] = [];
+  const original = console.log;
+  console.log = (...args: unknown[]) => void lines.push(args.join(" "));
+  try {
+    await call(
+      new Request("https://server.example/nope?email=a@example.com", {
+        method: "POST",
+        headers: { Authorization: "Bearer secret-token" },
+        body: "secret-body",
+      }),
+    );
+  } finally {
+    console.log = original;
+  }
+
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /^POST \/nope 404 \d+ms$/);
+  assert.ok(!/secret|a@example/.test(lines[0]));
+});
+
+test("/health는 기록하지 않는다(상태 확인이 로그를 덮지 않게)", async () => {
+  const lines: string[] = [];
+  const original = console.log;
+  console.log = (...args: unknown[]) => void lines.push(args.join(" "));
+  try {
+    await call(new Request("https://server.example/health"));
+  } finally {
+    console.log = original;
+  }
+
+  assert.deepEqual(lines, []);
+});

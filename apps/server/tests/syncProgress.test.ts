@@ -525,3 +525,56 @@ test("같은 시각에 서로 다른 목표량을 올려도 기기 ID가 큰 쪽
     assert.equal(row.minutes, 20);
   }
 });
+
+test("기기 목록은 기기 ID·마지막으로 보낸 시각·줄 수만 담고, 최근에 보낸 기기가 먼저다", async () => {
+  const { call, token, goalId, clock } = await withGoal();
+  const first = uuid();
+  const second = uuid();
+  await call("PUT", "/progress", {
+    token,
+    body: {
+      device_id: first,
+      entries: [entry(goalId), entry(goalId, { day: "2026-11-04" })],
+    },
+  });
+  clock.now = new Date(clock.now.getTime() + 60_000);
+  await call("PUT", "/progress", {
+    token,
+    body: { device_id: second, entries: [entry(goalId)] },
+  });
+
+  const listed = await call("GET", "/devices", { token });
+
+  assert.equal(listed.status, 200);
+  assert.deepEqual(listed.json.devices, [
+    { device_id: second, last_sent_at: "2026-11-06T03:01:00.000Z", rows: 1 },
+    { device_id: first, last_sent_at: "2026-11-06T03:00:00.000Z", rows: 2 },
+  ]);
+  assert.equal(listed.response.headers.get("Cache-Control"), "no-store");
+});
+
+test("기기 목록은 내 기기만 보여 주고, 지운 기기는 목록에서 사라진다", async () => {
+  const { call, token, goalId, signIn } = await withGoal();
+  const mine = uuid();
+  await call("PUT", "/progress", {
+    token,
+    body: { device_id: mine, entries: [entry(goalId)] },
+  });
+  const other = await signIn("sub-o", "o@example.com");
+
+  assert.deepEqual(
+    (await call("GET", "/devices", { token: other })).json.devices,
+    [],
+  );
+  await call("DELETE", `/devices/${mine}`, { token });
+  assert.deepEqual((await call("GET", "/devices", { token })).json.devices, []);
+});
+
+test("기기 목록은 토큰이 있어야 하고 GET만 받는다", async () => {
+  const { call } = setup();
+
+  assert.equal((await call("GET", "/devices")).status, 401);
+  const wrong = await call("POST", "/devices");
+  assert.equal(wrong.status, 405);
+  assert.equal(wrong.response.headers.get("Allow"), "GET");
+});

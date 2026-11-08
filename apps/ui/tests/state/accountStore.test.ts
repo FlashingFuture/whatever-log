@@ -22,6 +22,8 @@ function snapshot(over: Partial<AccountSnapshot> = {}): AccountSnapshot {
     login: { state: "idle", message: null },
     providers: [GOOGLE],
     sync_enabled: false,
+    session: null,
+    deletion_uncertain: false,
     ...over,
   };
 }
@@ -558,4 +560,35 @@ test("로그아웃은 로그인 시도로 세지 않는다", () => {
   watch(phase("signedOut"));
 
   assert.equal(watch(phase("signedIn")), false);
+});
+
+test("로그인 상태는 세션 키와 삭제 불확실 표시를 함께 담는다", () => {
+  const state = reduce(INITIAL_STATE, {
+    type: "snapshot",
+    snapshot: snapshot({
+      signed_in: true,
+      email: "a@example.com",
+      session: "k1",
+      deletion_uncertain: true,
+    }),
+  });
+
+  assert.equal(state.session, "k1");
+  assert.equal(state.deletionUncertain, true);
+});
+
+test("로그아웃 상태에는 세션 키와 불확실 표시가 남지 않는다", () => {
+  const signedIn = reduce(INITIAL_STATE, {
+    type: "snapshot",
+    snapshot: snapshot({
+      signed_in: true,
+      session: "k1",
+      deletion_uncertain: true,
+    }),
+  });
+
+  const out = reduce(signedIn, { type: "snapshot", snapshot: snapshot() });
+
+  assert.equal(out.session, null);
+  assert.equal(out.deletionUncertain, false);
 });

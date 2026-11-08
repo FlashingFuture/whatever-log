@@ -22,6 +22,16 @@ export function closePopover(options?: CloseOptions): void {
   active?.close(options);
 }
 
+/** anchor가 연 팝업일 때만 닫는다(다른 버튼이 연 팝업은 그대로 둔다). */
+export function closePopoverFor(
+  anchor: HTMLElement,
+  options?: CloseOptions,
+): void {
+  if (active?.anchor === anchor) {
+    active.close(options);
+  }
+}
+
 /**
  * anchor 아래에 content를 띄운다. 같은 anchor로 다시 부르면 닫는다(토글).
  * 바깥을 누르거나 Esc를 누르면 닫힌다.

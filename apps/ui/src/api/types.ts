@@ -152,6 +152,10 @@ export interface AccountSnapshot {
   providers: LoginProvider[];
   /** 사용자가 확인 창에서 목표 동기화를 켰는지(이 PC의 설정). 켜기 전에 만든 목표는 서버로 가지 않는다. */
   sync_enabled: boolean;
+  /** 지금 로그인을 가리키는 불투명한 키(토큰이 아니다). 확인 창에서 받아 되돌려 보내, 그 사이 로그인이 바뀌면 hub가 거절하게 한다. */
+  session: string | null;
+  /** 이 로그인에서 보낸 계정 삭제의 결과를 알 수 없는 채로 남아 있는가(서버에서 지워졌을 수 있다). 다시 시도하면 확인된다. */
+  deletion_uncertain: boolean;
 }
 
 /** 로그아웃 응답: 상태에 더해, 서버의 토큰까지 폐기됐는지. */
@@ -180,6 +184,7 @@ export interface SyncItem {
 
 export interface SyncPlan {
   email: string | null;
+  session: string | null;
   /** 이 계정에서 이미 한 번 확인을 마쳤는지(처음이면 로그인 직후 자동으로 창을 연다). */
   enabled: boolean;
   items: SyncItem[];
@@ -192,4 +197,43 @@ export interface SyncResult {
   downloaded: number;
   kept_local: number;
   errors: { key: string; message: string }[];
+}
+
+/**
+ * 동기화가 잘 되고 있는지(`GET /api/sync/status`). off(켜지 않음) / waiting(켰지만 에이전트가 아직 한 번도 안 돎) / ok / error(마지막
+ * 시도가 실패, result가 종류) / stale(에이전트가 한동안 돌지 않음). 목표 이름·프로세스는 없다 — 개수와 종류와 시각뿐이다.
+ */
+export interface SyncStatus {
+  enabled: boolean;
+  state: "off" | "waiting" | "ok" | "error" | "stale";
+  /** 마지막 시도의 결과 종류(ok, signed_out, not_enabled, account_changed, unreachable, not_authorized, server_error, internal). */
+  result: string | null;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  /** 이번 주기에 올리지 못한 항목 수. */
+  problems: number;
+}
+
+/** 달성도를 보낸 기기 하나. 이름은 없다 — 무작위 기기 ID와 마지막으로 보낸 시각, 서버에 있는 줄 수뿐이다. */
+export interface DeviceRow {
+  device_id: string;
+  last_sent_at: string;
+  rows: number;
+  is_this_device: boolean;
+}
+
+/** 기기 목록과, 목록을 받은 계정(지우기 요청에 되돌려 보내 그 사이 계정이 바뀌면 거절하게 한다). */
+export interface DeviceList {
+  email: string | null;
+  session: string | null;
+  devices: DeviceRow[];
+}
+
+/** 계정 삭제 결과: 서버에서 지웠고, 이 PC의 정리가 어디까지 됐는지. */
+export interface DeleteAccountResult extends AccountSnapshot {
+  deleted_on_server: boolean;
+  signed_out: boolean;
+  connections_cleared: boolean;
+  /** false면 삭제 뒤 계정 상태를 읽지 못한 것이다 — 로그인 여부 등 나머지 칸을 믿지 말고 화면이 다시 읽어야 한다. */
+  state_known?: boolean;
 }

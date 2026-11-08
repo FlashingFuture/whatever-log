@@ -35,6 +35,7 @@ from common import api_error
 from chromium.browsers import BROWSERS
 from chromium.snapshot import remove_stale_work_dirs
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
+from goals import sync_status
 from goals import (
     META_SYNC_ENABLED,
     GoalNotFoundError,
@@ -80,6 +81,8 @@ DEFAULT_LOG_PATH = _APP_DIR / "hub.log"
 DEFAULT_ICON_CACHE_DIR = _APP_DIR / "icon-cache"
 # 사용자의 목표 설정. recorder.db와 파일을 나눈다(쓰기 주체가 섞이지 않게 — docs/goals-design.md).
 DEFAULT_GOALS_DB_PATH = _APP_DIR / "goals.db"
+# 동기화 에이전트(apps/sync)의 자기 상태. 이 PC의 기기 ID를 알아보려고 읽기 전용으로만 연다.
+DEFAULT_SYNC_DB_PATH = _APP_DIR.parent / "sync" / "sync.db"
 
 logger = logging.getLogger("hub")
 
@@ -209,6 +212,36 @@ def _usage_edges(query: dict[str, list[str]]) -> list[datetime]:
 MAX_SYNC_CHOICES = 100
 MAX_SYNC_KEY_LENGTH = 100
 MAX_EMAIL_LENGTH = 320
+MAX_SESSION_KEY_LENGTH = 64
+
+
+# 로그에 남길 때 식별자(프로세스 이름·사이트 도메인·기기 ID·목표 번호)를 가리는 경로 모양. 앞쪽부터 맞는 첫 규칙을 쓴다.
+_LOG_PATH_RULES = (
+    (re.compile(r"^/api/processes/.+/usage$"), "/api/processes/:name/usage"),
+    (re.compile(r"^/api/icons/.+$"), "/api/icons/:name"),
+    (re.compile(r"^/api/site-icons/.+$"), "/api/site-icons/:domain"),
+    (re.compile(r"^/api/devices/.+$"), "/api/devices/:id"),
+    (re.compile(r"^/api/goals/\d+$"), "/api/goals/:id"),
+)
+
+
+def loggable_path(path: str) -> str:
+    """접근 로그에 남길 경로. 프로세스 이름·사이트 도메인 같은 사용 식별자는 `:name` 같은 자리표시로 바꾼다.
+
+    알 수 없는 경로는 `/api/...`가 아니면 그대로 두지 않고 `/other`로 적는다(모르는 경로에 식별자가 있어도 남기지 않는다).
+    """
+    for rule, shown in _LOG_PATH_RULES:
+        if rule.match(path):
+            return shown
+    return path if path.startswith("/api/") and path.count("/") <= 3 else "/other"
+
+
+def _optional_text(value: object, limit: int) -> bool:
+    """None이거나 limit 이하의 문자열인지(확인한 이메일·세션 키 칸 검사)."""
+    return value is None or (isinstance(value, str) and len(value) <= limit)
+_DEVICE_PATH = re.compile(r"/api/devices/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})")
+# 결과를 알 수 없는 실패(요청을 보냈지만 응답을 받지 못함)에 쓰는 상태 코드. 화면은 이것을 "지워졌는지 확인하라"로 안내한다.
+STATUS_OUTCOME_UNKNOWN = 504
 _PROCESS_PATH_PREFIX = "/api/processes/"
 _GOAL_PATH = re.compile(r"/api/goals/(\d{1,9})")
 _PROCESS_USAGE_SUFFIX = "/usage"
@@ -236,6 +269,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     db_path: Path = DEFAULT_DB_PATH
     goals_db_path: Path = DEFAULT_GOALS_DB_PATH
+    sync_db_path: Path = DEFAULT_SYNC_DB_PATH
     # 읽기·쓰기를 허용하는 UI의 origin(정확히 일치). main()이 --allowed-origin으로 바꾼다.
     allowed_origins: frozenset[str] = frozenset(DEFAULT_ALLOWED_ORIGINS)
     icon_store: IconStore = IconStore(DEFAULT_ICON_CACHE_DIR)
@@ -325,6 +359,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._open_link()
         elif path == "/api/sync/apply":
             self._apply_sync()
+        elif path == "/api/account/delete":
+            self._delete_account()
         else:
             self._send_json(404, api_error.error_body(api_error.NOT_FOUND, "not found"))
 
@@ -348,6 +384,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._delete_goal(int(match.group(1)))
         elif path == "/api/account/login":
             self._cancel_login()
+        elif _DEVICE_PATH.fullmatch(path):
+            self._delete_device(_DEVICE_PATH.fullmatch(path).group(1), urlparse(self.path).query)
         else:
             self._send_json(404, api_error.error_body(api_error.NOT_FOUND, "not found"))
 
@@ -369,6 +407,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_account(200)
         elif parsed.path == "/api/sync/plan":
             self._get_sync_plan()
+        elif parsed.path == "/api/sync/status":
+            self._get_sync_status()
+        elif parsed.path == "/api/devices":
+            self._get_devices()
         elif parsed.path == "/api/goals/progress":
             self._get_goal_progress(parsed.query)
         elif parsed.path == "/api/processes":
@@ -488,13 +530,34 @@ class _Handler(BaseHTTPRequestHandler):
                 503, api_error.error_body(api_error.UNAVAILABLE, "계정 상태를 읽지 못했습니다.")
             )
             return
-        self._send_json(status, {**payload, "sync_enabled": self._sync_enabled(), **(extra or {})})
+        self._send_json(
+            status,
+            {
+                **payload,
+                "sync_enabled": self._sync_enabled(),
+                "deletion_uncertain": self._deletion_uncertain(payload.get("session")),
+                **(extra or {}),
+            },
+        )
 
     def _sync_enabled(self) -> bool:
         """사용자가 확인 창에서 동기화를 켰는지(이 PC의 goals.db 값 — 서버와 통신하지 않는다). 읽지 못하면 꺼진 것으로 본다."""
         try:
             with GoalStore(self.goals_db_path) as store:
                 return store.get_meta(META_SYNC_ENABLED) == "1"
+        except (sqlite3.Error, SchemaVersionError):
+            return False
+
+    def _deletion_uncertain(self, session: object) -> bool:
+        """이 로그인에서 보낸 계정 삭제의 결과를 알 수 없는 채로 남아 있는가(goals.db의 표시가 지금 세션과 같을 때만).
+
+        이전 세션의 표시는 지금 로그인과 무관하므로 세지 않는다. 읽지 못하면 아니라고 본다(화면에 근거 없는 경고를 띄우지 않는다).
+        """
+        if not isinstance(session, str):
+            return False
+        try:
+            with GoalStore(self.goals_db_path) as store:
+                return store.get_meta("deletion_uncertain") == session
         except (sqlite3.Error, SchemaVersionError):
             return False
 
@@ -519,6 +582,11 @@ class _Handler(BaseHTTPRequestHandler):
         except LoginInProgress:
             self._send_json(
                 409, api_error.error_body(api_error.INVALID_REQUEST, "이미 로그인이 진행 중입니다.")
+            )
+            return
+        except SyncBusy:
+            self._send_json(
+                409, api_error.error_body(api_error.INVALID_REQUEST, "계정을 지우는 중이라 지금은 로그인할 수 없습니다. 잠시 뒤 다시 시도해 주세요.")
             )
             return
         except AccountUnavailable:
@@ -548,9 +616,11 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_account(200, {"revoked_on_server": revoked})
 
     def _send_sync_problem(self, problem: SyncProblem) -> None:
-        """동기화 요청의 실패: 로그인이 필요하면 409, 서버 문제면 503(사유는 사용자용 문장)."""
+        """동기화 요청의 실패: 로그인이 필요하면 409, 결과를 알 수 없으면 504, 서버 문제면 503(사유는 사용자용 문장)."""
         if problem.signed_out:
             self._send_json(409, api_error.error_body(api_error.INVALID_REQUEST, problem.message))
+        elif problem.uncertain:
+            self._send_json(STATUS_OUTCOME_UNKNOWN, api_error.error_body(api_error.UNAVAILABLE, problem.message))
         else:
             self._send_json(503, api_error.error_body(api_error.UNAVAILABLE, problem.message))
 
@@ -570,15 +640,20 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_json(200, plan)
 
     def _apply_sync(self) -> None:
-        """POST /api/sync/apply {"accepted": [key…]} — 체크한 항목만 서버에 올리고·합치고·가져온다. 체크하지 않은 이 PC 목표는 올리지 않는다."""
+        """POST /api/sync/apply {"accepted": [key…], "email", "session"} — 체크한 항목만 서버에 올리고·합치고·가져온다. 체크하지 않은 이 PC 목표는 올리지 않는다."""
         body = self._check_account_write(json_body=True)
         if body is None:
             return
         accepted = body.get("accepted")
         email = body.get("email")
+        session = body.get("session")
+        if set(body) != {"accepted", "email", "session"}:
+            # 어느 칸이 어긋났는지 로그에 남긴다(값은 남기지 않는다). 화면이 낡은 빌드일 때 원인을 바로 알 수 있다.
+            logger.warning("sync apply 본문 칸이 맞지 않음: 받은 칸=%s", sorted(str(key) for key in body))
         if (
-            set(body) != {"accepted", "email"}
-            or not (email is None or (isinstance(email, str) and len(email) <= MAX_EMAIL_LENGTH))
+            set(body) != {"accepted", "email", "session"}
+            or not _optional_text(email, MAX_EMAIL_LENGTH)
+            or not _optional_text(session, MAX_SESSION_KEY_LENGTH)
             or not isinstance(accepted, list)
             or len(accepted) > MAX_SYNC_CHOICES
             or not all(isinstance(key, str) and 0 < len(key) <= MAX_SYNC_KEY_LENGTH for key in accepted)
@@ -586,12 +661,13 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(
                 400,
                 api_error.error_body(
-                    api_error.INVALID_REQUEST, "accepted(항목 이름 목록)와 email(확인한 계정) 칸만 보내야 합니다."
+                    api_error.INVALID_REQUEST,
+                    "accepted(항목 이름 목록), email·session(확인한 로그인) 칸만 보내야 합니다.",
                 ),
             )
             return
         try:
-            result = self.account.sync_apply(self.goals_db_path, accepted, email)
+            result = self.account.sync_apply(self.goals_db_path, accepted, email, session)
         except AccountUnavailable:
             self._send_account_unavailable()
             return
@@ -605,6 +681,110 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_unavailable("목표 DB", error)
             return
         self._send_json(200, result)
+
+    def _get_sync_status(self) -> None:
+        """GET /api/sync/status — 동기화가 잘 되고 있는지(꺼짐/기다리는 중/정상/오류/에이전트 멈춤). 이 PC의 goals.db만 읽고 서버를 부르지 않는다."""
+        try:
+            with GoalStore(self.goals_db_path) as store:
+                enabled = store.get_meta(META_SYNC_ENABLED) == "1"
+                record = sync_status.read_record(store)
+        except (sqlite3.Error, SchemaVersionError) as error:
+            self._send_unavailable("목표 DB", error)
+            return
+        self._send_json(200, sync_status.describe(record, enabled=enabled, now=datetime.now(UTC)))
+
+    def _get_devices(self) -> None:
+        """GET /api/devices — 달성도를 보낸 기기들(서버에서 받는다). 이 PC의 기기에는 `is_this_device`가 켜진다."""
+        try:
+            result = self.account.list_devices(self.goals_db_path, self.sync_db_path)
+        except AccountUnavailable:
+            self._send_account_unavailable()
+            return
+        except SyncProblem as problem:
+            self._send_sync_problem(problem)
+            return
+        self._send_json(200, result)
+
+    def _delete_device(self, device_id: str, query: str) -> None:
+        """DELETE /api/devices/<id>?email=…&session=… — 그 기기가 보낸 달성 기록을 서버에서 지운다.
+
+        email·session은 기기 목록을 받았을 때의 로그인이다. 지금 로그인과 다르면 거절한다(계정 A의 목록에서 누른 삭제가 B의 기록을 지우지 않게).
+        이 PC의 기기는 거절하고, 이 PC의 기기를 확인할 수 없을 때(동기화를 켰는데 에이전트가 기기 ID를 아직 알리지 않음)도 거절한다.
+        """
+        if self._check_account_write(json_body=False) is None:
+            return
+        values = parse_qs(query, keep_blank_values=True)
+        emails = values.get("email", [])
+        sessions = values.get("session", [])
+        if (
+            set(values) - {"email", "session"}
+            or len(emails) != 1
+            or len(sessions) != 1
+            or len(emails[0]) > MAX_EMAIL_LENGTH
+            or not 0 < len(sessions[0]) <= MAX_SESSION_KEY_LENGTH
+        ):
+            self._send_json(
+                400,
+                api_error.error_body(api_error.INVALID_REQUEST, "email과 session을 하나씩만 쿼리로 보내야 합니다."),
+            )
+            return
+        confirmed = emails[0] or None  # 빈 값은 "이메일을 알 수 없는 로그인"이다
+        try:
+            self.account.delete_device(self.goals_db_path, self.sync_db_path, device_id, confirmed, sessions[0])
+        except AccountUnavailable:
+            self._send_account_unavailable()
+            return
+        except SyncProblem as problem:
+            self._send_sync_problem(problem)
+            return
+        self._send_empty(204)
+
+    def _delete_account(self) -> None:
+        """POST /api/account/delete {"email", "session"} — 서버의 계정과 모든 데이터를 지운다(되돌릴 수 없다). email·session은 사용자가
+        확인한 로그인이고, 지금 로그인과 다르면 거절한다. 서버 삭제에 성공한 뒤에만 이 PC의 로그인·동기화 연결을 정리한다."""
+        body = self._check_account_write(json_body=True)
+        if body is None:
+            return
+        email = body.get("email")
+        session = body.get("session")
+        if (
+            set(body) != {"email", "session"}
+            or not _optional_text(email, MAX_EMAIL_LENGTH)
+            or not (isinstance(session, str) and 0 < len(session) <= MAX_SESSION_KEY_LENGTH)
+        ):
+            self._send_json(
+                400, api_error.error_body(api_error.INVALID_REQUEST, "email과 session 칸만 보내야 합니다.")
+            )
+            return
+        try:
+            result = self.account.delete_account(self.goals_db_path, email, session)
+        except AccountUnavailable:
+            self._send_account_unavailable()
+            return
+        except SyncBusy:
+            self._send_json(409, api_error.error_body(api_error.INVALID_REQUEST, "다른 동기화 작업을 처리하는 중입니다."))
+            return
+        except SyncProblem as problem:
+            self._send_sync_problem(problem)
+            return
+        self._send_account_after_delete(result)
+
+    def _send_account_after_delete(self, result: dict) -> None:
+        """계정 삭제 뒤의 응답. 서버에서 이미 지워졌으므로, 상태를 읽지 못해도 503을 보내지 않고 삭제 결과를 200으로 알린다.
+
+        (503을 보내면 화면은 "지우지 못했다"로 안내한다 — 이미 지워진 계정에 대해 틀린 말이다.) 다만 **읽지 못한 것은 단정하지 않는다**:
+        계정 상태를 읽지 못했으면 로그인 여부를 응답에 넣지 않고(화면이 다시 읽는다), 동기화 설정은 실제로 읽은 값을 준다 — 이 PC의 정리
+        (`connections_cleared`)가 실패해 설정이 켜진 채 남았다면 켜져 있다고 그대로 알린다.
+        """
+        payload: dict = {}
+        try:
+            payload = self.account.snapshot()
+        except Exception as error:
+            logger.error("계정 삭제 뒤 상태를 읽지 못했습니다: %s", type(error).__name__)
+        self._send_json(
+            200,
+            {**payload, "sync_enabled": self._sync_enabled(), "deletion_uncertain": False, "state_known": bool(payload), **result},
+        )
 
     def _send_account_unavailable(self) -> None:
         """계정 기능을 쓸 수 없는 환경(cloud 없음)의 요청에 503."""
@@ -996,6 +1176,10 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(png)
 
+    def log_request(self, code: object = "-", size: object = "-") -> None:
+        """요청 한 줄을 hub 로그에 남긴다: 메서드, 경로, 상태 코드만. 쿼리(이메일·세션 키)와 본문은 남기지 않는다."""
+        logger.info("%s %s -> %s", self.command, loggable_path(urlsplit(self.path).path), code)
+
     def log_message(self, log_format: str, *args: object) -> None:
         pass  # 기본 동작(stderr에 접근 로그 출력)을 끈다.
 
@@ -1006,6 +1190,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--db-path", type=Path, default=DEFAULT_DB_PATH)
     parser.add_argument("--goals-db-path", type=Path, default=DEFAULT_GOALS_DB_PATH)
+    parser.add_argument("--sync-db-path", type=Path, default=DEFAULT_SYNC_DB_PATH, help="동기화 에이전트의 sync.db(이 PC의 기기 ID를 읽기 전용으로 확인한다)")
     parser.add_argument(
         "--allowed-origin",
         action="append",
@@ -1028,6 +1213,7 @@ def main() -> None:
         remove_stale_work_dirs(WORK_DIR_PREFIX)
         _Handler.db_path = args.db_path
         _Handler.goals_db_path = args.goals_db_path
+        _Handler.sync_db_path = args.sync_db_path
         _Handler.allowed_origins = frozenset(args.allowed_origin or DEFAULT_ALLOWED_ORIGINS)
         logger.info("포트 %d에서 집계 API를 시작합니다. DB: %s", args.port, args.db_path)
         server = ThreadingHTTPServer(("127.0.0.1", args.port), _Handler)

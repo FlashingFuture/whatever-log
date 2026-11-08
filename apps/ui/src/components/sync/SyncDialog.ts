@@ -28,6 +28,8 @@ export interface SyncDialogProps {
   onGoalsChanged: () => void;
   /** 로그인이 필요한 상황(만료 등)이라는 응답을 받았다 — 계정 상태를 다시 확인하게 한다. */
   onSignedOut: () => void;
+  /** 적용이 끝났다(동기화를 켰거나 선택을 저장했다) — 동기화가 켜졌는지·상태가 바뀌었을 수 있으니 다시 읽게 한다. */
+  onApplied?: () => void;
 }
 
 export interface SyncDialog {
@@ -203,10 +205,11 @@ export function createSyncDialog(props: SyncDialogProps): SyncDialog {
     failure = null;
     render();
     try {
-      result = await applySync([...selection], plan.email);
+      result = await applySync([...selection], plan.email, plan.session);
       if (result.merged > 0 || result.downloaded > 0) {
         props.onGoalsChanged();
       }
+      props.onApplied?.();
     } catch (error) {
       failure = message(error);
       if (error instanceof ApiError && error.status === 409) {

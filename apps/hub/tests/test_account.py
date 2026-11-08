@@ -77,6 +77,7 @@ def test_signed_out_snapshot_lists_the_providers() -> None:
         "email": None,
         "login": {"state": "idle", "message": None},
         "providers": [{"id": "google", "label": "Google"}],
+        "session": None,
     }
 
 
@@ -309,7 +310,16 @@ def test_get_account_returns_the_state_without_any_token(account_server) -> None
 
     assert status == 200
     assert body["signed_in"] is True and body["email"] == "a@example.com"
-    assert set(body) == {"available", "signed_in", "email", "login", "providers", "sync_enabled"}
+    assert set(body) == {
+        "available",
+        "signed_in",
+        "email",
+        "login",
+        "providers",
+        "sync_enabled",
+        "session",
+        "deletion_uncertain",
+    }
     assert response.getheader("Access-Control-Allow-Origin") == UI_ORIGIN
 
 

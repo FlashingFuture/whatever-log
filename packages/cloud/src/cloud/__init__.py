@@ -10,6 +10,7 @@ from cloud.account import Account
 from cloud.config import CloudConfig, load_config
 from cloud.api import (
     DayProgress,
+    DeviceInfo,
     GoalConflict,
     NotAuthorized,
     ProgressEntry,
@@ -33,6 +34,7 @@ __all__ = [
     "Account",
     "CloudConfig",
     "DayProgress",
+    "DeviceInfo",
     "EnvTokenStore",
     "GoalConflict",
     "InMemoryTokenStore",
