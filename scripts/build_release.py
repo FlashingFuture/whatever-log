@@ -80,7 +80,10 @@ def stage(version: str, target: Path, root: Path = ROOT) -> None:
         shutil.copy2(project / "pyproject.toml", destination / "pyproject.toml")
         shutil.copytree(project / "src", destination / "src", ignore=SKIP_NAMES)
     shutil.copytree(dist, target / "apps" / "ui" / "dist")
-    shutil.copy2(INSTALL_SCRIPT, target / "install.cmd")
+    # cmd는 LF 줄바꿈 배치 파일을 제대로 읽지 못한다(한글 줄과 `if (…)` 블록에서 "명령 구문이 올바르지 않습니다"로 멈춘다 —
+    # v1.0.0-beta.1이 이렇게 나갔다). checkout의 줄바꿈 설정과 상관없이 번들에는 항상 CRLF로 넣는다.
+    script = INSTALL_SCRIPT.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+    (target / "install.cmd").write_bytes(script)
     # 배포 표시: 이 파일이 있으면 앱은 데이터를 사용자 데이터 폴더에 둔다(common.paths)
     (target / "release.json").write_text(
         json.dumps({"version": version, "channel": channel_of(version)}, indent=2) + "\n", encoding="utf-8"

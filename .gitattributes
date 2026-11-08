@@ -1,1 +1,4 @@
 * text=auto eol=lf
+# cmd는 LF 줄바꿈 배치 파일을 제대로 읽지 못한다(scripts/build_release.py도 번들에 넣을 때 CRLF로 바꾼다)
+*.cmd text eol=crlf
+*.bat text eol=crlf
