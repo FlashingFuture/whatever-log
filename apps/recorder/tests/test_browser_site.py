@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 from pathlib import Path
 
@@ -202,10 +203,15 @@ def test_resolver_copies_history_only_when_it_changed(tmp_path) -> None:
         assert resolver.resolve("뉴스 - Google Chrome") == "a.example.com"
         assert first_copy.stat().st_mtime_ns == first_mtime  # 다시 복사하지 않았다
 
-        conn = sqlite3.connect(tmp_path / "Default" / "History")
+        history = tmp_path / "Default" / "History"
+        conn = sqlite3.connect(history)
         conn.execute("INSERT INTO urls VALUES ('https://b.example.com/', '새 글', 9)")
         conn.commit()
         conn.close()
+        # 한 줄 추가로는 파일 크기가 그대로이고, Windows의 파일 시각은 약 15.6ms 단위라 바로 이어 쓰면 수정 시각도
+        # 같게 나올 수 있다. 실제 브라우저처럼 "나중에 바뀐" 파일이 되도록 수정 시각을 1초 뒤로 둔다.
+        stat = history.stat()
+        os.utime(history, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
 
         assert resolver.resolve("새 글 - Google Chrome") == "b.example.com"
     finally:

@@ -174,4 +174,4 @@ def test_ui_build_output_goes_to_stderr_so_stdout_only_carries_the_result(monkey
 def test_the_workflow_picks_the_zip_line_not_the_first_line() -> None:
     workflow = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
-    assert "head -n1" not in workflow and "grep '\.zip$'" in workflow
+    assert "head -n1" not in workflow and r"grep '\.zip$'" in workflow

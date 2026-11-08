@@ -1,0 +1,62 @@
+# PR과 main에 들어오는 커밋마다 기본 검사를 돌린다: 파이썬 테스트(Windows), Biome lint, 화면·서버의 타입 검사와 테스트.
+# 로컬 PC의 Node·Python 버전에 기대지 않고 같은 환경에서 확인하려는 것이다. 실제 서버가 필요한 시험(apps/sync/tests/test_e2e_server.py)은
+# 환경 변수가 없으면 스스로 건너뛴다.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    # recorder·launcher 등은 Windows API(레지스트리, 창 목록)를 쓰므로 사용자 PC와 같은 Windows에서 돌린다
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.3.0
+
+      - name: 파이썬 환경
+        shell: bash
+        run: |
+          uv python install 3.14
+          uv sync --frozen --all-packages
+
+      - name: pytest
+        shell: bash
+        run: uv run pytest -q
+
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: 의존성
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Biome lint
+        run: pnpm lint
+
+      - name: 화면 — 타입 검사·빌드, 테스트
+        run: |
+          pnpm --filter ui build
+          pnpm --filter ui test
+
+      - name: 서버 — 타입 검사, 테스트
+        run: |
+          pnpm --filter server typecheck
+          pnpm --filter server test
