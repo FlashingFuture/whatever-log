@@ -17,7 +17,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
-from goals.errors import FieldError, GoalNotFoundError, GoalValidationError, SchemaVersionError
+from goals.errors import FieldError, GoalNotFoundError, GoalValidationError, SchemaVersionError, StaleSyncError
 from goals.models import SYNC_STATES, Goal, GoalSnapshot, SiteTarget, SyncLink
 from goals.validation import (
     MAX_GOALS,
@@ -37,6 +37,10 @@ SCHEMA_VERSION = 3
 # sync_meta의 키: 동기화를 켰는지, 연결한 계정의 이메일(계정이 바뀌면 연결을 끊는 데 쓴다).
 META_SYNC_ENABLED = "sync_enabled"
 META_ACCOUNT_EMAIL = "account_email"
+# 동기화 세대: 계정 정리(reset_sync)마다 1씩 올라가고 지워지지 않는다. 에이전트가 주기 시작 때의 값을 들고 있다가 쓸 때마다 확인한다.
+META_GENERATION = "sync_generation"
+# 이 PC의 기기 ID(에이전트가 적는다). 계정이 바뀌어도 같은 기기이므로 reset_sync가 지우지 않는다.
+META_DEVICE_ID = "device_id"
 
 _SYNC_STATES_SQL = ", ".join(f"'{state}'" for state in SYNC_STATES)
 
@@ -244,13 +248,16 @@ class GoalStore:
                     self._conn.execute(f"ALTER TABLE goals ADD COLUMN {column} {definition}")
 
     @contextmanager
-    def _write(self) -> Iterator[None]:
+    def _write(self, expect_generation: int | None = None) -> Iterator[None]:
         """쓰기 트랜잭션. 다른 프로세스의 쓰기와 겹치지 않게 시작 때 잠그고, 실패하면 전부 되돌린다.
 
         COMMIT 자체가 실패해도(디스크 가득 참 등) 트랜잭션이 열린 채 남지 않게 되돌린 뒤 원래 오류를 올린다.
+        expect_generation이 있으면 잠근 직후 동기화 세대가 그 값과 같은지 확인한다(다르면 StaleSyncError — 아무것도 쓰지 않는다).
         """
         self._conn.execute("BEGIN IMMEDIATE")
         try:
+            if expect_generation is not None and self._read_generation() != expect_generation:
+                raise StaleSyncError("동기화가 시작된 뒤 계정이 정리되었습니다.")
             yield
             self._conn.execute("COMMIT")
         except BaseException:
@@ -410,6 +417,17 @@ class GoalStore:
     # 아래 메서드는 동기화(goalsync)와 hub의 확인 창이 쓴다. 서버로 가는 칸(이름·목표 시간·요일)만 다루고,
     # 프로세스·사이트 연결은 건드리지 않는다.
 
+    def _read_generation(self) -> int:
+        raw = self._get_meta(META_GENERATION)
+        try:
+            return int(raw) if raw is not None else 0
+        except ValueError:
+            return 0
+
+    def generation(self) -> int:
+        """동기화 세대(계정 정리마다 올라간다). 에이전트는 주기 시작 때 읽어 두고 쓸 때마다 `expect_generation`으로 확인시킨다."""
+        return self._read_generation()
+
     def _get_meta(self, key: str) -> str | None:
         row = self._conn.execute("SELECT value FROM sync_meta WHERE key = ?", (key,)).fetchone()
         return row[0] if row else None
@@ -418,9 +436,9 @@ class GoalStore:
         """동기화 보조 값(sync_meta). 없으면 None."""
         return self._get_meta(key)
 
-    def set_meta(self, key: str, value: str) -> None:
+    def set_meta(self, key: str, value: str, *, expect_generation: int | None = None) -> None:
         """동기화 보조 값을 저장한다(이미 있으면 바꾼다)."""
-        with self._write():
+        with self._write(expect_generation):
             self._conn.execute(
                 "INSERT INTO sync_meta (key, value) VALUES (?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -438,38 +456,38 @@ class GoalStore:
         if self._conn.execute("SELECT 1 FROM goals WHERE id = ?", (goal_id,)).fetchone() is None:
             raise GoalNotFoundError(goal_id)
 
-    def set_sync_state(self, goal_id: int, state: str) -> None:
+    def set_sync_state(self, goal_id: int, state: str, *, expect_generation: int | None = None) -> None:
         """아직 서버와 연결되지 않은 목표의 동기화 선택(`sync`: 올리기, `local_only`: 올리지 않기, `ask`: 다시 묻기).
 
         이미 연결된 목표의 상태는 바꾸지 않는다(연결을 끊으려면 unlink). 없는 id면 GoalNotFoundError.
         """
         if state not in SYNC_STATES:
             raise ValueError(f"알 수 없는 동기화 상태입니다: {state!r}")
-        with self._write():
+        with self._write(expect_generation):
             self._require_goal(goal_id)
             self._conn.execute(
                 "UPDATE goals SET sync_state = ? WHERE id = ? AND remote_id IS NULL", (state, goal_id)
             )
 
-    def link_remote(self, goal_id: int, remote_id: str, revision: int) -> None:
+    def link_remote(self, goal_id: int, remote_id: str, revision: int, *, expect_generation: int | None = None) -> None:
         """목표를 서버의 목표와 연결하고 동기화 상태로 둔다(밀린 수정 표시는 지운다)."""
-        with self._write():
+        with self._write(expect_generation):
             self._require_goal(goal_id)
             self._conn.execute(
                 "UPDATE goals SET remote_id = ?, remote_revision = ?, sync_state = 'sync', dirty = 0 WHERE id = ?",
                 (remote_id, revision, goal_id),
             )
 
-    def mark_pushed(self, goal_id: int, revision: int) -> None:
+    def mark_pushed(self, goal_id: int, revision: int, *, expect_generation: int | None = None) -> None:
         """서버에 수정을 보냈다: 서버가 돌려준 revision을 적고 밀린 수정 표시를 지운다."""
-        with self._write():
+        with self._write(expect_generation):
             self._conn.execute(
                 "UPDATE goals SET remote_revision = ?, dirty = 0 WHERE id = ?", (revision, goal_id)
             )
 
-    def unlink(self, goal_id: int) -> None:
+    def unlink(self, goal_id: int, *, expect_generation: int | None = None) -> None:
         """서버와의 연결을 끊고 이 PC에만 두는 목표로 만든다(프로세스 연결은 그대로)."""
-        with self._write():
+        with self._write(expect_generation):
             self._conn.execute(
                 "UPDATE goals SET remote_id = NULL, remote_revision = NULL, sync_state = 'local_only', dirty = 0 "
                 "WHERE id = ?",
@@ -484,6 +502,7 @@ class GoalStore:
         daily_target_minutes: int,
         weekdays: Collection[int],
         revision: int,
+        expect_generation: int | None = None,
     ) -> None:
         """서버의 값(이름·목표 시간·요일)으로 이 목표를 맞춘다. 프로세스·사이트 연결은 그대로다.
 
@@ -494,7 +513,7 @@ class GoalStore:
         if errors:
             raise GoalValidationError(errors)
         mask = _weekday_mask(frozenset(weekdays))
-        with self._write():
+        with self._write(expect_generation):
             self._require_goal(goal_id)
             try:
                 self._conn.execute(
@@ -540,20 +559,28 @@ class GoalStore:
         """서버에 아직 알리지 못한 삭제(서버 목표 ID)."""
         return [row[0] for row in self._conn.execute("SELECT remote_id FROM sync_deletions ORDER BY remote_id")]
 
-    def clear_deletion(self, remote_id: str) -> None:
+    def clear_deletion(self, remote_id: str, *, expect_generation: int | None = None) -> None:
         """서버에 삭제를 알렸다(또는 서버에 이미 없다)."""
-        with self._write():
+        with self._write(expect_generation):
             self._conn.execute("DELETE FROM sync_deletions WHERE remote_id = ?", (remote_id,))
 
     def reset_sync(self) -> None:
         """서버와의 연결을 모두 끊는다(계정이 바뀌었을 때): 목표는 모두 `ask`·연결 없음이 되고, 보내지 못한 삭제와 동기화
-        설정도 지운다. 이전 계정의 목표가 다른 계정에 올라가지 않게 한다. 프로세스·사이트 연결은 그대로다."""
+        설정도 지운다. 이전 계정의 목표가 다른 계정에 올라가지 않게 한다. 프로세스·사이트 연결은 그대로다. 동기화 세대는 올라가고
+        이 PC의 기기 ID는 남는다."""
         with self._write():
+            generation = self._read_generation()
+            device_id = self._get_meta(META_DEVICE_ID)
             self._conn.execute(
                 "UPDATE goals SET remote_id = NULL, remote_revision = NULL, sync_state = 'ask', dirty = 0"
             )
             self._conn.execute("DELETE FROM sync_deletions")
             self._conn.execute("DELETE FROM sync_meta")
+            # 세대는 올리고, 이 PC의 기기 ID는 남긴다(계정이 바뀌어도 같은 기기다). 세대가 올라가면 정리 전에 시작한 에이전트
+            # 주기의 쓰기(연결 저장, 상태 기록)는 거절된다.
+            self._conn.execute("INSERT INTO sync_meta (key, value) VALUES (?, ?)", (META_GENERATION, str(generation + 1)))
+            if device_id is not None:
+                self._conn.execute("INSERT INTO sync_meta (key, value) VALUES (?, ?)", (META_DEVICE_ID, device_id))
 
     @staticmethod
     def _validate(

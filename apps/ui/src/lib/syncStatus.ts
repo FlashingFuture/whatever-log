@@ -53,6 +53,9 @@ function errorDetail(result: string | null): string {
       return "서버에 연결하지 못했어요. 인터넷 연결을 확인해 주세요. 연결되면 자동으로 이어서 동기화해요.";
     case "not_authorized":
       return "로그인이 만료됐어요. 로그아웃한 뒤 다시 로그인해 주세요.";
+    case "signed_out":
+      // 화면은 로그인되어 있는데 동기화 에이전트가 로그인 정보를 찾지 못했다 — 에이전트가 다른 저장소를 보고 있을 수 있다.
+      return "동기화 에이전트가 로그인 정보를 찾지 못했어요. 이 PC의 목표 변경과 달성 시간이 서버에 반영되지 않고 있어요. 에이전트를 같은 계정의 자격 증명(Windows 자격 증명 관리자)으로 실행했는지 확인하거나, 로그아웃한 뒤 다시 로그인해 주세요.";
     case "server_error":
       return "서버가 요청을 처리하지 못했어요. 잠시 뒤 자동으로 다시 시도해요.";
     default:
@@ -78,13 +81,13 @@ export function chipFor(status: StatusLike, now: Date): Chip | null {
       return {
         label: "동기화 대기 중",
         detail:
-          "동기화를 켰지만 동기화 에이전트가 아직 한 번도 실행되지 않았어요. `uv run python -m sync_agent`를 실행해 주세요.",
+          "동기화를 켰지만 동기화 에이전트가 아직 한 번도 실행되지 않았어요. 터미널에서 uv run python -m sync_agent 를 실행해 주세요.",
         tone: "warn",
       };
     case "stale":
       return {
         label: lastSuccess ? `에이전트 멈춤 · ${lastSuccess}` : "에이전트 멈춤",
-        detail: `동기화 에이전트가 한동안 실행되지 않았어요. 이 PC의 목표 변경과 달성 시간이 서버에 반영되지 않고 있어요.${since} \`uv run python -m sync_agent\`를 실행해 주세요.`,
+        detail: `동기화 에이전트가 한동안 실행되지 않았어요. 이 PC의 목표 변경과 달성 시간이 서버에 반영되지 않고 있어요.${since} 터미널에서 uv run python -m sync_agent 를 실행해 주세요.`,
         tone: "warn",
       };
     case "error":

@@ -217,6 +217,12 @@ export interface DeviceRow {
   is_this_device: boolean;
 }
 
+/** 기기 목록과, 목록을 받은 계정(지우기 요청에 되돌려 보내 그 사이 계정이 바뀌면 거절하게 한다). */
+export interface DeviceList {
+  email: string | null;
+  devices: DeviceRow[];
+}
+
 /** 계정 삭제 결과: 서버에서 지웠고, 이 PC의 정리가 어디까지 됐는지. */
 export interface DeleteAccountResult extends AccountSnapshot {
   deleted_on_server: boolean;

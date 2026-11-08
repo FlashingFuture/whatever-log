@@ -309,3 +309,53 @@ def test_a_real_name_clash_is_still_reported_as_a_duplicate_name(store) -> None:
         store.create_from_remote(remote_id="r-9", name="공부", daily_target_minutes=30, weekdays=[0], revision=1)
 
     assert [error.field for error in raised.value.errors] == ["name"]
+
+
+# --- 동기화 세대: 계정 정리 뒤 낡은 주기의 쓰기 거절 ---
+
+
+def test_every_account_reset_raises_the_generation_and_keeps_the_device_id(store) -> None:
+    from goals import META_DEVICE_ID
+
+    store.set_meta(META_DEVICE_ID, "dev-1")
+    first = store.generation()
+
+    store.reset_sync()
+    second = store.generation()
+    store.reset_sync()
+
+    assert (second, store.generation()) == (first + 1, first + 2)
+    assert store.get_meta(META_DEVICE_ID) == "dev-1"  # 계정이 바뀌어도 같은 기기다
+    assert store.get_meta(META_SYNC_ENABLED) is None  # 나머지 동기화 설정은 지워진다
+
+
+def test_writes_with_a_stale_generation_are_refused_and_change_nothing(store) -> None:
+    from goals import StaleSyncError
+
+    goal = store.create(**_fields(processes=["Code.exe"]))
+    old = store.generation()
+    store.reset_sync()  # 에이전트 주기가 도는 사이 계정이 정리되었다
+
+    for write in (
+        lambda: store.link_remote(goal.id, "r-old", 1, expect_generation=old),
+        lambda: store.mark_pushed(goal.id, 2, expect_generation=old),
+        lambda: store.unlink(goal.id, expect_generation=old),
+        lambda: store.set_sync_state(goal.id, "sync", expect_generation=old),
+        lambda: store.clear_deletion("r-x", expect_generation=old),
+        lambda: store.set_meta("account_email", "old@example.com", expect_generation=old),
+        lambda: store.apply_remote(goal.id, name="낡은 값", daily_target_minutes=5, weekdays=[0], revision=9, expect_generation=old),
+    ):
+        with pytest.raises(StaleSyncError):
+            write()
+
+    assert _link(store, goal.id) == SyncLink(goal.id, "ask", None, None, False)  # 이전 계정의 연결이 되살아나지 않았다
+    assert store.get(goal.id).name == "공부" and store.get_meta("account_email") is None
+
+
+def test_writes_with_the_current_generation_go_through(store) -> None:
+    goal = store.create(**_fields())
+    store.reset_sync()
+
+    store.link_remote(goal.id, "r-new", 1, expect_generation=store.generation())
+
+    assert _link(store, goal.id).remote_id == "r-new"

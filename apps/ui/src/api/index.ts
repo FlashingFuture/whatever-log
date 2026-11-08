@@ -34,6 +34,7 @@ export type {
   AccountSnapshot,
   BucketUsage,
   DeleteAccountResult,
+  DeviceList,
   DeviceRow,
   ExternalLink,
   FieldError,

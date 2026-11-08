@@ -9,6 +9,7 @@
 """
 
 import json
+import math
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -27,8 +28,11 @@ RESULT_NOT_AUTHORIZED = "not_authorized"
 RESULT_SERVER_ERROR = "server_error"
 RESULT_INTERNAL = "internal"
 
-# 오류로 보는 결과들(화면이 빨간 안내를 띄운다).
-ERROR_RESULTS = frozenset({RESULT_UNREACHABLE, RESULT_NOT_AUTHORIZED, RESULT_SERVER_ERROR, RESULT_INTERNAL})
+# 오류로 보는 결과들(화면이 빨간 안내를 띄운다). 로그인 안 됨은 화면(hub)이 로그인되어 있는데 에이전트가 로그인 정보를 못 찾는다는 뜻이라
+# (자격 증명 저장소가 다르다 등) 이후 변경이 서버에 반영되지 않으므로 오류다 — 정상으로 두면 낡은 "동기화됨"이 계속 보인다.
+ERROR_RESULTS = frozenset(
+    {RESULT_UNREACHABLE, RESULT_NOT_AUTHORIZED, RESULT_SERVER_ERROR, RESULT_INTERNAL, RESULT_SIGNED_OUT}
+)
 
 # 에이전트가 이 배수만큼의 주기 동안 아무 기록도 남기지 않으면 "실행 중이 아님"으로 본다(주기가 늘어나는 백오프도 감안한다).
 STALE_AFTER_INTERVALS = 3
@@ -53,13 +57,18 @@ def record(
     problems: int,
     interval: float,
     now: datetime | None = None,
+    expect_generation: int | None = None,
 ) -> StatusRecord:
-    """이번 시도의 결과를 적는다. 성공(`ok`·건너뜀 아님)이면 마지막 성공 시각을 갱신하고, 아니면 이전 값을 유지한다."""
+    """이번 시도의 결과를 적는다. 성공(`ok`·건너뜀 아님)이면 마지막 성공 시각을 갱신하고, 아니면 이전 값을 유지한다.
+
+    expect_generation이 있으면 그 사이 계정이 정리되었을 때(`StaleSyncError`) 적지 않는다 — 이전 계정 주기의 성공이 새 계정의 상태로
+    남아 첫 동기화 전에 "동기화됨"이 보이는 일을 막는다.
+    """
     stamp = (now or datetime.now(UTC)).astimezone(UTC).isoformat()
     previous = read_record(store)
     success = stamp if result == RESULT_OK else (previous.last_success_at if previous else None)
     current = StatusRecord(at=stamp, result=result, last_success_at=success, problems=problems, interval=interval)
-    store.set_meta(META_STATUS, json.dumps(asdict(current)))
+    store.set_meta(META_STATUS, json.dumps(asdict(current)), expect_generation=expect_generation)
     return current
 
 
@@ -70,14 +79,19 @@ def read_record(store: GoalStore) -> StatusRecord | None:
         return None
     try:
         data: dict[str, Any] = json.loads(raw)
+        problems = int(data["problems"])
+        interval = float(data["interval"])
+        # 손상되거나 손으로 고친 값을 걸러 낸다: 음수·무한·NaN은 상태 판정과 JSON 응답을 깨뜨린다.
+        if problems < 0 or not math.isfinite(interval) or interval <= 0:
+            return None
         return StatusRecord(
             at=str(data["at"]),
             result=str(data["result"]),
             last_success_at=None if data.get("last_success_at") is None else str(data["last_success_at"]),
-            problems=int(data["problems"]),
-            interval=float(data["interval"]),
+            problems=problems,
+            interval=interval,
         )
-    except (ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError, OverflowError, AttributeError):  # 1e999 같은 값은 int 변환에서 OverflowError
         return None
 
 

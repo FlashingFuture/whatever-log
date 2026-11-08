@@ -1,3 +1,6 @@
+.chip[hidden] {
+  display: none;
+}
 .chip {
   display: inline-flex;
   align-items: center;
@@ -6,7 +9,13 @@
   border-radius: 999px;
   font-size: var(--text-sm);
   white-space: nowrap;
-  cursor: help;
+  cursor: pointer;
+  border: 0;
+  font-family: inherit;
+}
+.chip:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
 }
 /* 톤 앞의 점은 장식이다 — 뜻은 항상 글자가 전한다. */
 .chip::before {
@@ -31,4 +40,14 @@
 .bad {
   background: var(--color-danger-bg);
   color: var(--color-danger);
+}
+
+/* 칩을 누르면 뜨는 안내 팝업 */
+.detail {
+  max-width: 22rem;
+  font-size: var(--text-sm);
+  word-break: keep-all;
+}
+.detail p {
+  margin: 0;
 }

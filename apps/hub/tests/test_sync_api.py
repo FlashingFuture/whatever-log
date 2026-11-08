@@ -476,8 +476,8 @@ def test_a_device_can_be_deleted_but_not_this_pcs_own(sync_server, tmp_path) -> 
     with SyncState(tmp_path / "sync.db") as state:
         mine = state.device_id()
 
-    assert call(port, "DELETE", f"/api/devices/{DEVICE_A}")[0] == 204
-    refused = call(port, "DELETE", f"/api/devices/{mine}")
+    assert call(port, "DELETE", f"/api/devices/{DEVICE_A}?email={EMAIL}")[0] == 204
+    refused = call(port, "DELETE", f"/api/devices/{mine}?email={EMAIL}")
 
     assert FakeApi.deleted_devices == [DEVICE_A]
     assert refused[0] == 503 and "이 기기" in refused[1]["error"]["message"]
@@ -487,16 +487,16 @@ def test_a_device_can_be_deleted_but_not_this_pcs_own(sync_server, tmp_path) -> 
 def test_malformed_device_paths_are_404(sync_server, path) -> None:
     port, _, _ = sync_server
 
-    assert call(port, "DELETE", path)[0] == 404
+    assert call(port, "DELETE", path + f"?email={EMAIL}")[0] == 404
     assert FakeApi.deleted_devices == []
 
 
 def test_device_deletion_needs_the_exact_origin_and_no_body(sync_server) -> None:
     port, _, _ = sync_server
 
-    assert call(port, "DELETE", f"/api/devices/{DEVICE_A}", origin="http://evil.example")[0] == 403
-    assert call(port, "DELETE", f"/api/devices/{DEVICE_A}", origin=None)[0] == 403
-    assert call(port, "DELETE", f"/api/devices/{DEVICE_A}", {"x": 1})[0] == 400
+    assert call(port, "DELETE", f"/api/devices/{DEVICE_A}?email={EMAIL}", origin="http://evil.example")[0] == 403
+    assert call(port, "DELETE", f"/api/devices/{DEVICE_A}?email={EMAIL}", origin=None)[0] == 403
+    assert call(port, "DELETE", f"/api/devices/{DEVICE_A}?email={EMAIL}", {"x": 1})[0] == 400
     assert FakeApi.deleted_devices == []
 
 
@@ -504,7 +504,7 @@ def test_device_endpoints_report_server_trouble_and_expired_logins(sync_server) 
     port, _, backend = sync_server
     FakeApi.fail = ServerUnreachable()
     assert call(port, "GET", "/api/devices")[0] == 503
-    assert call(port, "DELETE", f"/api/devices/{DEVICE_A}")[0] == 503
+    assert call(port, "DELETE", f"/api/devices/{DEVICE_A}?email={EMAIL}")[0] == 503
 
     FakeApi.fail = cloud.NotAuthorized()
     assert call(port, "GET", "/api/devices")[0] == 409
@@ -535,21 +535,66 @@ def test_deleting_the_account_removes_the_server_data_then_cleans_this_pc(sync_s
         assert store.get_meta(META_SYNC_ENABLED) is None
 
 
-@pytest.mark.parametrize("failure", [ServerUnreachable(), cloud.ServerError(500, "internal_error", "서버 오류")])
-def test_when_the_server_cannot_delete_this_pc_is_left_exactly_as_it_was(sync_server, failure) -> None:
-    port, goals_db, backend = sync_server
+def _linked_and_enabled(goals_db):
     goal = _local_goal(goals_db)
     with GoalStore(goals_db) as store:
         store.link_remote(goal.id, "r-1", 2)
         store.set_meta(META_SYNC_ENABLED, "1")
-    FakeApi.fail = failure
+
+
+def test_when_the_server_refuses_to_delete_this_pc_is_left_exactly_as_it_was(sync_server) -> None:
+    port, goals_db, backend = sync_server
+    _linked_and_enabled(goals_db)
+    FakeApi.fail = cloud.ServerError(500, "internal_error", "서버 오류")
 
     status, body = _delete_account(port)
 
-    assert status == 503 and body["error"]["message"]
+    assert status == 503 and body["error"]["message"]  # 서버가 거부했다 — 지워지지 않았다고 말할 수 있다
     assert backend.items != {}  # 계정은 남아 있으니 로그인 정보도 그대로다(지울 방법을 잃지 않는다)
     with GoalStore(goals_db) as store:
         assert store.sync_links()[0].remote_id == "r-1" and store.get_meta(META_SYNC_ENABLED) == "1"
+
+
+def test_when_the_answer_is_lost_the_outcome_is_reported_as_unknown_and_this_pc_is_left_alone(sync_server) -> None:
+    port, goals_db, backend = sync_server
+    _linked_and_enabled(goals_db)
+    FakeApi.fail = ServerUnreachable()  # 요청은 보냈지만 응답을 받지 못했다 — 서버가 이미 지웠을 수 있다
+
+    status, body = _delete_account(port)
+
+    assert status == 504  # "연결하지 못했다"가 아니라 "결과를 알 수 없다"
+    assert "지워졌는지 확인하지 못했어요" in body["error"]["message"] and "로그아웃되어 있으면" in body["error"]["message"]
+    assert backend.items != {}  # 단정할 수 없으니 이 PC는 그대로 둔다
+    with GoalStore(goals_db) as store:
+        assert store.sync_links()[0].remote_id == "r-1"
+
+
+def test_after_a_lost_answer_the_next_server_call_notices_the_deleted_account(sync_server) -> None:
+    port, goals_db, backend = sync_server
+    FakeApi.fail = ServerUnreachable()
+    assert _delete_account(port)[0] == 504
+
+    FakeApi.fail = cloud.NotAuthorized()  # 서버는 정말로 지웠다 — 이제 토큰이 거부된다
+    status, _ = call(port, "GET", "/api/sync/plan")
+
+    assert status == 409 and backend.items == {}  # 그때 이 PC의 로그인 정보가 정리되어 로그인 버튼이 보인다
+
+
+def test_a_failure_to_read_the_account_after_the_server_deleted_is_still_a_success(sync_server, monkeypatch) -> None:
+    port, goals_db, _ = sync_server
+    original = _Handler.account.snapshot
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        raise OSError("keyring exploded") if calls["n"] >= 1 else None
+
+    monkeypatch.setattr(_Handler.account, "snapshot", flaky)
+
+    status, body = _delete_account(port)
+
+    assert status == 200 and body["deleted_on_server"] is True  # 이미 지워진 계정에 503을 보내지 않는다
+    assert body["signed_in"] is False and original is not None
 
 
 def test_an_account_confirmed_for_someone_else_is_never_deleted(sync_server) -> None:
@@ -611,3 +656,105 @@ def test_deleting_the_account_cancels_a_login_in_progress(sync_server) -> None:
     _delete_account(port)
 
     assert cancelled == [True]
+
+
+# --- 리뷰: 기기 목록과 계정, 이 기기 확인, 삭제 중 로그인 ---
+
+
+def test_the_device_list_says_which_account_it_belongs_to(sync_server) -> None:
+    port, _, _ = sync_server
+
+    assert call(port, "GET", "/api/devices")[1]["email"] == EMAIL
+
+
+def test_a_device_confirmed_in_one_accounts_list_is_never_deleted_from_another_account(sync_server) -> None:
+    port, goals_db, backend = sync_server
+    backend.set_password("whatever.log", "session", json.dumps({"token": "tok-b", "expires_at": None, "email": "b@example.com"}))
+
+    status, body = call(port, "DELETE", f"/api/devices/{DEVICE_A}?email={EMAIL}")  # 계정 A의 목록에서 누른 삭제
+
+    assert status == 503 and "계정이 바뀌었어요" in body["error"]["message"]
+    assert FakeApi.deleted_devices == []
+
+
+@pytest.mark.parametrize("query", ["", "?other=1", "?email=a@example.com&email=b@example.com", "?email=a@example.com&x=1", "?email=" + "x" * 321])
+def test_the_device_delete_needs_exactly_one_email(sync_server, query) -> None:
+    port, _, _ = sync_server
+
+    assert call(port, "DELETE", f"/api/devices/{DEVICE_A}{query}")[0] == 400
+    assert FakeApi.deleted_devices == []
+
+
+def test_this_pc_is_recognized_through_the_shared_goals_db_even_if_the_sync_db_path_differs(sync_server) -> None:
+    from cloud import DeviceInfo
+
+    port, goals_db, _ = sync_server
+    with GoalStore(goals_db) as store:
+        store.set_meta("device_id", DEVICE_B)  # 에이전트가 goals.db에 알린 이 PC의 기기 ID(sync.db는 hub가 보는 위치에 없다)
+    FakeApi.devices = [DeviceInfo(DEVICE_B, "t", 1), DeviceInfo(DEVICE_A, "t", 1)]
+
+    devices = call(port, "GET", "/api/devices")[1]["devices"]
+    refused = call(port, "DELETE", f"/api/devices/{DEVICE_B}?email={EMAIL}")
+
+    assert {d["device_id"]: d["is_this_device"] for d in devices} == {DEVICE_B: True, DEVICE_A: False}
+    assert refused[0] == 503 and "이 기기" in refused[1]["error"]["message"]
+    assert FakeApi.deleted_devices == []
+
+
+def test_when_sync_is_on_but_this_pc_cannot_be_identified_nothing_is_deleted(sync_server) -> None:
+    port, goals_db, _ = sync_server
+    with GoalStore(goals_db) as store:
+        store.set_meta(META_SYNC_ENABLED, "1")  # 켰는데 에이전트가 기기 ID를 아직 알리지 않았다
+
+    status, body = call(port, "DELETE", f"/api/devices/{DEVICE_A}?email={EMAIL}")
+
+    assert status == 503 and "확인하지 못했어요" in body["error"]["message"] and "에이전트" in body["error"]["message"]
+    assert FakeApi.deleted_devices == []
+
+
+def test_when_sync_is_off_other_devices_can_be_deleted_without_knowing_this_pcs_id(sync_server) -> None:
+    port, _, _ = sync_server
+
+    assert call(port, "DELETE", f"/api/devices/{DEVICE_A}?email={EMAIL}")[0] == 204
+    assert FakeApi.deleted_devices == [DEVICE_A]
+
+
+def test_logging_in_is_refused_while_the_account_is_being_deleted(sync_server) -> None:
+    import threading as _threading
+
+    port, _, _ = sync_server
+    inside = _threading.Event()
+    release = _threading.Event()
+    original = FakeApi.delete_account
+
+    def slow(self):
+        inside.set()
+        assert release.wait(5)
+        return original(self)
+
+    FakeApi.delete_account = slow
+    try:
+        worker = _threading.Thread(target=lambda: _delete_account(port))
+        worker.start()
+        assert inside.wait(5)
+
+        status, body = call(port, "POST", "/api/account/login", {"provider": "google"})
+
+        assert status == 409 and "지우는 중" in body["error"]["message"]
+        release.set()
+        worker.join()
+        assert call(port, "POST", "/api/account/login", {"provider": "google"})[0] in (202, 503)  # 끝난 뒤에는 다시 받는다
+    finally:
+        FakeApi.delete_account = original
+        release.set()
+
+
+def test_the_account_reset_after_deletion_raises_the_sync_generation(sync_server) -> None:
+    port, goals_db, _ = sync_server
+    with GoalStore(goals_db) as store:
+        before = store.generation()
+
+    assert _delete_account(port)[0] == 200
+
+    with GoalStore(goals_db) as store:
+        assert store.generation() == before + 1  # 진행 중이던 에이전트 주기의 낡은 쓰기는 이제 거절된다

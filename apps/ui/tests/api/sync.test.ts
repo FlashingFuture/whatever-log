@@ -105,21 +105,22 @@ test("상태는 GET /api/sync/status이고 서버를 부르지 않는 로컬 읽
   assert.ok(calls[0].url.endsWith("/api/sync/status"));
 });
 
-test("기기 목록은 GET이고 목록만 돌려준다", async () => {
+test("기기 목록은 GET이고, 목록을 받은 계정(email)도 함께 돌려준다", async () => {
   const devices = [
     { device_id: "d-1", last_sent_at: "t", rows: 3, is_this_device: true },
   ];
-  const calls = stubFetch(() => json({ devices }));
+  const calls = stubFetch(() => json({ email: "a@example.com", devices }));
 
-  assert.deepEqual(await fetchDevices(), devices);
+  assert.deepEqual(await fetchDevices(), { email: "a@example.com", devices });
   assert.ok(calls[0].url.endsWith("/api/devices"));
 });
 
 test("기기 삭제는 본문 없는 DELETE이고, 이 기기를 지우려 하면 사유가 ApiError로 온다", async () => {
   let calls = stubFetch(() => new Response(null, { status: 204 }));
-  await deleteDevice("d-1");
+  await deleteDevice("d-1", "a@example.com");
   assert.equal(calls[0].method, "DELETE");
-  assert.ok(calls[0].url.endsWith("/api/devices/d-1"));
+  // 목록을 받은 계정을 쿼리로 되돌려 보낸다 — 그 사이 계정이 바뀌면 hub가 거절한다.
+  assert.ok(calls[0].url.endsWith("/api/devices/d-1?email=a%40example.com"));
   assert.equal(calls[0].body, undefined);
   assert.equal(calls[0].headers["Content-Type"], undefined);
 
@@ -135,7 +136,7 @@ test("기기 삭제는 본문 없는 DELETE이고, 이 기기를 지우려 하�
     ),
   );
   await assert.rejects(
-    () => deleteDevice("mine"),
+    () => deleteDevice("mine", "a@example.com"),
     (error: unknown) =>
       error instanceof ApiError && error.message.includes("이 기기"),
   );

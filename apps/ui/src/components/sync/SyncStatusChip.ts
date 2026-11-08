@@ -1,5 +1,6 @@
 import { fetchSyncStatus, type SyncStatus } from "../../api";
 import { chipFor, pollIntervalMs, type Tone } from "../../lib/syncStatus";
+import { closePopover, togglePopover } from "../common/Popover";
 import styles from "./SyncStatusChip.module.css";
 
 export interface SyncStatusChip {
@@ -45,10 +46,21 @@ export function createSyncStatusChip(
       return () => clearTimeout(id);
     });
 
-  const element = document.createElement("span");
+  // 키보드로도 자세한 안내를 볼 수 있게 칩 자체가 버튼이다(누르면 팝업). 마우스를 올리면 나오는 title은 보조일 뿐이다.
+  const element = document.createElement("button");
+  element.type = "button";
   element.className = styles.chip;
-  element.setAttribute("role", "status");
+  element.setAttribute("aria-haspopup", "dialog");
+  element.setAttribute("aria-expanded", "false");
   element.hidden = true;
+
+  const detail = document.createElement("div");
+  detail.className = styles.detail;
+  const detailText = document.createElement("p");
+  detail.append(detailText);
+  element.addEventListener("click", () => {
+    togglePopover(element, detail, "동기화 상태 안내");
+  });
 
   let active = false;
   let ticket = 0;
@@ -58,15 +70,20 @@ export function createSyncStatusChip(
   function render(): void {
     const chip = active && current ? chipFor(current, now()) : null;
     if (chip === null) {
+      closePopover();
       element.hidden = true;
       element.textContent = "";
       element.removeAttribute("title");
+      detailText.textContent = "";
       return;
     }
     element.hidden = false;
     element.className = `${styles.chip} ${TONE_CLASS[chip.tone]}`;
     element.textContent = chip.label;
     element.title = chip.detail;
+    // 팝업이 열려 있어도 상태가 바뀌면 안내 글도 따라 바뀐다. 스크린 리더는 칩의 글자(label)와 안내를 함께 읽는다.
+    detailText.textContent = chip.detail;
+    element.setAttribute("aria-label", `${chip.label}. ${chip.detail}`);
   }
 
   function schedule(): void {

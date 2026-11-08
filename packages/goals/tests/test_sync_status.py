@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from goals import GoalStore
+from goals import GoalStore, StaleSyncError
 from goals import sync_status as st
 from goals.sync_status import describe, read_record, record
 
@@ -75,11 +75,15 @@ def test_a_recent_success_is_ok_and_a_recent_failure_is_an_error(store) -> None:
         assert (described["state"], described["result"], described["last_success_at"]) == ("error", result, NOW.isoformat())
 
 
-def test_skipped_results_are_not_errors(store) -> None:
-    for result in (st.RESULT_SIGNED_OUT, st.RESULT_NOT_ENABLED, st.RESULT_ACCOUNT_CHANGED):
+def test_skips_the_user_chose_are_not_errors_but_a_missing_login_is(store) -> None:
+    for result in (st.RESULT_NOT_ENABLED, st.RESULT_ACCOUNT_CHANGED):
         skipped = record(store, result=result, problems=0, interval=300, now=NOW)
 
         assert describe(skipped, enabled=True, now=NOW)["state"] == "ok"
+
+    # 화면은 로그인되어 있는데 에이전트가 로그인 정보를 못 찾는다 — 이후 변경이 반영되지 않으니 낡은 "동기화됨"으로 두지 않는다.
+    signed_out = record(store, result=st.RESULT_SIGNED_OUT, problems=0, interval=300, now=NOW)
+    assert describe(signed_out, enabled=True, now=NOW)["state"] == "error"
 
 
 def test_an_old_record_means_the_agent_is_not_running(store) -> None:
@@ -114,3 +118,33 @@ def test_the_account_change_reset_clears_the_status(store) -> None:
     store.reset_sync()
 
     assert read_record(store) is None
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"at": "t", "result": "ok", "last_success_at": null, "problems": 1e999, "interval": 300}',  # int(inf) → OverflowError
+        '{"at": "t", "result": "ok", "last_success_at": null, "problems": -1, "interval": 300}',
+        '{"at": "t", "result": "ok", "last_success_at": null, "problems": 0, "interval": 1e999}',
+        '{"at": "t", "result": "ok", "last_success_at": null, "problems": 0, "interval": 0}',
+        '{"at": "t", "result": "ok", "last_success_at": null, "problems": 0, "interval": -5}',
+        '{"at": "t", "result": "ok", "last_success_at": null, "problems": NaN, "interval": 300}',
+        "5",
+        "null",
+    ],
+)
+def test_values_that_break_the_conversion_or_the_judgement_read_as_missing(store, raw) -> None:
+    store.set_meta(st.META_STATUS, raw)
+
+    assert read_record(store) is None
+
+
+def test_a_record_from_before_an_account_reset_is_refused(store) -> None:
+    generation = store.generation()
+    store.reset_sync()  # 계정이 정리되었다(세대가 올라간다)
+
+    with pytest.raises(StaleSyncError):
+        record(store, result=st.RESULT_OK, problems=0, interval=300, now=NOW, expect_generation=generation)
+
+    assert read_record(store) is None  # 낡은 주기의 성공이 새 계정의 상태로 남지 않았다
+    record(store, result=st.RESULT_OK, problems=0, interval=300, now=NOW, expect_generation=store.generation())  # 새 세대는 적는다

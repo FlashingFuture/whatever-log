@@ -50,10 +50,15 @@ function paragraph(text: string, className?: string): HTMLParagraphElement {
 export function createDevicesDialog(props: DevicesDialogProps): DevicesDialog {
   const modal = createModal({ label: "기기 관리", onClose: () => {} });
   let devices: DeviceRow[] | null = null;
+  // 목록을 받았을 때의 계정. 지우기 요청에 되돌려 보낸다(그 사이 계정이 바뀌면 hub가 거절한다).
+  let listEmail: string | null = null;
   let failure: string | null = null;
   let confirming: string | null = null;
   let busy = false;
   let loadId = 0;
+
+  // 다시 그린 뒤 포커스를 둘 곳. 창 안의 버튼이 교체되면 포커스가 제목으로 빠지므로, 누른 자리의 짝 버튼으로 옮겨 준다.
+  type Focus = { device: string; role: "ask" | "confirm" | "cancel" };
 
   function row(device: DeviceRow, position: number): HTMLLIElement {
     const li = document.createElement("li");
@@ -84,58 +89,84 @@ export function createDevicesDialog(props: DevicesDialogProps): DevicesDialog {
       const actions = document.createElement("div");
       actions.className = styles.actions;
       actions.append(
-        createButton({
-          label: busy ? "지우는 중…" : "기록 지우기",
-          disabled: busy,
-          onClick: () => void remove(device.device_id),
-        }),
-        createButton({
-          label: "취소",
-          disabled: busy,
-          onClick: () => {
-            confirming = null;
-            render();
-          },
-        }),
+        tag(
+          createButton({
+            label: busy ? "지우는 중…" : "기록 지우기",
+            disabled: busy,
+            onClick: () => void remove(device.device_id),
+          }),
+          device.device_id,
+          "confirm",
+        ),
+        tag(
+          createButton({
+            label: "취소",
+            disabled: busy,
+            onClick: () => {
+              confirming = null;
+              // 취소하면 처음의 "지우기" 버튼으로 돌아간다
+              render({ device: device.device_id, role: "ask" });
+            },
+          }),
+          device.device_id,
+          "cancel",
+        ),
       );
       li.append(actions);
       return li;
     }
     li.append(
-      createButton({
-        label: "지우기",
-        ariaLabel: `${deviceLabel(device, position)}의 기록 지우기`,
-        disabled: busy,
-        onClick: () => {
-          confirming = device.device_id;
-          failure = null;
-          render();
-        },
-      }),
+      tag(
+        createButton({
+          label: "지우기",
+          ariaLabel: `${deviceLabel(device, position)}의 기록 지우기`,
+          disabled: busy,
+          onClick: () => {
+            confirming = device.device_id;
+            failure = null;
+            // 확인을 열면 안전한 쪽(취소)에 포커스를 둔다 — 실수로 Enter를 눌러도 지워지지 않는다
+            render({ device: device.device_id, role: "cancel" });
+          },
+        }),
+        device.device_id,
+        "ask",
+      ),
     );
     return li;
   }
 
+  /** 버튼에 "어느 기기의 어느 버튼인지"를 적어 둔다(다시 그린 뒤 포커스를 되돌릴 때 찾는다). */
+  function tag(button: HTMLButtonElement, device: string, role: Focus["role"]) {
+    button.dataset.device = device;
+    button.dataset.role = role;
+    return button;
+  }
+
   async function remove(deviceId: string): Promise<void> {
+    if (busy) {
+      return;
+    }
     busy = true;
     failure = null;
-    render();
+    render({ device: deviceId, role: "confirm" });
+    let focus: Focus | undefined;
     try {
-      await deleteDevice(deviceId);
+      await deleteDevice(deviceId, listEmail);
       confirming = null;
       devices = (devices ?? []).filter((item) => item.device_id !== deviceId);
     } catch (error) {
       failure = message(error);
+      focus = { device: deviceId, role: "confirm" }; // 실패하면 다시 시도할 수 있는 자리에 둔다
       if (error instanceof ApiError && error.status === 409) {
         props.onSignedOut();
       }
     } finally {
       busy = false;
-      render();
+      render(focus);
     }
   }
 
-  function render(): void {
+  function render(focus?: Focus): void {
     const content = document.createElement("div");
     content.className = styles.root;
     if (devices === null) {
@@ -144,7 +175,7 @@ export function createDevicesDialog(props: DevicesDialogProps): DevicesDialog {
         content.append(
           createButton({
             label: "다시 시도",
-            onClick: () => void load().then(render),
+            onClick: () => void load().then(() => render()),
           }),
         );
       }
@@ -180,6 +211,13 @@ export function createDevicesDialog(props: DevicesDialogProps): DevicesDialog {
       }
     }
     modal.show({ title: "기기 관리", content });
+    if (focus) {
+      modal.body
+        .querySelector<HTMLElement>(
+          `button[data-device="${CSS.escape(focus.device)}"][data-role="${focus.role}"]`,
+        )
+        ?.focus({ preventScroll: true });
+    }
   }
 
   /** 목록을 불러온다. 가장 최근 호출의 응답만 반영한다. */
@@ -189,7 +227,8 @@ export function createDevicesDialog(props: DevicesDialogProps): DevicesDialog {
     try {
       const loaded = await fetchDevices();
       if (id === loadId) {
-        devices = loaded;
+        devices = loaded.devices;
+        listEmail = loaded.email;
         confirming = null;
       }
     } catch (error) {
@@ -205,8 +244,14 @@ export function createDevicesDialog(props: DevicesDialogProps): DevicesDialog {
 
   return {
     async open() {
+      // 지우는 중에 창을 닫았다 다시 연 경우: 목록을 새로 받지 않고 진행 중인 화면을 그대로 보여 준다. 새로 받으면 처리 중 표시가
+      // 사라져 다른 기기를 또 지울 수 있고, 먼저 보낸 삭제가 끝났을 때 새 화면의 상태를 덮어쓰게 된다.
+      if (busy) {
+        render();
+        modal.open();
+        return;
+      }
       devices = null;
-      busy = false;
       render(); // "불러오는 중…"을 먼저 보여 준다
       modal.open();
       await load();

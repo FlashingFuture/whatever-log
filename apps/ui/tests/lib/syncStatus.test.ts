@@ -113,6 +113,8 @@ test("오류는 종류별로 사용자가 할 일을 알려 준다", () => {
   assert.match(detail("not_authorized"), /다시 로그인/);
   assert.match(detail("server_error"), /서버가 요청을 처리하지 못했어요/);
   assert.match(detail("internal"), /문제가 생겼어요/);
+  assert.match(detail("signed_out"), /로그인 정보를 찾지 못했어요/);
+  assert.match(detail("signed_out"), /반영되지 않고 있어요/);
   assert.match(detail("something_new"), /문제가 생겼어요/);
   assert.equal(
     chipFor(status({ state: "error", result: "unreachable" }), NOW)?.tone,
@@ -133,4 +135,18 @@ test("상태를 다시 묻는 간격: 정상이면 30초, 문제가 있으면 15
   assert.equal(pollIntervalMs(status({ state: "error" })), 15_000);
   assert.equal(pollIntervalMs(status({ state: "stale" })), 15_000);
   assert.equal(pollIntervalMs(status({ state: "waiting" })), 15_000);
+});
+
+test("화면은 로그인되어 있는데 에이전트가 로그인 정보를 못 찾으면 낡은 '동기화됨'이 아니라 오류로 보여 준다", () => {
+  const chip = chipFor(
+    status({
+      state: "error",
+      result: "signed_out",
+      last_success_at: ago(2 * 3600),
+    }),
+    NOW,
+  );
+
+  assert.deepEqual([chip?.label, chip?.tone], ["동기화 오류", "bad"]);
+  assert.match(chip?.detail ?? "", /마지막으로 동기화된 때: 2시간 전/);
 });

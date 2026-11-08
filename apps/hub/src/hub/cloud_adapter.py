@@ -179,14 +179,29 @@ class _CloudBackend:
 
     # --- 기기 목록과 계정 삭제 ---
 
-    def list_devices(self, sync_db: Path) -> dict[str, Any]:
-        """서버에 달성도를 보낸 기기들. 이름은 없고 기기 ID·마지막으로 보낸 시각·줄 수뿐이며, 이 PC의 기기는 에이전트의 기기 ID와 대조해 표시한다."""
-        goalsync = self._goalsync
+    def _this_device_id(self, goals_db: Path, sync_db: Path) -> str | None:
+        """이 PC의 기기 ID. 에이전트가 `goals.db`(hub와 이미 공유하는 DB)에 적어 둔 값을 먼저 보고, 없으면 에이전트의 sync.db를 읽기 전용으로 본다.
+
+        hub의 `--sync-db-path`와 에이전트의 `--state-db`가 어긋나 있어도 goals.db는 같으므로 이 기기를 알아볼 수 있다.
+        """
+        try:
+            with _open_goals(goals_db) as store:
+                published = store.get_meta("device_id")
+        except Exception:
+            published = None
+        return published or self._goalsync.peek_device_id(sync_db)
+
+    def list_devices(self, goals_db: Path, sync_db: Path) -> dict[str, Any]:
+        """서버에 달성도를 보낸 기기들과 목록을 본 계정. 이름은 없고 기기 ID·마지막으로 보낸 시각·줄 수뿐이며, 이 PC의 기기는 표시한다.
+
+        email은 "이 목록은 이 계정의 것"이라는 표시다 — 지우기 요청에 되돌려 보내, 그 사이 계정이 바뀌면 거절하게 한다.
+        """
 
         def run():
-            api, _ = self._server()
-            mine = goalsync.peek_device_id(sync_db)
+            api, email = self._server()
+            mine = self._this_device_id(goals_db, sync_db)
             return {
+                "email": email,
                 "devices": [
                     {
                         "device_id": device.device_id,
@@ -195,22 +210,43 @@ class _CloudBackend:
                         "is_this_device": device.device_id == mine,
                     }
                     for device in api.list_devices()
-                ]
+                ],
             }
 
         return self._guard(run)
 
-    def delete_device(self, sync_db: Path, device_id: str) -> None:
-        """기기가 보낸 달성 기록을 서버에서 지운다. 이 PC의 기기는 지우지 않는다(에이전트가 다음 주기에 다시 보낸다)."""
-        goalsync = self._goalsync
+    def delete_device(self, goals_db: Path, sync_db: Path, device_id: str, confirmed_email: str | None) -> None:
+        """기기가 보낸 달성 기록을 서버에서 지운다.
+
+        - 목록을 본 계정(confirmed_email)과 지금 로그인한 계정이 다르면 거절한다(계정 A의 목록에서 누른 삭제가 B의 기록을 지우지 않게).
+        - 이 PC의 기기는 지우지 않는다(에이전트가 다음 주기에 다시 보낸다).
+        - 이 PC의 기기를 확인할 수 없으면(에이전트가 아직 기기 ID를 알리지 않았다) 동기화를 켠 상태에서는 거절한다 — 모르는 채로 지우면
+          이 PC의 기기를 지울 수 있고, 지운 줄은 에이전트의 "이미 보냄" 기록 때문에 변하지 않는 한 다시 올라오지 않는다.
+        """
 
         def run():
-            api, _ = self._server()
-            if device_id == goalsync.peek_device_id(sync_db):
+            api, email = self._server()
+            if email != confirmed_email:
+                raise SyncProblem("로그인한 계정이 바뀌었어요. 기기 관리를 다시 열어 확인해 주세요.")
+            mine = self._this_device_id(goals_db, sync_db)
+            if mine is not None and device_id == mine:
                 raise SyncProblem("이 기기의 기록은 지울 수 없어요. 동기화 에이전트가 다음 주기에 다시 보내요. 동기화를 끄려면 로그아웃해 주세요.")
+            if mine is None and self._sync_enabled(goals_db):
+                raise SyncProblem(
+                    "이 기기가 어느 것인지 아직 확인하지 못했어요. 동기화 에이전트를 한 번 실행한 뒤 다시 시도해 주세요."
+                )
             api.delete_device(device_id)
 
         self._guard(run)
+
+    @staticmethod
+    def _sync_enabled(goals_db: Path) -> bool:
+        """동기화를 켰는지(이 PC의 설정). 읽지 못하면 켠 것으로 본다 — 확인할 수 없을 때는 지우지 않는 쪽이 안전하다."""
+        try:
+            with _open_goals(goals_db) as store:
+                return store.get_meta("sync_enabled") == "1"
+        except Exception:
+            return True
 
     def delete_account(self, goals_db: Path, confirmed_email: str | None) -> dict[str, Any]:
         """서버의 계정과 모든 데이터를 지운다. 순서가 규칙이다: **서버 삭제가 성공한 뒤에만** 이 PC를 정리한다.
@@ -218,6 +254,9 @@ class _CloudBackend:
         서버 삭제가 실패하면 이 PC의 로그인·동기화 연결은 그대로 둔다(계정은 남아 있는데 이 PC만 로그아웃되어 지울 방법을 잃지 않게).
         성공한 뒤에는 이 PC의 로그인 정보를 지우고 목표의 서버 연결을 끊는다 — 목표와 프로세스 연결 자체는 이 PC에 그대로 남는다.
         확인한 계정(confirmed_email)이 지금 로그인한 계정과 다르면 아무것도 하지 않는다.
+
+        요청을 보냈는데 응답을 받지 못했다면(연결 끊김·시간 초과) 서버가 이미 지웠을 수 있다. 그때는 "연결하지 못했다"가 아니라 "결과를 알 수
+        없다"(`uncertain`)로 알리고 이 PC는 그대로 둔다 — 다음에 서버를 부를 때 토큰이 거부되면(계정이 지워졌다는 뜻) 그때 정리된다.
         """
         cloud = self._cloud
 
@@ -225,7 +264,14 @@ class _CloudBackend:
             api, email = self._server()
             if email != confirmed_email:
                 raise SyncProblem("로그인한 계정이 바뀌었어요. 계정 삭제를 다시 열어 확인해 주세요.")
-            api.delete_account()
+            try:
+                api.delete_account()
+            except cloud.ServerUnreachable:
+                raise SyncProblem(
+                    "서버에서 계정이 지워졌는지 확인하지 못했어요. 잠시 뒤 상단 막대에서 로그인 상태를 확인해 주세요. "
+                    "로그아웃되어 있으면 계정이 지워진 거예요.",
+                    uncertain=True,
+                ) from None
 
         self._guard(run)
         # 여기부터는 서버에서 이미 지워졌다. 이 PC의 정리가 일부 실패해도 서버 삭제를 되돌릴 수 없으니, 무엇이 남았는지 알린다.
@@ -238,7 +284,7 @@ class _CloudBackend:
         connections_cleared = True
         try:
             with _open_goals(goals_db) as store:
-                store.reset_sync()
+                store.reset_sync()  # 동기화 세대가 올라가 진행 중이던 에이전트 주기의 낡은 쓰기는 거절된다
         except Exception:
             connections_cleared = False
         return {"deleted_on_server": True, "signed_out": signed_out, "connections_cleared": connections_cleared}

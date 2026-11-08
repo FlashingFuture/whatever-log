@@ -1,7 +1,7 @@
 import { getJson, SHORT_REQUEST_TIMEOUT_MS, sendJson } from "./client.ts";
 import type {
   DeleteAccountResult,
-  DeviceRow,
+  DeviceList,
   SyncPlan,
   SyncResult,
   SyncStatus,
@@ -36,20 +36,22 @@ export function fetchSyncStatus(): Promise<SyncStatus> {
   return getJson("/api/sync/status", SHORT_REQUEST_TIMEOUT_MS);
 }
 
-/** 달성도를 보낸 기기들(서버에서 받는다). */
-export async function fetchDevices(): Promise<DeviceRow[]> {
-  const response = await getJson<{ devices: DeviceRow[] }>(
-    "/api/devices",
-    SYNC_TIMEOUT_MS,
-  );
-  return response.devices;
+/** 달성도를 보낸 기기들(서버에서 받는다)과, 목록을 받은 계정. */
+export function fetchDevices(): Promise<DeviceList> {
+  return getJson("/api/devices", SYNC_TIMEOUT_MS);
 }
 
-/** 기기가 보낸 달성 기록을 서버에서 지운다(이 PC의 기기는 hub가 거절한다). */
-export async function deleteDevice(deviceId: string): Promise<void> {
+/**
+ * 기기가 보낸 달성 기록을 서버에서 지운다. email은 목록을 받았을 때의 계정이고, 지금 로그인한 계정과 다르면 hub가 거절한다
+ * (계정 A의 목록에서 누른 삭제가 B의 기록을 지우지 않게). 이 PC의 기기도 hub가 거절한다.
+ */
+export async function deleteDevice(
+  deviceId: string,
+  email: string | null,
+): Promise<void> {
   await sendJson(
     "DELETE",
-    `/api/devices/${encodeURIComponent(deviceId)}`,
+    `/api/devices/${encodeURIComponent(deviceId)}?${new URLSearchParams({ email: email ?? "" })}`,
     undefined,
     SYNC_TIMEOUT_MS,
   );

@@ -56,11 +56,12 @@ class SyncProblem(Exception):
     """동기화 확인 창의 요청을 처리하지 못했다. message는 사용자에게 그대로 보여 줄 수 있는 문장이고, signed_out이면 로그인이
     필요한 상황(로그인 전·만료)이다."""
 
-    def __init__(self, message: str, *, signed_out: bool = False) -> None:
-        """사용자용 메시지와 로그인 필요 여부를 담는다."""
+    def __init__(self, message: str, *, signed_out: bool = False, uncertain: bool = False) -> None:
+        """사용자용 메시지와 로그인 필요 여부를 담는다. uncertain은 요청이 서버에 닿았는지(처리됐는지) 알 수 없다는 뜻이다."""
         super().__init__(message)
         self.message = message
         self.signed_out = signed_out
+        self.uncertain = uncertain
 
 
 class SyncBusy(Exception):
@@ -110,12 +111,13 @@ class CloudPort(Protocol):
         않고 SyncProblem을 올린다. 서버·로그인 문제도 SyncProblem."""
         ...
 
-    def list_devices(self, sync_db: Path) -> dict[str, Any]:
-        """달성도를 보낸 기기들. 각 기기에 이 PC의 기기인지(`is_this_device`)를 표시한다. 서버·로그인 문제는 SyncProblem."""
+    def list_devices(self, goals_db: Path, sync_db: Path) -> dict[str, Any]:
+        """달성도를 보낸 기기들과, 목록을 본 계정(`email`). 각 기기에 이 PC의 기기인지(`is_this_device`)를 표시한다. 서버·로그인 문제는 SyncProblem."""
         ...
 
-    def delete_device(self, sync_db: Path, device_id: str) -> None:
-        """기기가 보낸 달성 기록을 서버에서 지운다. 이 PC의 기기면 SyncProblem(에이전트가 곧 다시 보내므로 지워도 소용이 없다)."""
+    def delete_device(self, goals_db: Path, sync_db: Path, device_id: str, confirmed_email: str | None) -> None:
+        """기기가 보낸 달성 기록을 서버에서 지운다. confirmed_email(목록을 본 계정)이 지금 로그인한 계정과 다르면, 이 PC의 기기이거나
+        이 PC의 기기인지 확인할 수 없으면 SyncProblem — 아무것도 지우지 않는다."""
         ...
 
     def delete_account(self, goals_db: Path, confirmed_email: str | None) -> dict[str, Any]:
@@ -139,6 +141,7 @@ class AccountService:
         self._lock = threading.Lock()
         self._cancel = threading.Event()
         self._sync_lock = threading.Lock()
+        self._deleting = False
         self._thread: threading.Thread | None = None
         self._state = "idle"  # idle | pending | failed
         self._message: str | None = None
@@ -187,6 +190,9 @@ class AccountService:
         if provider_id not in {item.id for item in port.providers()}:
             raise UnknownProvider(provider_id)
         with self._lock:
+            if self._deleting:
+                # 계정을 지우는 동안에는 새 로그인을 시작하지 않는다 — 삭제 뒤의 정리가 방금 끝난 새 로그인의 세션을 지우게 된다.
+                raise SyncBusy
             if self._state == "pending":
                 raise LoginInProgress
             self._state = "pending"
@@ -241,13 +247,13 @@ class AccountService:
         finally:
             self._sync_lock.release()
 
-    def list_devices(self, sync_db: Path) -> dict[str, Any]:
+    def list_devices(self, goals_db: Path, sync_db: Path) -> dict[str, Any]:
         """기기 목록(서버). 계정 기능이 없으면 AccountUnavailable."""
-        return self._get_port().list_devices(sync_db)
+        return self._get_port().list_devices(goals_db, sync_db)
 
-    def delete_device(self, sync_db: Path, device_id: str) -> None:
-        """기기 삭제(서버)."""
-        self._get_port().delete_device(sync_db, device_id)
+    def delete_device(self, goals_db: Path, sync_db: Path, device_id: str, confirmed_email: str | None) -> None:
+        """기기 삭제(서버). 목록을 본 계정(confirmed_email)과 지금 계정이 같을 때만 한다."""
+        self._get_port().delete_device(goals_db, sync_db, device_id, confirmed_email)
 
     def delete_account(self, goals_db: Path, confirmed_email: str | None) -> dict[str, Any]:
         """계정 삭제. 진행 중인 로그인은 먼저 취소하고(지운 계정으로 로그인이 마무리되지 않게), 동기화 적용과는 동시에 하지 않는다."""
@@ -255,13 +261,24 @@ class AccountService:
         if not self._sync_lock.acquire(blocking=False):
             raise SyncBusy
         try:
+            with self._lock:
+                self._deleting = True  # 새 로그인 시작을 막는다(start_login)
             self.cancel_login()
+            self._wait_for_login_to_finish()  # 이미 교환 중이던 로그인이 끝나기를 기다린다(저장은 취소로 거절된다)
             result = port.delete_account(goals_db, confirmed_email)
         finally:
+            with self._lock:
+                self._deleting = False
             self._sync_lock.release()
         with self._lock:
             self._state, self._message = "idle", None
         return result
+
+    def _wait_for_login_to_finish(self, timeout: float = 5.0) -> None:
+        """취소한 로그인 스레드가 끝나기를 잠깐 기다린다(끝나면 세션을 저장하지 못하고 토큰을 폐기한 상태다)."""
+        thread = self._thread
+        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout)
 
     def wait_for_login(self, timeout: float) -> None:
         """진행 중인 로그인 스레드가 끝나기를 기다린다(테스트용)."""

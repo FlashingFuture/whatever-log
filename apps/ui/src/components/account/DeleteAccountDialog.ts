@@ -37,11 +37,21 @@ function list(items: string[]): HTMLUListElement {
   return element;
 }
 
+// hub가 "요청은 보냈지만 결과를 알 수 없다"고 알릴 때의 상태 코드(apps/hub의 STATUS_OUTCOME_UNKNOWN).
+const OUTCOME_UNKNOWN = 504;
+
 /**
- * 실패 문장. hub가 사유를 준 실패(ApiError)는 서버 삭제가 끝나지 않은 것이라 이 PC의 로그인 정보가 그대로라고 말할 수 있다. 응답을 아예
- * 받지 못한 경우(시간 초과 등)는 hub가 이미 처리했을 수도 있어서, 지우지 못했다고 단정하지 않고 상태를 확인하라고 안내한다.
+ * 실패 문장. hub가 사유를 준 실패(ApiError)는 서버 삭제가 끝나지 않은 것이라 이 PC의 로그인 정보가 그대로라고 말할 수 있다. 다만 결과를 알 수
+ * 없는 실패(504)와 응답을 아예 받지 못한 경우는 서버가 이미 지웠을 수도 있어서, 지우지 못했다고 단정하지 않고 상태를 확인하라고 안내한다.
  */
 function message(error: unknown): string {
+  if (
+    error instanceof ApiError &&
+    error.status === OUTCOME_UNKNOWN &&
+    error.message
+  ) {
+    return error.message;
+  }
   if (error instanceof ApiError && error.message) {
     return `${error.message} 이 PC의 로그인 정보는 그대로 두었어요.`;
   }
@@ -56,7 +66,15 @@ function message(error: unknown): string {
 export function createDeleteAccountDialog(
   props: DeleteAccountDialogProps,
 ): DeleteAccountDialog {
-  const modal = createModal({ label: "계정 삭제", onClose: () => {} });
+  // 창을 닫을 때 끝난 결과는 비운다(다음에 열면 새 확인 창). 요청이 진행 중이면 그대로 둔다 — 닫았다 다시 열어도 같은 요청의 화면이다.
+  const modal = createModal({
+    label: "계정 삭제",
+    onClose: () => {
+      if (!busy) {
+        result = null;
+      }
+    },
+  });
   let email: string | null = null;
   let understood = false;
   let typed = "";
@@ -76,10 +94,9 @@ export function createDeleteAccountDialog(
       props.onDeleted();
     } catch (error) {
       failure = message(error);
-      // 로그인이 필요한 상황(409)이거나 응답을 못 받았다면(처리됐을 수도 있다) 계정 상태를 다시 읽어 화면을 맞춘다.
-      if (!(error instanceof ApiError) || error.status === 409) {
-        props.onSignedOut();
-      }
+      // 실패해도 계정 상태를 다시 읽어 화면을 맞춘다: 로그인이 필요한 상황(409)이거나, 결과를 알 수 없거나(처리됐을 수도 있다),
+      // 서버에서는 지워졌는데 이 PC의 정리·응답이 어긋난 경우까지, 틀린 로그인 상태가 남지 않게 한다.
+      props.onSignedOut();
     } finally {
       busy = false;
       render();
@@ -113,7 +130,8 @@ export function createDeleteAccountDialog(
     box.disabled = busy;
     box.addEventListener("change", () => {
       understood = box.checked;
-      render();
+      // 창 전체를 다시 그리면 체크박스가 교체되어 포커스를 잃는다 — 삭제 버튼 상태만 바꾼다.
+      remove.disabled = busy || !canConfirmDelete(understood, typed, email);
     });
     check.append(box, " 되돌릴 수 없다는 것을 이해했어요");
     root.append(check);
@@ -187,12 +205,17 @@ export function createDeleteAccountDialog(
 
   return {
     open(next) {
+      // 삭제 요청이 진행 중이거나 끝난 결과가 아직 보이지 않았다면 새 확인 창으로 바꾸지 않는다. 바꾸면 처리 중 표시가 사라져 같은 요청을
+      // 다시 보낼 수 있고, 먼저 보낸 요청의 결과가 새 창에 덮어써진다.
+      if (busy || result !== null) {
+        render();
+        modal.open();
+        return;
+      }
       email = next;
       understood = false;
       typed = "";
-      busy = false;
       failure = null;
-      result = null;
       render();
       modal.open();
     },

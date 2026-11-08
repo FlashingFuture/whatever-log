@@ -12,7 +12,7 @@ from datetime import date
 from pathlib import Path
 
 from cloud import GoalConflict, ProgressEntry, ServerError
-from goals import META_ACCOUNT_EMAIL, META_SYNC_ENABLED, GoalStore, GoalValidationError
+from goals import META_ACCOUNT_EMAIL, META_SYNC_ENABLED, GoalStore, GoalValidationError, StaleSyncError
 
 from goalsync.daily import day_entries, recent_days
 from goalsync.plan import ServerPort, ensure_account
@@ -23,11 +23,35 @@ FIRST_DAYS = 30  # 연결한 직후에는 한 달치를 보낸다
 BATCH = 50  # 서버가 한 번에 받는 줄 수
 
 
+class _GenerationGuard:
+    """GoalStore를 감싸서, 연결·상태를 바꾸는 쓰기마다 주기 시작 때의 동기화 세대를 확인시킨다. 읽기와 나머지는 그대로 넘긴다.
+
+    주기가 도는 사이에 계정이 정리되면(예: 화면에서 계정을 삭제) 그 뒤의 쓰기는 `StaleSyncError`로 거절된다 — 이전 계정에서 받은
+    연결이나 상태가 정리된 DB에 되살아나지 않게 한다.
+    """
+
+    _GUARDED = frozenset({"link_remote", "mark_pushed", "unlink", "apply_remote", "clear_deletion", "set_sync_state", "set_meta"})
+
+    def __init__(self, store: GoalStore, generation: int) -> None:
+        self._store = store
+        self._generation = generation
+
+    def __getattr__(self, name: str):
+        attribute = getattr(self._store, name)
+        if name in self._GUARDED:
+            return lambda *args, **kwargs: attribute(*args, expect_generation=self._generation, **kwargs)
+        return attribute
+
+
 @dataclass
 class SyncReport:
-    """한 주기의 결과. skipped가 있으면 아무것도 하지 않았다(이유: not_enabled·account_changed)."""
+    """한 주기의 결과. skipped가 있으면 아무것도 하지 않았다(이유: not_enabled·account_changed).
+
+    generation은 이 주기가 시작할 때의 동기화 세대다(상태를 적을 때 같은 세대인지 확인시키는 데 쓴다).
+    """
 
     skipped: str | None = None
+    generation: int | None = None
     created: int = 0
     pushed: int = 0
     deleted: int = 0
@@ -56,14 +80,22 @@ def sync_once(
     if store.get_meta(META_SYNC_ENABLED) != "1":
         report.skipped = "not_enabled"
         return report
-    if email and store.get_meta(META_ACCOUNT_EMAIL) is None:
-        store.set_meta(META_ACCOUNT_EMAIL, email)
 
-    _delete_on_server(store, server, report)
-    _upload_new_goals(store, server, report, new_id)
-    _push_edits(store, server, report)
-    _pull(store, state, server, report)
-    _push_progress(store, state, server, recorder_db, today, report)
+    report.generation = store.generation()
+    guarded = _GenerationGuard(store, report.generation)
+    try:
+        if email and store.get_meta(META_ACCOUNT_EMAIL) is None:
+            guarded.set_meta(META_ACCOUNT_EMAIL, email)
+        _delete_on_server(guarded, server, report)
+        _upload_new_goals(guarded, server, report, new_id)
+        _push_edits(guarded, server, report)
+        _pull(guarded, state, server, report)
+        _push_progress(guarded, state, server, recorder_db, today, report)
+    except StaleSyncError:
+        # 주기가 도는 사이에 계정이 정리되었다(화면에서 계정 삭제 등). 이번 주기의 나머지 결과는 버리고 다음 주기에 새로 시작한다.
+        state.forget_all()
+        stale = SyncReport(skipped="account_changed")
+        return stale
     return report
 
 
