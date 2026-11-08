@@ -171,12 +171,6 @@ def test_ui_build_output_goes_to_stderr_so_stdout_only_carries_the_result(monkey
         assert kwargs["stdout"] is build_release.sys.stderr and kwargs["check"] is True
 
 
-def test_the_workflow_picks_the_zip_line_not_the_first_line() -> None:
-    workflow = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-
-    assert "head -n1" not in workflow and r"grep '\.zip$'" in workflow
-
-
 def test_the_workflow_installs_the_bundle_before_publishing_it() -> None:
     """만든 zip을 install.cmd로 설치해 본 뒤에만 Release를 올린다 — v1.0.0-beta.1은 설치되지 않는 채로 나갔다."""
     workflow = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
@@ -193,3 +187,9 @@ def test_a_manual_run_of_the_workflow_does_not_publish() -> None:
 
     assert "workflow_dispatch:" in workflow
     assert "if: github.ref_type == 'tag'" in publish_step.split("run:")[0]
+
+
+def test_the_workflow_picks_the_zip_line_not_the_first_line() -> None:
+    workflow = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+    assert "head -n1" not in workflow and "grep '\.zip$'" in workflow
