@@ -98,6 +98,7 @@ def test_a_program_running_without_its_supervisor_is_reported_not_started_over()
 def test_start_launches_the_supervisor_detached_without_a_console() -> None:
     with (
         patch("launcher.components.state", return_value=components.STOPPED),
+        patch("launcher.components._lock_is_free", return_value=True),
         patch("launcher.components.subprocess.Popen") as popen,
     ):
         assert components.start(SYNC) == components.STARTED
@@ -107,6 +108,69 @@ def test_start_launches_the_supervisor_detached_without_a_console() -> None:
     flags = popen.call_args.kwargs["creationflags"]
     assert flags & subprocess.DETACHED_PROCESS and flags & subprocess.CREATE_NO_WINDOW
     assert popen.call_args.kwargs["cwd"] == components.REPO_ROOT
+
+
+def test_start_does_not_launch_when_another_install_holds_the_lock(tmp_path) -> None:
+    """이 설치본의 프로세스는 없어도 다른 곳(다른 폴더의 설치본)이 lock을 잡고 있으면 띄우지 않는다 — 띄워도 바로 멈춘다."""
+    lock = tmp_path / "recorder.db.lock"
+    held = components.acquire_lock(lock)
+    try:
+        with (
+            patch("launcher.components.state", return_value=components.STOPPED),
+            patch("launcher.components.lock_path", return_value=lock),
+            patch("launcher.components.subprocess.Popen") as popen,
+        ):
+            assert components.start(RECORDER) == components.BLOCKED
+    finally:
+        held.release()
+
+    popen.assert_not_called()
+
+
+def test_start_launches_once_the_lock_is_free_again(tmp_path) -> None:
+    lock = tmp_path / "recorder.db.lock"
+    components.acquire_lock(lock).release()  # 예전에 잡혔다가 풀린 lock 파일이 남아 있어도 막지 않는다
+    with (
+        patch("launcher.components.state", return_value=components.STOPPED),
+        patch("launcher.components.lock_path", return_value=lock),
+        patch("launcher.components.subprocess.Popen") as popen,
+    ):
+        assert components.start(RECORDER) == components.STARTED
+
+    popen.assert_called_once()
+
+
+def test_each_component_checks_its_own_programs_lock() -> None:
+    from recorder.__main__ import DEFAULT_LOCK_PATH as recorder_lock
+    from sync_agent.__main__ import DEFAULT_LOCK_PATH as sync_lock
+
+    assert components.lock_path(RECORDER) == recorder_lock and recorder_lock.name == "recorder.db.lock"
+    assert components.lock_path(SYNC) == sync_lock and sync_lock.name == "sync.lock"
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ('"C:\\Program Files\\old\\.venv\\Scripts\\pythonw.exe" -m recorder.supervisor', Path("C:/Program Files/old/.venv/Scripts")),
+        ("C:\\old\\.venv\\Scripts\\pythonw.exe -m recorder.supervisor", Path("C:/old/.venv/Scripts")),
+        ("C:\\old\\.venv\\Scripts\\python.exe -m recorder.supervisor", Path("C:/old/.venv/Scripts")),
+        ('"C:\\Tools\\other.exe" --flag', None),  # 파이썬이 아닌 것은 건드릴 대상이 아니다
+        ("", None),
+    ],
+)
+def test_the_install_folder_is_read_from_an_autostart_command(command, expected) -> None:
+    assert components.scripts_dir_of(command) == (expected.resolve() if expected else None)
+
+
+def test_stop_can_target_another_installs_environment() -> None:
+    seen: list[Path | None] = []
+    with (
+        patch("launcher.components.find_processes", side_effect=lambda module, scripts_dir=None: seen.append(scripts_dir) or []),
+        patch("launcher.components._terminate", return_value=[]),
+    ):
+        components.stop(RECORDER, scripts_dir=Path("C:/old/.venv/Scripts"))
+
+    assert seen == [Path("C:/old/.venv/Scripts")] * 2
 
 
 def test_stop_terminates_the_supervisor_before_the_program() -> None:
@@ -168,6 +232,7 @@ def _install(*, start_result=components.STARTED, built=True, start_effect=None, 
         patch("launcher.commands.ui_build.is_built", return_value=built),
         patch("launcher.commands.ui_build.build") as build,
     ):
+        run_key.registered_command.return_value = None  # 처음 설치(다른 폴더의 등록 없음)
         ok = commands.install(say, **options)
     return ok, lines, run_key, create, start, build
 
@@ -203,6 +268,7 @@ def test_one_failing_step_does_not_stop_the_rest_and_is_reported() -> None:
         patch("launcher.commands.ui_build.is_built", return_value=False),
         patch("launcher.commands.ui_build.build", side_effect=ui_build.UiBuildError("Node.js가 없어요")),
     ):
+        run_key.registered_command.return_value = None
         ok = commands.install(say)
 
     assert ok is False
@@ -236,6 +302,15 @@ def test_install_reports_a_program_running_without_its_supervisor() -> None:
     ok, lines, *_ = _install(start_result=components.UNSUPERVISED)
 
     assert ok is False and any("감독" in line for line in lines)
+
+
+def test_install_does_not_claim_it_started_what_another_install_blocks() -> None:
+    """다른 폴더의 설치본이 같은 데이터로 떠 있으면 "지금 시작했어요"라고 하지 않고 무엇을 해야 하는지 알린다."""
+    ok, lines, *_ = _install(start_result=components.BLOCKED)
+
+    assert ok is False
+    assert not any("지금 시작했어요" in line for line in lines)
+    assert any(line.startswith("문제: 기록기") and "whatever-log stop" in line for line in lines)
 
 
 # --- 제거 ---
@@ -508,20 +583,65 @@ def test_status_shows_the_version_and_where_data_lives(tmp_path) -> None:
     assert any(line == f"데이터 폴더: {tmp_path}" for line in lines)
 
 
-def test_install_warns_when_it_replaces_another_folders_registration() -> None:
-    """새 버전을 새 폴더에 풀어 install하면, 이전 폴더의 프로그램이 아직 떠 있을 수 있다 — 먼저 stop하라고 알린다."""
+_OLD_SCRIPTS = Path("C:/old-folder/.venv/Scripts")
+
+
+def _install_over(previous: str, *, stop_result=components.StopResult(2, ()), dry_run: bool = False):
+    """다른 폴더의 설치가 `previous` 명령으로 등록된 상태에서 install하고 (성공 여부, 출력 줄, components.stop mock, 순서)를 돌려준다."""
     lines: list[str] = []
+    order: list[str] = []
     with (
         patch("launcher.commands.run_key") as run_key,
         patch("launcher.commands.shortcuts.create", return_value=Path("x.lnk")),
         patch("launcher.commands.shortcuts.start_menu_dir", return_value=Path("menu")),
-        patch("launcher.commands.components.start", return_value=components.STARTED),
+        patch(
+            "launcher.commands.components.start", side_effect=lambda component: order.append("start") or components.STARTED
+        ),
+        patch(
+            "launcher.commands.components.stop", side_effect=lambda component, **_: order.append("stop") or stop_result
+        ) as stop,
         patch("launcher.commands.ui_build.is_built", return_value=True),
     ):
-        run_key.registered_command.return_value = "C:/old-folder/.venv/Scripts/pythonw.exe -m recorder.supervisor"
-        assert commands.install(lines.append) is True
+        run_key.registered_command.return_value = previous
+        ok = commands.install(lines.append, dry_run=dry_run)
+    return ok, lines, stop, order
 
-    assert any("다른 폴더의 설치" in line and "whatever-log stop" in line for line in lines)
+
+def test_install_takes_over_another_folders_registration_and_stops_its_programs() -> None:
+    """새 버전을 새 폴더에 풀어 install하면, 이전 폴더의 프로그램을 끄고 나서 이 폴더의 것을 띄운다 — 사용자가 이전 폴더에서
+    직접 stop하지 않아도 된다(떠 있으면 같은 데이터의 lock 때문에 새 프로그램이 시작하지 못한다)."""
+    ok, lines, stop, order = _install_over(f"{_OLD_SCRIPTS}\\pythonw.exe -m recorder.supervisor")
+
+    assert ok is True
+    assert [call.kwargs["scripts_dir"] for call in stop.call_args_list] == [_OLD_SCRIPTS.resolve()] * 2
+    assert order == ["stop", "stop", "start", "start"]  # 끈 다음에 띄운다
+    assert any("다른 폴더의 설치" in line and "이 폴더로 바꿉니다" in line for line in lines)
+    assert any("이전 폴더에서 실행 중이던 것을 껐어요" in line for line in lines)
+    assert not any("whatever-log stop" in line for line in lines)  # 사용자에게 시킬 일이 없다
+
+
+def test_install_reports_previous_programs_it_could_not_stop() -> None:
+    ok, lines, _, _ = _install_over(
+        f"{_OLD_SCRIPTS}\\pythonw.exe -m recorder.supervisor", stop_result=components.StopResult(0, (42,))
+    )
+
+    assert ok is False and any(line.startswith("문제: ") and "42" in line for line in lines)
+
+
+def test_a_dry_install_over_another_folder_stops_nothing() -> None:
+    ok, lines, stop, _ = _install_over(f"{_OLD_SCRIPTS}\\pythonw.exe -m recorder.supervisor", dry_run=True)
+
+    assert ok is True
+    stop.assert_not_called()
+    assert any("[미리보기]" in line and "끕니다" in line for line in lines)
+
+
+def test_install_stops_nothing_when_the_registration_is_this_environments_with_other_arguments() -> None:
+    """같은 가상환경의 등록이면(인자만 다름) 끌 "이전 설치본"이 없다 — 이 설치본의 프로그램은 start가 다룬다."""
+    ok, _, stop, _ = _install_over(RECORDER.autostart_command() + " --interval 30")
+
+    assert ok is True
+    stop.assert_not_called()
 
 
 def test_install_is_quiet_when_the_registration_is_already_this_folders() -> None:

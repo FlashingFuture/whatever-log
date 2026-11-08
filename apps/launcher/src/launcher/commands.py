@@ -22,6 +22,10 @@ from launcher.components import COMPONENTS, Component
 Say = Callable[[str], None]
 
 _UNSUPERVISED_HINT = "{label}: 감독(supervisor) 없이 혼자 떠 있어요. 죽어도 다시 뜨지 않으니 `whatever-log stop` 뒤에 다시 시작해 주세요."
+_BLOCKED_HINT = (
+    "{label}: 다른 폴더의 설치본이 같은 데이터로 이미 실행 중이라 시작하지 못했어요. "
+    "그 폴더에서 `whatever-log stop`을 실행한 뒤 다시 시작해 주세요."
+)
 
 
 def _report_start(component: Component, say: Say, problems: list[str]) -> None:
@@ -35,6 +39,8 @@ def _report_start(component: Component, say: Say, problems: list[str]) -> None:
         say(f"{component.label}: 지금 시작했어요.")
     elif result == components.SUPERVISED:
         say(f"{component.label}: 이미 실행 중이에요.")
+    elif result == components.BLOCKED:
+        problems.append(_BLOCKED_HINT.format(label=component.label))
     else:
         problems.append(_UNSUPERVISED_HINT.format(label=component.label))
 
@@ -68,10 +74,10 @@ def install(
                 problems.append(f"화면 빌드: {error}")
 
     for component in COMPONENTS:
+        _take_over_from_another_install(component, say, problems, dry_run=dry_run)
         if dry_run:
             say(f"{prefix}{component.label}: 로그인할 때 자동으로 시작되게 등록합니다.")
             continue
-        _note_if_replacing_another_install(component, say)
         try:
             run_key.enable(component.run_key_value, component.autostart_command())
             say(f"{component.label}: 로그인할 때 자동으로 시작되게 등록했어요.")
@@ -104,20 +110,32 @@ def install(
     return not problems
 
 
-def _note_if_replacing_another_install(component: Component, say: Say) -> None:
-    """이미 다른 폴더의 설치가 등록돼 있으면(예: 새 버전을 새 폴더에 푼 경우) 그 등록을 이 폴더로 바꾸는 것임을 알린다.
+def _take_over_from_another_install(component: Component, say: Say, problems: list[str], *, dry_run: bool) -> None:
+    """이미 다른 폴더의 설치가 등록돼 있으면(예: 새 버전을 새 폴더에 푼 경우) 그 등록을 이 폴더로 넘겨받고, 그 설치본의 프로그램을 끈다.
 
-    이전 폴더의 프로세스는 이 폴더의 설치가 알아보지 못해 계속 떠 있을 수 있다 — 이전 폴더에서 `whatever-log stop`을 먼저 해야 한다.
+    이전 폴더의 프로그램이 떠 있으면 같은 데이터의 lock을 잡고 있어서 이 폴더의 프로그램이 시작하지 못한다 — 예전에는 사용자가
+    이전 폴더에서 `whatever-log stop`을 직접 해야 했다. 끄는 것은 **등록이 가리키던 가상환경의 프로세스뿐**이고, 그 밖의 설치본은
+    건드리지 않는다.
     """
     try:
         previous = run_key.registered_command(component.run_key_value)
     except OSError:
         return
-    if previous is not None and previous != component.autostart_command():
-        say(
-            f"{component.label}: 다른 폴더의 설치({previous})가 등록돼 있었어요. 이 폴더로 바꿉니다. "
-            "이전 폴더의 프로그램이 아직 떠 있다면 그 폴더에서 `whatever-log stop`을 먼저 실행해 주세요."
-        )
+    if previous is None or previous == component.autostart_command():
+        return
+    prefix = "[미리보기] " if dry_run else ""
+    say(f"{prefix}{component.label}: 다른 폴더의 설치({previous})가 등록돼 있었어요. 이 폴더로 바꿉니다.")
+    previous_scripts = components.scripts_dir_of(previous)
+    if previous_scripts is None or previous_scripts == components.this_scripts_dir():
+        return
+    if dry_run:
+        say(f"{prefix}{component.label}: 그 폴더의 프로그램이 떠 있으면 끕니다.")
+        return
+    result = components.stop(component, scripts_dir=previous_scripts)
+    if not result.ok:
+        problems.append(_stop_failure(component, result))
+    elif result.stopped:
+        say(f"{component.label}: 이전 폴더에서 실행 중이던 것을 껐어요.")
 
 
 def _unregister(component: Component, say: Say, problems: list[str]) -> None:

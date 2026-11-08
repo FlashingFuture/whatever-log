@@ -4,7 +4,7 @@
 크래시로 보고 다시 띄우고, supervisor만 끄면 프로그램이 혼자 남는다.
 
 프로세스는 "이 가상환경의 파이썬으로 `-m <모듈>`을 실행 중인 것"으로 알아본다. 다른 폴더의 설치본이나 같은 이름의 다른 프로그램은
-건드리지 않는다.
+건드리지 않는다. 예외는 `install`이 자동 시작 등록을 넘겨받는 설치본 하나다(그 등록이 가리키던 가상환경을 `scripts_dir`로 넘긴다).
 """
 
 import subprocess
@@ -15,6 +15,7 @@ from pathlib import Path
 import psutil
 from recorder.autostart import VALUE_NAME as RECORDER_RUN_VALUE
 from supervision.autostart import module_command, pythonw_path
+from supervision.lock import AlreadyRunningError, acquire_lock
 from sync_agent.supervisor import AUTOSTART_VALUE_NAME as SYNC_RUN_VALUE
 
 #: 저장소 루트(자식 프로세스의 작업 폴더). apps/launcher/src/launcher/components.py 기준.
@@ -67,9 +68,25 @@ def _runs_module(command_line: list[str], module: str, scripts_dir: Path) -> boo
     return False
 
 
+def this_scripts_dir() -> Path:
+    """이 설치본의 가상환경 Scripts 폴더(launcher를 실행 중인 파이썬이 있는 곳)."""
+    return Path(sys.executable).parent.resolve()
+
+
+def scripts_dir_of(command: str) -> Path | None:
+    """자동 시작 명령(`"…\\.venv\\Scripts\\pythonw.exe" -m …`)이 가리키는 설치본의 Scripts 폴더. 파이썬 실행 명령이 아니면 None."""
+    if command.startswith('"'):
+        executable = command[1:].partition('"')[0]
+    else:
+        executable = command.partition(" ")[0]
+    if Path(executable).name.lower() not in ("pythonw.exe", "python.exe"):
+        return None
+    return Path(executable).parent.resolve()
+
+
 def find_processes(module: str, *, scripts_dir: Path | None = None) -> list[psutil.Process]:
-    """이 가상환경에서 `-m module`로 실행 중인 프로세스들(venv 실행기와 실제 파이썬이 둘 다 잡힐 수 있다)."""
-    scripts = (scripts_dir or Path(sys.executable).parent).resolve()
+    """이 가상환경(또는 scripts_dir의 가상환경)에서 `-m module`로 실행 중인 프로세스들(venv 실행기와 실제 파이썬이 둘 다 잡힐 수 있다)."""
+    scripts = scripts_dir.resolve() if scripts_dir is not None else this_scripts_dir()
     found = []
     for process in psutil.process_iter(["cmdline"]):
         try:
@@ -85,6 +102,27 @@ def find_processes(module: str, *, scripts_dir: Path | None = None) -> list[psut
 STOPPED, SUPERVISED, UNSUPERVISED = "stopped", "supervised", "unsupervised"
 #: start()가 새로 띄웠다는 뜻(이미 떠 있던 경우는 그 상태를 돌려준다)
 STARTED = "started"
+#: start()가 띄우지 않았다는 뜻: 이 설치본의 프로세스는 없는데 같은 데이터의 중복 실행 lock을 누가 잡고 있다(다른 폴더의 설치본 등).
+#: 띄워도 프로그램이 lock에 막혀 바로 멈추므로 띄우지 않는다.
+BLOCKED = "blocked"
+
+
+def lock_path(component: Component) -> Path:
+    """구성 요소의 중복 실행 lock 파일. 프로그램 모듈은 무겁고(동기화 에이전트는 cloud까지 불러온다) 시작할 때만 필요해서 여기서 import한다."""
+    if component is SYNC:
+        from sync_agent.__main__ import DEFAULT_LOCK_PATH
+    else:
+        from recorder.__main__ import DEFAULT_LOCK_PATH
+    return DEFAULT_LOCK_PATH
+
+
+def _lock_is_free(path: Path) -> bool:
+    """지금 아무도 이 lock을 잡고 있지 않은지(잡아 보고 바로 놓는다)."""
+    try:
+        acquire_lock(path).release()
+    except AlreadyRunningError:
+        return False
+    return True
 
 
 def state(component: Component) -> str:
@@ -101,14 +139,19 @@ def running_pids(component: Component) -> list[int]:
 
 
 def start(component: Component) -> str:
-    """supervisor를 콘솔 창 없이 따로 떼어 띄운다(이 도구가 끝나도 계속 돈다). 돌려주는 값: STARTED / SUPERVISED(이미 감독 중) / UNSUPERVISED.
+    """supervisor를 콘솔 창 없이 따로 떼어 띄운다(이 도구가 끝나도 계속 돈다).
 
+    돌려주는 값: STARTED / SUPERVISED(이미 감독 중) / UNSUPERVISED / BLOCKED.
     프로그램만 단독으로 떠 있으면(UNSUPERVISED) 띄우지 않는다 — supervisor를 새로 띄워도 프로그램의 중복 실행 lock 때문에 곧 멈추고,
     떠 있는 프로그램을 우리가 마음대로 끌 수도 없다. 호출부가 사용자에게 "stop 뒤에 다시 start"를 안내한다.
+    이 설치본의 프로세스가 없어도 다른 곳이 lock을 잡고 있으면(BLOCKED) 같은 이유로 띄우지 않는다 — 띄웠다고 알리면 실제로는
+    바로 멈춘 프로그램을 "시작했다"고 하게 된다.
     """
     current = state(component)
     if current != STOPPED:
         return current
+    if not _lock_is_free(lock_path(component)):
+        return BLOCKED
     subprocess.Popen(
         [str(pythonw_path()), "-m", component.supervisor_module],
         cwd=REPO_ROOT,
@@ -151,11 +194,14 @@ class StopResult:
         return not self.survivors
 
 
-def stop(component: Component) -> StopResult:
-    """supervisor를 먼저, 그다음 프로그램을 끈다. 못 끈 프로세스가 있으면 결과에 담아 알린다(끈 척하지 않는다)."""
-    supervisors = find_processes(component.supervisor_module)
+def stop(component: Component, *, scripts_dir: Path | None = None) -> StopResult:
+    """supervisor를 먼저, 그다음 프로그램을 끈다. 못 끈 프로세스가 있으면 결과에 담아 알린다(끈 척하지 않는다).
+
+    scripts_dir를 주면 이 설치본 대신 그 가상환경의 프로세스를 끈다(install이 자동 시작을 넘겨받는 이전 설치본).
+    """
+    supervisors = find_processes(component.supervisor_module, scripts_dir=scripts_dir)
     left = _terminate(supervisors)
-    programs = find_processes(component.program_module)
+    programs = find_processes(component.program_module, scripts_dir=scripts_dir)
     left += _terminate(programs)
     total = len(supervisors) + len(programs)
     return StopResult(total - len(left), tuple(sorted({process.pid for process in left})))
