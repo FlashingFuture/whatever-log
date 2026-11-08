@@ -62,3 +62,6 @@ desktop.ini
 *.swp
 *.swo
 *~
+
+# 릴리스 번들 빌드 결과(scripts/build_release.py)
+release-out/

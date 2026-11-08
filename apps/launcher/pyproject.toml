@@ -5,6 +5,7 @@ description = "설치(자동 시작·바로가기 등록)와 전체 실행·종�
 requires-python = ">=3.14"
 dependencies = [
     "psutil>=6.1.0",
+    "common",
     "desktop",
     "recorder",
     "sync",
@@ -15,6 +16,7 @@ dependencies = [
 whatever-log = "launcher.__main__:main"
 
 [tool.uv.sources]
+common = { workspace = true }
 desktop = { workspace = true }
 recorder = { workspace = true }
 sync = { workspace = true }

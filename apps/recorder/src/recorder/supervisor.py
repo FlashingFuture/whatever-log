@@ -24,10 +24,11 @@ import sys
 from pathlib import Path
 
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
+from common.paths import data_path
 from supervision.log_setup import configure_logging
 from supervision.supervisor import supervise
 
-DEFAULT_LOG_PATH = Path(__file__).resolve().parent.parent.parent / "supervisor.log"
+DEFAULT_LOG_PATH = data_path(Path(__file__).resolve().parent.parent.parent, "supervisor.log", subdir="logs")
 
 logger = logging.getLogger("recorder.supervisor")
 

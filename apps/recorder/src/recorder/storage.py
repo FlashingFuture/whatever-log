@@ -64,6 +64,7 @@ def open_db(path: Path) -> sqlite3.Connection:
     isolation_level=None으로 autocommit 모드를 쓴다 — 트랜잭션 경계를
     save_tick()에서 BEGIN/COMMIT/ROLLBACK으로 직접, 명시적으로 관리하기 위함.
     """
+    Path(path).parent.mkdir(parents=True, exist_ok=True)  # 배포 모양의 데이터 폴더는 처음 쓸 때 만든다
     conn = sqlite3.connect(path, isolation_level=None)
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")

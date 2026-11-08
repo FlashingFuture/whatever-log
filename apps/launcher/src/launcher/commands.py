@@ -12,6 +12,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from common import paths
 from supervision import autostart as run_key
 from supervision.autostart import pythonw_path
 
@@ -70,6 +71,7 @@ def install(
         if dry_run:
             say(f"{prefix}{component.label}: 로그인할 때 자동으로 시작되게 등록합니다.")
             continue
+        _note_if_replacing_another_install(component, say)
         try:
             run_key.enable(component.run_key_value, component.autostart_command())
             say(f"{component.label}: 로그인할 때 자동으로 시작되게 등록했어요.")
@@ -100,6 +102,22 @@ def install(
     if not problems:
         say("끝났어요. 시작 메뉴의 'whatever.log'를 열거나 `whatever-log start`로 창을 열 수 있어요.")
     return not problems
+
+
+def _note_if_replacing_another_install(component: Component, say: Say) -> None:
+    """이미 다른 폴더의 설치가 등록돼 있으면(예: 새 버전을 새 폴더에 푼 경우) 그 등록을 이 폴더로 바꾸는 것임을 알린다.
+
+    이전 폴더의 프로세스는 이 폴더의 설치가 알아보지 못해 계속 떠 있을 수 있다 — 이전 폴더에서 `whatever-log stop`을 먼저 해야 한다.
+    """
+    try:
+        previous = run_key.registered_command(component.run_key_value)
+    except OSError:
+        return
+    if previous is not None and previous != component.autostart_command():
+        say(
+            f"{component.label}: 다른 폴더의 설치({previous})가 등록돼 있었어요. 이 폴더로 바꿉니다. "
+            "이전 폴더의 프로그램이 아직 떠 있다면 그 폴더에서 `whatever-log stop`을 먼저 실행해 주세요."
+        )
 
 
 def _unregister(component: Component, say: Say, problems: list[str]) -> None:
@@ -151,7 +169,9 @@ def uninstall(say: Say, *, dry_run: bool = False) -> bool:
     for problem in problems:
         say(f"문제: {problem}")
     if not dry_run:
-        say("기록·목표 데이터와 로그인 정보는 지우지 않았어요(로그인 정보는 앱에서 로그아웃하면 지워져요).")
+        folder = paths.data_dir()
+        where = f" ({folder})" if folder is not None else ""
+        say(f"기록·목표 데이터{where}와 로그인 정보는 지우지 않았어요(로그인 정보는 앱에서 로그아웃하면 지워져요).")
     return not problems
 
 
@@ -220,4 +240,7 @@ def status(say: Say) -> None:
     say(f"화면: {'빌드됨' if ui_build.is_built() else '빌드 안 됨(`whatever-log install`이 빌드합니다)'}")
     link: Path = shortcuts.start_menu_dir() / shortcuts.SHORTCUT_NAME
     say(f"시작 메뉴 바로가기: {'있음' if link.exists() else '없음'}")
+    say(f"버전: {paths.version()}")
+    folder = paths.data_dir()
+    say(f"데이터 폴더: {folder if folder is not None else '앱 폴더 안(개발용 저장소)'}")
     say(f"파이썬: {sys.executable}")

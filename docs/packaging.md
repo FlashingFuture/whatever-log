@@ -1,5 +1,7 @@
 # 설치와 전체 실행 (`whatever-log` 명령)
 
+> 아래는 저장소를 clone한 개발 모양 기준이다. **사용자에게 배포하는 방법(릴리스 번들·버전·데이터 위치)은 [릴리스 번들](#릴리스-번들-사용자용-배포)** 절.
+
 프로젝트를 쓰려면 기록기(recorder)·동기화 에이전트(sync)를 로그인 때 자동으로 띄우고, 화면(hub + 데스크톱 창)을 열 길이 있어야 한다.
 이 일을 한 명령으로 묶은 것이 `apps/launcher`의 `whatever-log`다. 저장소를 받은 상태에서 쓰는 방식이다(`uv sync` 뒤).
 
@@ -50,8 +52,59 @@ flowchart TD
 - `build_icon.py`는 Edge를 `--edge <경로>`, 환경변수 `EDGE_PATH`, 기본 설치 위치, PATH 순서로 찾고, 못 찾으면 해결 방법을 안내한다.
 - 쓰이는 곳: 시작 메뉴·바탕화면 바로가기(`launcher.shortcuts`), 데스크톱 창의 제목 표시줄·작업표시줄(`desktop.window_icon`: AppUserModelID를 주고, 창이 실제로 보일 때(pywebview `shown` 이벤트) **이 프로세스가 연** 창에 `WM_SETICON`으로 아이콘을 붙인다), 화면의 favicon(`apps/ui/public/favicon.svg` = mark).
 
-## 실행 파일(.exe)·설치 마법사는 아직 없다
+## 릴리스 번들 (사용자용 배포)
 
-넣지 않은 이유: PyInstaller 같은 도구로 묶으려면 pywebview(pythonnet·WebView2), 워크스페이스 패키지 10여 개, 화면 빌드 결과, 아이콘을 모두 맞춰야 하고,
-Python 3.14·서명되지 않은 exe는 백신 오탐도 잦아서 "비용이 크지 않은" 일이 아니다. 지금의 `whatever-log` 명령 + 바로가기(아이콘 포함)로 같은 일을 한다.
-exe가 필요해지면 이 명령(`launcher`)을 그대로 진입점으로 묶으면 되도록 동작을 `launcher.commands`에 모아 두었다.
+저장소를 통째로 받지 않고, 사용자 PC에 필요한 것만 담은 zip을 배포한다. **설치 과정은 똑같다** — 같은 `whatever-log install`을 쓰고, 달라지는 건 내용물이다.
+
+| | 저장소를 clone해서 쓸 때(개발) | 릴리스 번들(사용자) |
+| --- | --- | --- |
+| 받는 것 | 저장소 전체(서버·테스트·문서 포함) | 앱·패키지 소스 + **미리 빌드한 화면** |
+| 필요한 것 | uv, Node.js | **uv만**(Node 불필요) |
+| 설치 | `uv sync` → `uv run whatever-log install` | **`install.cmd`**(위 두 단계를 대신 한다) |
+| 데이터·로그 위치 | 앱 폴더 안(`apps/recorder/recorder.db` 등) | **`%LOCALAPPDATA%\whatever.log`** |
+
+번들에 **들어가지 않는 것**: 서버(`apps/server`, Cloudflare는 사용자 PC에서 쓰지 않는다), 화면 소스와 Node 의존성, 테스트, 문서, Docker 파일.
+파이썬 환경(`.venv`)은 번들에 넣지 않고 설치할 때 `uv sync --frozen`(= `uv.lock` 그대로)으로 만든다 — 가상환경은 경로가 박혀 있어서 옮길 수 없기 때문이다.
+
+### 데이터 위치 (`common.paths`)
+
+번들 루트에 `release.json`이 있으면(번들에만 있다) 앱은 DB·로그·lock·아이콘 캐시를 **사용자 데이터 폴더**에 둔다. 그래서 새 버전을 새 폴더에 풀어도,
+폴더를 지워도 기록과 목표가 남는다. 파일 이름은 그대로(`recorder.db`, `goals.db`, `sync.db`)이고, 로그만 `logs/` 아래에 모인다.
+`WHATEVER_LOG_DATA_DIR` 환경변수가 있으면 두 모양 모두에서 그 폴더를 쓴다(상대 경로는 **설치 폴더 기준**이다 — 작업 디렉터리를 기준으로 하면 프로세스마다 다른 DB를 열게 된다).
+경로를 정하는 것(`data_path`)은 **폴더를 만들지 않는다**: 앱 모듈은 import될 때 경로를 정하고 `status`·`--version`·`uninstall`도 그 모듈을 import하므로, 여기서 만들거나 실패하면 관리 명령까지 못 쓴다. 폴더는 실제로 쓰는 쪽(로그·lock·DB를 여는 곳)이 만든다. 번들인데 `LOCALAPPDATA`가 없으면 윈도우 표준 위치(`~/AppData/Local`)를 쓴다. 개발용 저장소(표시 파일 없음)는 기존 위치 그대로다.
+hub·recorder·동기화 에이전트가 같은 DB를 앱 경계를 넘어 열기 때문에 경로는 앱마다 따로 정하지 않고 `data_path` 한 곳에서 정한다(테스트가 세 앱이 같은 곳을 가리키는지 확인한다).
+
+### 버전
+
+- 루트의 **`VERSION`** 파일 한 곳에서 온다. [SemVer](https://semver.org/lang/ko/) 형식이다.
+  - `1.0.0` = 정식, `1.0.0-beta.1` = 베타, `1.0.0-rc.1` = 출시 후보. 하이픈 뒤에 뭔가 붙으면 시험 버전이다.
+  - 처음에는 `1.0.0-beta.1`로 내보내고, 쓸 만하면 `1.0.0-beta.2`, … `1.0.0`으로 올린다. 호환이 깨지는 변경이면 앞자리(`2.0.0`), 기능 추가면 가운데(`1.1.0`), 고침이면 마지막(`1.0.1`)을 올린다.
+- git 태그는 `v` + 버전이다(`v1.0.0-beta.1`). 번들 이름은 `whatever-log-<버전>-win64.zip`.
+- 각 파이썬 패키지의 `version = "0.1.0"`은 **내부 값**이라 그대로 둔다(배포 버전과 무관).
+- `whatever-log --version`과 `status`가 버전을 보여 준다(개발용 저장소는 ` (개발)`이 붙는다).
+
+### 릴리스 만들기
+
+```
+# 1) VERSION을 올리고 main에 머지한다
+# 2) 태그를 만들어 푸시한다 — 나머지는 GitHub Actions(.github/workflows/release.yml)가 한다
+git tag v1.0.0-beta.1
+git push origin v1.0.0-beta.1
+```
+
+Actions가 태그와 `VERSION`이 같은지 확인하고(다르면 멈춘다), 화면을 빌드해 번들을 만들고, **GitHub Release**에 올린다(하이픈이 든 태그는 *pre-release*로 표시). 릴리스 설명에 zip의 SHA-256이 적힌다.
+로컬에서 같은 번들을 만들어 보려면: `uv run python scripts/build_release.py`(결과는 `release-out/`, git이 무시한다). 같은 내용이면 같은 해시가 나온다.
+
+### 사용자가 설치·업데이트하는 법
+
+- **설치:** zip을 풀고 `install.cmd`를 실행한다(uv가 없으면 설치 명령을 안내한다). 그 폴더가 앱의 자리가 되므로 **옮기지 않을 곳**에 푼다.
+- **업데이트:** 새 zip을 **새 폴더**에 풀고 `install.cmd`를 실행한다. 자동 시작·바로가기가 새 폴더로 바뀌고, 데이터는 사용자 데이터 폴더에 있어서 그대로 이어진다.
+  이전 폴더의 프로그램이 떠 있을 수 있어서 `install`이 알려 준다 — 이전 폴더에서 `whatever-log stop`을 먼저 실행하고, 확인한 뒤 이전 폴더를 지운다.
+- **제거:** `uv run whatever-log uninstall`(데이터는 지우지 않는다). 데이터까지 지우려면 `%LOCALAPPDATA%\whatever.log` 폴더를 직접 지운다.
+
+### 아직 없는 것
+
+- **실행 파일(.exe)·설치 마법사**: 파이썬을 통째로 묶어야 하고(pywebview·pythonnet·WebView2), 서명 없는 exe는 백신 오탐이 잦다. 지금은 uv가 파이썬 환경을 만든다.
+  나중에 넣게 되면 `whatever-log`(`launcher`)를 그대로 진입점으로 묶으면 된다.
+- **코드 서명**, **자동 업데이트**(새 버전 알림·내려받기).
+- 이 릴리스 워크플로는 실제 GitHub Actions에서 한 번도 돌려 보지 못했다 — 첫 태그(베타)로 확인한다.

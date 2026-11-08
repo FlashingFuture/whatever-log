@@ -12,6 +12,8 @@
 import argparse
 import sys
 
+from common import paths
+
 from launcher import commands
 
 
@@ -24,6 +26,7 @@ def _say(message: str) -> None:
 def build_parser() -> argparse.ArgumentParser:
     """명령줄 인자 정의."""
     parser = argparse.ArgumentParser(prog="whatever-log", description="whatever.log 설치와 전체 실행")
+    parser.add_argument("--version", action="version", version=f"whatever.log {paths.version()}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     install = sub.add_parser("install", help="자동 시작·바로가기 등록, 화면 빌드, 구성 요소 시작")
