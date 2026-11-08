@@ -181,7 +181,9 @@ def test_main_enables_devtools_in_dev_mode(tmp_path, monkeypatch) -> None:
         finally:
             main_module.hub_supervisor_logger.handlers.clear()
 
-        mock_webview.start.assert_called_once_with(debug=True)
+        mock_webview.start.assert_called_once()
+        assert mock_webview.start.call_args.kwargs == {"debug": True}
+        assert callable(mock_webview.start.call_args.args[0])  # 창이 뜬 뒤 아이콘을 붙이는 함수
     finally:
         server.close()
 

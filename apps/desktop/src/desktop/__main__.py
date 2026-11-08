@@ -49,7 +49,10 @@ from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
 from supervision.log_setup import configure_logging
 from supervision.supervisor import supervise
 
+from desktop.window_icon import apply_window_icon, set_app_user_model_id
+
 DEV_SERVER_URL = "http://localhost:5173"
+WINDOW_TITLE = "whatever.log"
 
 _APP_DIR = Path(__file__).resolve().parents[2]
 _UI_DIST_DIR = _APP_DIR.parent / "ui" / "dist"
@@ -150,6 +153,15 @@ def _wait_for_hub_port(port: int, timeout: float) -> None:
     raise TimeoutError(f"hub가 {timeout}초 안에 포트 {port}를 열지 않았습니다.")
 
 
+def _set_icon_when_window_exists(title: str) -> None:
+    """창이 만들어지기를 잠깐 기다렸다가 앱 아이콘을 붙인다(webview.start가 별도 스레드에서 부른다)."""
+    for _ in range(50):
+        if apply_window_icon(title):
+            return
+        time.sleep(0.1)
+    hub_supervisor_logger.warning("창 아이콘을 붙이지 못했습니다.")
+
+
 def main() -> None:
     """CLI 인자(`--dev`)를 파싱해서 hub를 supervise하며 webview 창을 연다."""
     parser = argparse.ArgumentParser(description="whatever.log 데스크톱 창")
@@ -174,6 +186,7 @@ def main() -> None:
         sys.exit(1)
 
     configure_logging(hub_supervisor_logger, DEFAULT_HUB_SUPERVISOR_LOG_PATH)
+    set_app_user_model_id()  # 작업표시줄에서 python.exe의 창과 묶이지 않게(창을 만들기 전에)
 
     # UI를 먼저 서빙해 실제 주소(임의 포트)를 알아낸 뒤, 그 origin을 hub에 넘겨 띄운다.
     ui_url = _resolve_url(args.dev)
@@ -201,10 +214,10 @@ def main() -> None:
             # 못 본다. 로그에만 남기고 창은 그대로 연다 — apps/ui가 fetch
             # 실패를 감지해서 화면에 에러로 보여준다.
             hub_supervisor_logger.exception("hub 준비를 기다리지 못했지만 창은 엽니다.")
-        webview.create_window("whatever.log", ui_url)
+        webview.create_window(WINDOW_TITLE, ui_url)
         # --dev일 때 DevTools를 켠다 — 이 앱은 콘솔 없는 환경(pythonw.exe)에서
         # 돌아서 평소엔 네트워크 탭/콘솔로 디버깅할 방법이 없다.
-        webview.start(debug=args.dev)
+        webview.start(partial(_set_icon_when_window_exists, WINDOW_TITLE), debug=args.dev)
     finally:
         stop_event.set()
         supervisor_thread.join(timeout=10)

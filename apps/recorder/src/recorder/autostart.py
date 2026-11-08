@@ -14,68 +14,33 @@ Run 키에 pythonw.exe로 supervisor를 등록한다 — pythonw.exe는 콘솔 �
 
 import argparse
 import sys
-import winreg
-from pathlib import Path
 
-_RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
-_VALUE_NAME = "WhateverLogRecorder"
+from supervision import autostart as run_key
+
+VALUE_NAME = "WhateverLogRecorder"
 
 # Python 3.14는 아직 Windows에서 UTF-8을 기본으로 쓰지 않는다(3.15부터 기본값).
 if sys.platform == "win32" and sys.stdout is not None:
     sys.stdout.reconfigure(encoding="utf-8")
 
 
-def _pythonw_path() -> Path:
-    return Path(sys.executable).with_name("pythonw.exe")
-
-
 def _command() -> str:
-    return f'"{_pythonw_path()}" -m recorder.supervisor'
+    return run_key.module_command("recorder.supervisor")
 
 
 def enable() -> None:
-    """로그인 시 supervisor가 자동으로 뜨도록 Registry Run 키에 등록한다.
-
-    OpenKey가 아니라 CreateKeyEx를 쓴다 — 한 번도 자동시작 앱을 등록한 적
-    없는 깨끗한 프로필에는 Run 키 자체가 없을 수 있고, 그 상태에서
-    OpenKey는 FileNotFoundError로 실패한다. CreateKeyEx는 이미 있으면 그걸
-    열고, 없으면 만들어서 연다.
-
-    pythonw.exe가 실제로 있는지 미리 확인한다 — 없는 채로 등록해버리면
-    로그인 시점에 조용히 실행이 안 되고, 그걸 알아챌 방법이 없다(콘솔도
-    없고 recorder.log도 아예 안 생김).
-    """
-    pythonw_path = _pythonw_path()
-    if not pythonw_path.exists():
-        raise FileNotFoundError(f"pythonw.exe를 찾을 수 없습니다: {pythonw_path}")
-
-    with winreg.CreateKeyEx(
-        winreg.HKEY_CURRENT_USER, _RUN_KEY_PATH, 0, winreg.KEY_SET_VALUE
-    ) as key:
-        winreg.SetValueEx(key, _VALUE_NAME, 0, winreg.REG_SZ, _command())
+    """로그인 시 recorder supervisor가 자동으로 뜨도록 Registry Run 키에 등록한다(실제 등록은 supervision.autostart)."""
+    run_key.enable(VALUE_NAME, _command())
 
 
 def disable() -> None:
-    """자동 시작 등록을 해제한다. 등록되어 있지 않았어도(Run 키 자체가 없어도) 조용히 넘어간다."""
-    try:
-        with winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER, _RUN_KEY_PATH, 0, winreg.KEY_SET_VALUE
-        ) as key:
-            winreg.DeleteValue(key, _VALUE_NAME)
-    except FileNotFoundError:
-        pass
+    """자동 시작 등록을 해제한다. 등록되어 있지 않았어도 조용히 넘어간다."""
+    run_key.disable(VALUE_NAME)
 
 
 def is_enabled() -> bool:
-    """자동 시작이 지금 등록되어 있는지 확인한다. Run 키 자체가 없으면 등록 안 된 것으로 본다."""
-    try:
-        with winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER, _RUN_KEY_PATH, 0, winreg.KEY_READ
-        ) as key:
-            winreg.QueryValueEx(key, _VALUE_NAME)
-            return True
-    except FileNotFoundError:
-        return False
+    """자동 시작이 지금 등록되어 있는지 확인한다."""
+    return run_key.is_enabled(VALUE_NAME)
 
 
 def main() -> None:

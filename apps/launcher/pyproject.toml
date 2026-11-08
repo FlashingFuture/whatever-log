@@ -1,0 +1,36 @@
+[project]
+name = "launcher"
+version = "0.1.0"
+description = "설치(자동 시작·바로가기 등록)와 전체 실행·종료·상태 확인을 한 명령으로 하는 도구"
+requires-python = ">=3.14"
+dependencies = [
+    "psutil>=6.1.0",
+    "desktop",
+    "recorder",
+    "sync",
+    "supervision",
+]
+
+[project.scripts]
+whatever-log = "launcher.__main__:main"
+
+[tool.uv.sources]
+desktop = { workspace = true }
+recorder = { workspace = true }
+sync = { workspace = true }
+supervision = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/launcher"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
