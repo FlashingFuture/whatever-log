@@ -42,7 +42,12 @@ const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status });
 
 test("계획은 GET /api/sync/plan이다", async () => {
-  const plan = { email: "a@example.com", enabled: false, items: [] };
+  const plan = {
+    email: "a@example.com",
+    session: "abc",
+    enabled: false,
+    items: [],
+  };
   const calls = stubFetch(() => json(plan));
 
   assert.deepEqual(await fetchSyncPlan(), plan);
@@ -56,15 +61,20 @@ test("적용은 체크한 key 목록만 JSON으로 보낸다", async () => {
     json({ uploaded: 1, merged: 0, downloaded: 0, kept_local: 0, errors: [] }),
   );
 
-  const result = await applySync(["local:1", "remote:r-1"], "a@example.com");
+  const result = await applySync(
+    ["local:1", "remote:r-1"],
+    "a@example.com",
+    "abc",
+  );
 
   assert.equal(calls[0].method, "POST");
   assert.ok(calls[0].url.endsWith("/api/sync/apply"));
   assert.equal(calls[0].headers["Content-Type"], "application/json");
-  // email은 확인 창을 연 계정이다 — 그 사이 계정이 바뀌면 hub가 적용하지 않는다.
+  // email·session은 확인 창을 연 로그인이다 — 그 사이 로그인이 바뀌면 hub가 적용하지 않는다(이메일이 같거나 없어도 session이 가린다).
   assert.deepEqual(JSON.parse(calls[0].body ?? ""), {
     accepted: ["local:1", "remote:r-1"],
     email: "a@example.com",
+    session: "abc",
   });
   assert.equal(result.uploaded, 1);
 });
@@ -109,18 +119,26 @@ test("기기 목록은 GET이고, 목록을 받은 계정(email)도 함께 돌�
   const devices = [
     { device_id: "d-1", last_sent_at: "t", rows: 3, is_this_device: true },
   ];
-  const calls = stubFetch(() => json({ email: "a@example.com", devices }));
+  const calls = stubFetch(() =>
+    json({ email: "a@example.com", session: "abc", devices }),
+  );
 
-  assert.deepEqual(await fetchDevices(), { email: "a@example.com", devices });
+  assert.deepEqual(await fetchDevices(), {
+    email: "a@example.com",
+    session: "abc",
+    devices,
+  });
   assert.ok(calls[0].url.endsWith("/api/devices"));
 });
 
 test("기기 삭제는 본문 없는 DELETE이고, 이 기기를 지우려 하면 사유가 ApiError로 온다", async () => {
   let calls = stubFetch(() => new Response(null, { status: 204 }));
-  await deleteDevice("d-1", "a@example.com");
+  await deleteDevice("d-1", "a@example.com", "abc");
   assert.equal(calls[0].method, "DELETE");
-  // 목록을 받은 계정을 쿼리로 되돌려 보낸다 — 그 사이 계정이 바뀌면 hub가 거절한다.
-  assert.ok(calls[0].url.endsWith("/api/devices/d-1?email=a%40example.com"));
+  // 목록을 받은 로그인(계정·세션)을 쿼리로 되돌려 보낸다 — 그 사이 로그인이 바뀌면 hub가 거절한다.
+  assert.ok(
+    calls[0].url.endsWith("/api/devices/d-1?email=a%40example.com&session=abc"),
+  );
   assert.equal(calls[0].body, undefined);
   assert.equal(calls[0].headers["Content-Type"], undefined);
 
@@ -136,7 +154,7 @@ test("기기 삭제는 본문 없는 DELETE이고, 이 기기를 지우려 하�
     ),
   );
   await assert.rejects(
-    () => deleteDevice("mine", "a@example.com"),
+    () => deleteDevice("mine", "a@example.com", "abc"),
     (error: unknown) =>
       error instanceof ApiError && error.message.includes("이 기기"),
   );
@@ -151,16 +169,21 @@ test("계정 삭제는 확인한 이메일 하나만 POST로 보낸다", async (
       login: { state: "idle", message: null },
       providers: [],
       sync_enabled: false,
+      session: null,
+      deletion_uncertain: false,
       deleted_on_server: true,
       signed_out: true,
       connections_cleared: true,
     }),
   );
 
-  const result = await deleteAccount("a@example.com");
+  const result = await deleteAccount("a@example.com", "abc");
 
   assert.equal(calls[0].method, "POST");
   assert.ok(calls[0].url.endsWith("/api/account/delete"));
-  assert.deepEqual(JSON.parse(calls[0].body ?? ""), { email: "a@example.com" });
+  assert.deepEqual(JSON.parse(calls[0].body ?? ""), {
+    email: "a@example.com",
+    session: "abc",
+  });
   assert.equal(result.deleted_on_server, true);
 });

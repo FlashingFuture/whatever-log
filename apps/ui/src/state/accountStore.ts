@@ -34,6 +34,10 @@ export interface AccountState {
   busy: boolean;
   /** 목표 동기화를 켰는지(로그인했을 때만 의미가 있다). */
   syncEnabled: boolean;
+  /** 지금 로그인을 가리키는 키(로그인했을 때만). 확인·삭제 요청에 되돌려 보낸다. */
+  session: string | null;
+  /** 계정 삭제 결과를 알 수 없는 채로 남아 있는가(로그인했을 때만). */
+  deletionUncertain: boolean;
 }
 
 export const INITIAL_STATE: AccountState = {
@@ -44,6 +48,8 @@ export const INITIAL_STATE: AccountState = {
   reason: null,
   busy: false,
   syncEnabled: false,
+  session: null,
+  deletionUncertain: false,
 };
 
 export type AccountEvent =
@@ -79,6 +85,8 @@ function fromSnapshot(snapshot: AccountSnapshot): AccountState {
       phase: "signedIn",
       email: snapshot.email,
       syncEnabled: snapshot.sync_enabled,
+      session: snapshot.session,
+      deletionUncertain: snapshot.deletion_uncertain,
     };
   }
   if (snapshot.login.state === "pending") {

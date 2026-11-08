@@ -78,9 +78,15 @@ class ProviderInfo:
 
 @dataclass(frozen=True)
 class Identity:
-    """지금 로그인한 사람. 화면에 보이는 것은 이메일뿐이다."""
+    """지금 로그인한 사람. 화면에 보이는 것은 이메일과 세션 키뿐이다(토큰은 어디에도 나가지 않는다).
+
+    session은 이 로그인(토큰)을 가리키는 불투명한 키다 — 토큰의 salt 친 해시의 앞부분이라 토큰을 알아낼 수 없다. 화면이 "이 계정에서
+    확인했다"는 표시로 되돌려 보내면, hub가 그 사이 로그인이 바뀌었는지 알아본다. 이메일은 같은 사람이 다시 로그인해도, 이메일을 알 수
+    없는 두 계정(None)이어도 구분하지 못하지만 세션 키는 로그인마다 다르다.
+    """
 
     email: str | None
+    session: str | None = None
 
 
 class CloudPort(Protocol):
@@ -106,8 +112,10 @@ class CloudPort(Protocol):
         """로그인 직후 확인 창의 계획(서버 목표와 이 PC 목표를 견준 것). 서버·로그인 문제는 SyncProblem."""
         ...
 
-    def sync_apply(self, goals_db: Path, accepted: Collection[str], email: str | None) -> dict[str, Any]:
-        """사용자가 체크한 항목(key)을 적용한다. email은 확인 창을 열었을 때의 계정이고, 지금 로그인한 계정과 다르면 적용하지
+    def sync_apply(
+        self, goals_db: Path, accepted: Collection[str], email: str | None, session: str | None
+    ) -> dict[str, Any]:
+        """사용자가 체크한 항목(key)을 적용한다. email·session은 확인 창을 열었을 때의 로그인이고, 지금 로그인과 다르면 적용하지
         않고 SyncProblem을 올린다. 서버·로그인 문제도 SyncProblem."""
         ...
 
@@ -115,14 +123,16 @@ class CloudPort(Protocol):
         """달성도를 보낸 기기들과, 목록을 본 계정(`email`). 각 기기에 이 PC의 기기인지(`is_this_device`)를 표시한다. 서버·로그인 문제는 SyncProblem."""
         ...
 
-    def delete_device(self, goals_db: Path, sync_db: Path, device_id: str, confirmed_email: str | None) -> None:
-        """기기가 보낸 달성 기록을 서버에서 지운다. confirmed_email(목록을 본 계정)이 지금 로그인한 계정과 다르면, 이 PC의 기기이거나
-        이 PC의 기기인지 확인할 수 없으면 SyncProblem — 아무것도 지우지 않는다."""
+    def delete_device(
+        self, goals_db: Path, sync_db: Path, device_id: str, email: str | None, session: str | None
+    ) -> None:
+        """기기가 보낸 달성 기록을 서버에서 지운다. email·session(목록을 본 로그인)이 지금 로그인과 다르면, 이 PC의 기기이거나 이 PC의
+        기기인지 확인할 수 없으면 SyncProblem — 아무것도 지우지 않는다."""
         ...
 
-    def delete_account(self, goals_db: Path, confirmed_email: str | None) -> dict[str, Any]:
-        """서버의 계정과 데이터를 지우고, 성공한 뒤에만 이 PC의 로그인·동기화 연결을 정리한다. confirmed_email이 지금 로그인한
-        계정과 다르면 아무것도 하지 않고 SyncProblem. 서버에서 지우지 못했다면 이 PC는 건드리지 않는다."""
+    def delete_account(self, goals_db: Path, email: str | None, session: str | None) -> dict[str, Any]:
+        """서버의 계정과 데이터를 지우고, 성공한 뒤에만 이 PC의 로그인·동기화 연결을 정리한다. email·session(확인한 로그인)이 지금
+        로그인과 다르면 아무것도 하지 않고 SyncProblem. 서버에서 지우지 못했다면 이 PC는 건드리지 않는다."""
         ...
 
 
@@ -170,6 +180,7 @@ class AccountService:
                 "available": False,
                 "signed_in": False,
                 "email": None,
+                "session": None,
                 "login": {"state": "idle", "message": None},
                 "providers": [],
             }
@@ -180,6 +191,7 @@ class AccountService:
             "available": True,
             "signed_in": identity is not None,
             "email": identity.email if identity else None,
+            "session": identity.session if identity else None,
             "login": login,
             "providers": [{"id": item.id, "label": item.label} for item in port.providers()],
         }
@@ -237,13 +249,15 @@ class AccountService:
         """동기화 확인 창에 보여 줄 계획. 계정 기능이 없으면 AccountUnavailable, 서버·로그인 문제는 SyncProblem."""
         return self._get_port().sync_plan(goals_db)
 
-    def sync_apply(self, goals_db: Path, accepted: Collection[str], email: str | None) -> dict[str, Any]:
+    def sync_apply(
+        self, goals_db: Path, accepted: Collection[str], email: str | None, session: str | None
+    ) -> dict[str, Any]:
         """체크한 항목을 적용한다. 같은 시각에 두 번 적용되지 않게 막는다(진행 중이면 SyncBusy)."""
         port = self._get_port()
         if not self._sync_lock.acquire(blocking=False):
             raise SyncBusy
         try:
-            return port.sync_apply(goals_db, accepted, email)
+            return port.sync_apply(goals_db, accepted, email, session)
         finally:
             self._sync_lock.release()
 
@@ -251,12 +265,18 @@ class AccountService:
         """기기 목록(서버). 계정 기능이 없으면 AccountUnavailable."""
         return self._get_port().list_devices(goals_db, sync_db)
 
-    def delete_device(self, goals_db: Path, sync_db: Path, device_id: str, confirmed_email: str | None) -> None:
-        """기기 삭제(서버). 목록을 본 계정(confirmed_email)과 지금 계정이 같을 때만 한다."""
-        self._get_port().delete_device(goals_db, sync_db, device_id, confirmed_email)
+    def delete_device(
+        self, goals_db: Path, sync_db: Path, device_id: str, email: str | None, session: str | None
+    ) -> None:
+        """기기 삭제(서버). 목록을 본 로그인(email·session)과 지금 로그인이 같을 때만 한다."""
+        self._get_port().delete_device(goals_db, sync_db, device_id, email, session)
 
-    def delete_account(self, goals_db: Path, confirmed_email: str | None) -> dict[str, Any]:
-        """계정 삭제. 진행 중인 로그인은 먼저 취소하고(지운 계정으로 로그인이 마무리되지 않게), 동기화 적용과는 동시에 하지 않는다."""
+    def delete_account(self, goals_db: Path, email: str | None, session: str | None) -> dict[str, Any]:
+        """계정 삭제. 진행 중인 로그인은 먼저 취소하고 완전히 끝나기를 기다린 뒤에만 서버를 부른다(동기화 적용과는 동시에 하지 않는다).
+
+        기다리는 이유: 서버에서 코드를 교환하는 중인 로그인이 삭제 뒤에 끝나면 서버가 그 이메일 계정을 다시 만든다(토큰을 폐기해도 계정은
+        남는다). 교환이 끝났음을 확인하지 못하면(시간 안에 끝나지 않음) 삭제하지 않고 SyncBusy로 돌려보낸다.
+        """
         port = self._get_port()
         if not self._sync_lock.acquire(blocking=False):
             raise SyncBusy
@@ -264,21 +284,27 @@ class AccountService:
             with self._lock:
                 self._deleting = True  # 새 로그인 시작을 막는다(start_login)
             self.cancel_login()
-            self._wait_for_login_to_finish()  # 이미 교환 중이던 로그인이 끝나기를 기다린다(저장은 취소로 거절된다)
-            result = port.delete_account(goals_db, confirmed_email)
+            if not self._wait_for_login_to_finish():
+                raise SyncBusy
+            return port.delete_account(goals_db, email, session)
         finally:
+            # 로그인 상태 표시를 먼저 되돌리고 같은 잠금 안에서 삭제 가드를 푼다 — 가드가 풀린 직후 시작된 새 로그인의 "진행 중"을
+            # 이 정리가 idle로 덮어쓰지 않게 한다.
             with self._lock:
+                self._state, self._message = "idle", None
                 self._deleting = False
             self._sync_lock.release()
-        with self._lock:
-            self._state, self._message = "idle", None
-        return result
 
-    def _wait_for_login_to_finish(self, timeout: float = 5.0) -> None:
-        """취소한 로그인 스레드가 끝나기를 잠깐 기다린다(끝나면 세션을 저장하지 못하고 토큰을 폐기한 상태다)."""
+    #: 취소한 로그인이 끝나기를 기다리는 최대 시간(초). 코드 교환의 제한 시간(20초)과 토큰 폐기(5초)를 합친 것보다 길게 둔다.
+    LOGIN_WRAP_UP_SECONDS = 30.0
+
+    def _wait_for_login_to_finish(self) -> bool:
+        """취소한 로그인 스레드가 끝나기를 기다린다. 끝났으면(또는 없으면) True, 시간 안에 끝나지 않았으면 False."""
         thread = self._thread
-        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
-            thread.join(timeout)
+        if thread is None or thread is threading.current_thread() or not thread.is_alive():
+            return True
+        thread.join(self.LOGIN_WRAP_UP_SECONDS)
+        return not thread.is_alive()
 
     def wait_for_login(self, timeout: float) -> None:
         """진행 중인 로그인 스레드가 끝나기를 기다린다(테스트용)."""

@@ -1,6 +1,6 @@
 import { fetchSyncStatus, type SyncStatus } from "../../api";
 import { chipFor, pollIntervalMs, type Tone } from "../../lib/syncStatus";
-import { closePopover, togglePopover } from "../common/Popover";
+import { closePopoverFor, togglePopover } from "../common/Popover";
 import styles from "./SyncStatusChip.module.css";
 
 export interface SyncStatusChip {
@@ -70,7 +70,7 @@ export function createSyncStatusChip(
   function render(): void {
     const chip = active && current ? chipFor(current, now()) : null;
     if (chip === null) {
-      closePopover();
+      closePopoverFor(element); // 칩이 연 팝업만 닫는다(계정 메뉴 등 다른 팝업은 건드리지 않는다)
       element.hidden = true;
       element.textContent = "";
       element.removeAttribute("title");

@@ -132,6 +132,15 @@ def record_status(
         logger.warning("동기화 상태를 기록하지 못했습니다.")
 
 
+def current_generation(goals_db: Path) -> int | None:
+    """주기를 시작하기 전의 동기화 세대. 읽지 못하면 None(그러면 상태 기록은 세대 확인 없이 한다 — 상태는 알림일 뿐이다)."""
+    try:
+        with GoalStore(goals_db) as store:
+            return store.generation()
+    except Exception:
+        return None
+
+
 def publish_device_id(goals_db: Path, state_db: Path) -> None:
     """이 PC의 기기 ID(sync.db)를 `goals.db`에도 적어 둔다. hub가 "이 기기"를 알아보는 데 쓴다 — hub와 에이전트가 이미 같은 goals.db를
     공유하므로, 상태 DB 경로를 따로 맞추지 않아도(맞추는 것을 잊어도) 이 기기를 지우게 되는 일이 없다."""
@@ -186,6 +195,11 @@ def main(argv: list[str] | None = None, *, sleep: Callable[[float], None] = time
     failures = 0
     try:
         while True:
+            # 이 주기가 시작할 때의 세대와, 이 PC의 기기 ID를 먼저 알린다. 세대는 성공·실패를 가리지 않고 이 주기의 모든 상태 기록에
+            # 쓴다(주기 도중 계정이 정리되면 이 주기의 결과는 어떤 것이든 낡은 것이다). 기기 ID를 주기 전에 알리는 이유는, 이 주기가
+            # 달성도를 보내 서버에 이 기기의 줄이 생기기 전에 hub가 이 기기를 알아볼 수 있게 하려는 것이다.
+            publish_device_id(args.goals_db, args.state_db)
+            generation = current_generation(args.goals_db)
             try:
                 report = run_cycle(
                     token_store,
@@ -196,34 +210,57 @@ def main(argv: list[str] | None = None, *, sleep: Callable[[float], None] = time
                 )
                 failures = 0
                 logger.info("동기화: %s", "로그인되어 있지 않아 건너뜀" if report is None else _describe(report))
-                publish_device_id(args.goals_db, args.state_db)
                 record_status(
                     args.goals_db,
                     result=_result_of(report),
                     problems=0 if report is None else len(report.problems),
                     interval=args.interval,
-                    expect_generation=None if report is None else report.generation,
+                    expect_generation=generation,
                 )
                 # 문제의 문장에는 목표 이름이 들어 있을 수 있다("'공부': 서버에 같은 이름의…"). 로그에는 건수만 남긴다(위 요약).
             except ServerUnreachable:
                 failures += 1
                 logger.warning("서버에 닿지 못했습니다. 다음 주기에 다시 시도합니다(연속 %d회).", failures)
-                record_status(args.goals_db, result=status.RESULT_UNREACHABLE, problems=0, interval=next_delay(args.interval, failures))
+                record_status(
+                    args.goals_db,
+                    result=status.RESULT_UNREACHABLE,
+                    problems=0,
+                    interval=next_delay(args.interval, failures),
+                    expect_generation=generation,
+                )
             except NotAuthorized:
                 failures += 1
                 logger.warning("로그인이 만료되었거나 취소되었습니다. 다시 로그인해 주세요.")
-                record_status(args.goals_db, result=status.RESULT_NOT_AUTHORIZED, problems=0, interval=next_delay(args.interval, failures))
+                record_status(
+                    args.goals_db,
+                    result=status.RESULT_NOT_AUTHORIZED,
+                    problems=0,
+                    interval=next_delay(args.interval, failures),
+                    expect_generation=generation,
+                )
             except ServerError as error:
                 failures += 1
                 logger.error("서버 오류(%s, %s): %s", error.status, error.code, error.message)
-                record_status(args.goals_db, result=status.RESULT_SERVER_ERROR, problems=0, interval=next_delay(args.interval, failures))
+                record_status(
+                    args.goals_db,
+                    result=status.RESULT_SERVER_ERROR,
+                    problems=0,
+                    interval=next_delay(args.interval, failures),
+                    expect_generation=generation,
+                )
             except SchemaVersionError as error:
                 logger.error("%s", error)
                 return 1  # 더 새 프로그램이 만든 DB — 다시 시도해도 같다
             except Exception:  # 한 주기의 예상 못 한 오류가 에이전트를 죽이지 않게(다음 주기에 다시)
                 failures += 1
                 logger.exception("동기화 중 예상하지 못한 오류가 났습니다.")
-                record_status(args.goals_db, result=status.RESULT_INTERNAL, problems=0, interval=next_delay(args.interval, failures))
+                record_status(
+                    args.goals_db,
+                    result=status.RESULT_INTERNAL,
+                    problems=0,
+                    interval=next_delay(args.interval, failures),
+                    expect_generation=generation,
+                )
             if args.once:
                 return 0 if failures == 0 else 1
             sleep(next_delay(args.interval, failures))

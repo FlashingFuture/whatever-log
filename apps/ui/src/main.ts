@@ -74,7 +74,8 @@ if (app) {
   const navBar = createNavBar(account, {
     onOpenSync: () => void syncDialog.open({ afterLogin: false }),
     onOpenDevices: () => void devicesDialog.open(),
-    onDeleteAccount: (email) => deleteAccountDialog.open(email),
+    onDeleteAccount: (email, session) =>
+      deleteAccountDialog.open(email, session),
   });
   // 상단 막대는 한 번만 그리고, 화면 틀(레이아웃)은 그 아래 자리(stage)에 갈아 끼운다.
   const stage = document.createElement("div");

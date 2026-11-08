@@ -212,6 +212,12 @@ def _usage_edges(query: dict[str, list[str]]) -> list[datetime]:
 MAX_SYNC_CHOICES = 100
 MAX_SYNC_KEY_LENGTH = 100
 MAX_EMAIL_LENGTH = 320
+MAX_SESSION_KEY_LENGTH = 64
+
+
+def _optional_text(value: object, limit: int) -> bool:
+    """None이거나 limit 이하의 문자열인지(확인한 이메일·세션 키 칸 검사)."""
+    return value is None or (isinstance(value, str) and len(value) <= limit)
 _DEVICE_PATH = re.compile(r"/api/devices/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})")
 # 결과를 알 수 없는 실패(요청을 보냈지만 응답을 받지 못함)에 쓰는 상태 코드. 화면은 이것을 "지워졌는지 확인하라"로 안내한다.
 STATUS_OUTCOME_UNKNOWN = 504
@@ -503,13 +509,34 @@ class _Handler(BaseHTTPRequestHandler):
                 503, api_error.error_body(api_error.UNAVAILABLE, "계정 상태를 읽지 못했습니다.")
             )
             return
-        self._send_json(status, {**payload, "sync_enabled": self._sync_enabled(), **(extra or {})})
+        self._send_json(
+            status,
+            {
+                **payload,
+                "sync_enabled": self._sync_enabled(),
+                "deletion_uncertain": self._deletion_uncertain(payload.get("session")),
+                **(extra or {}),
+            },
+        )
 
     def _sync_enabled(self) -> bool:
         """사용자가 확인 창에서 동기화를 켰는지(이 PC의 goals.db 값 — 서버와 통신하지 않는다). 읽지 못하면 꺼진 것으로 본다."""
         try:
             with GoalStore(self.goals_db_path) as store:
                 return store.get_meta(META_SYNC_ENABLED) == "1"
+        except (sqlite3.Error, SchemaVersionError):
+            return False
+
+    def _deletion_uncertain(self, session: object) -> bool:
+        """이 로그인에서 보낸 계정 삭제의 결과를 알 수 없는 채로 남아 있는가(goals.db의 표시가 지금 세션과 같을 때만).
+
+        이전 세션의 표시는 지금 로그인과 무관하므로 세지 않는다. 읽지 못하면 아니라고 본다(화면에 근거 없는 경고를 띄우지 않는다).
+        """
+        if not isinstance(session, str):
+            return False
+        try:
+            with GoalStore(self.goals_db_path) as store:
+                return store.get_meta("deletion_uncertain") == session
         except (sqlite3.Error, SchemaVersionError):
             return False
 
@@ -592,15 +619,17 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_json(200, plan)
 
     def _apply_sync(self) -> None:
-        """POST /api/sync/apply {"accepted": [key…]} — 체크한 항목만 서버에 올리고·합치고·가져온다. 체크하지 않은 이 PC 목표는 올리지 않는다."""
+        """POST /api/sync/apply {"accepted": [key…], "email", "session"} — 체크한 항목만 서버에 올리고·합치고·가져온다. 체크하지 않은 이 PC 목표는 올리지 않는다."""
         body = self._check_account_write(json_body=True)
         if body is None:
             return
         accepted = body.get("accepted")
         email = body.get("email")
+        session = body.get("session")
         if (
-            set(body) != {"accepted", "email"}
-            or not (email is None or (isinstance(email, str) and len(email) <= MAX_EMAIL_LENGTH))
+            set(body) != {"accepted", "email", "session"}
+            or not _optional_text(email, MAX_EMAIL_LENGTH)
+            or not _optional_text(session, MAX_SESSION_KEY_LENGTH)
             or not isinstance(accepted, list)
             or len(accepted) > MAX_SYNC_CHOICES
             or not all(isinstance(key, str) and 0 < len(key) <= MAX_SYNC_KEY_LENGTH for key in accepted)
@@ -608,12 +637,13 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(
                 400,
                 api_error.error_body(
-                    api_error.INVALID_REQUEST, "accepted(항목 이름 목록)와 email(확인한 계정) 칸만 보내야 합니다."
+                    api_error.INVALID_REQUEST,
+                    "accepted(항목 이름 목록), email·session(확인한 로그인) 칸만 보내야 합니다.",
                 ),
             )
             return
         try:
-            result = self.account.sync_apply(self.goals_db_path, accepted, email)
+            result = self.account.sync_apply(self.goals_db_path, accepted, email, session)
         except AccountUnavailable:
             self._send_account_unavailable()
             return
@@ -652,23 +682,31 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_json(200, result)
 
     def _delete_device(self, device_id: str, query: str) -> None:
-        """DELETE /api/devices/<id>?email=<목록을 본 계정> — 그 기기가 보낸 달성 기록을 서버에서 지운다.
+        """DELETE /api/devices/<id>?email=…&session=… — 그 기기가 보낸 달성 기록을 서버에서 지운다.
 
-        email은 기기 목록을 받았을 때의 계정이다. 지금 로그인한 계정과 다르면 거절한다(계정 A의 목록에서 누른 삭제가 B의 기록을 지우지 않게).
+        email·session은 기기 목록을 받았을 때의 로그인이다. 지금 로그인과 다르면 거절한다(계정 A의 목록에서 누른 삭제가 B의 기록을 지우지 않게).
         이 PC의 기기는 거절하고, 이 PC의 기기를 확인할 수 없을 때(동기화를 켰는데 에이전트가 기기 ID를 아직 알리지 않음)도 거절한다.
         """
         if self._check_account_write(json_body=False) is None:
             return
         values = parse_qs(query, keep_blank_values=True)
         emails = values.get("email", [])
-        if set(values) - {"email"} or len(emails) != 1 or len(emails[0]) > MAX_EMAIL_LENGTH:
+        sessions = values.get("session", [])
+        if (
+            set(values) - {"email", "session"}
+            or len(emails) != 1
+            or len(sessions) != 1
+            or len(emails[0]) > MAX_EMAIL_LENGTH
+            or not 0 < len(sessions[0]) <= MAX_SESSION_KEY_LENGTH
+        ):
             self._send_json(
-                400, api_error.error_body(api_error.INVALID_REQUEST, "email 하나만 쿼리로 보내야 합니다.")
+                400,
+                api_error.error_body(api_error.INVALID_REQUEST, "email과 session을 하나씩만 쿼리로 보내야 합니다."),
             )
             return
         confirmed = emails[0] or None  # 빈 값은 "이메일을 알 수 없는 로그인"이다
         try:
-            self.account.delete_device(self.goals_db_path, self.sync_db_path, device_id, confirmed)
+            self.account.delete_device(self.goals_db_path, self.sync_db_path, device_id, confirmed, sessions[0])
         except AccountUnavailable:
             self._send_account_unavailable()
             return
@@ -678,19 +716,24 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_empty(204)
 
     def _delete_account(self) -> None:
-        """POST /api/account/delete {"email"} — 서버의 계정과 모든 데이터를 지운다(되돌릴 수 없다). email은 사용자가 확인한 계정이고,
-        지금 로그인한 계정과 다르면 거절한다. 서버 삭제에 성공한 뒤에만 이 PC의 로그인·동기화 연결을 정리한다."""
+        """POST /api/account/delete {"email", "session"} — 서버의 계정과 모든 데이터를 지운다(되돌릴 수 없다). email·session은 사용자가
+        확인한 로그인이고, 지금 로그인과 다르면 거절한다. 서버 삭제에 성공한 뒤에만 이 PC의 로그인·동기화 연결을 정리한다."""
         body = self._check_account_write(json_body=True)
         if body is None:
             return
         email = body.get("email")
-        if set(body) != {"email"} or not (email is None or (isinstance(email, str) and len(email) <= MAX_EMAIL_LENGTH)):
+        session = body.get("session")
+        if (
+            set(body) != {"email", "session"}
+            or not _optional_text(email, MAX_EMAIL_LENGTH)
+            or not (isinstance(session, str) and 0 < len(session) <= MAX_SESSION_KEY_LENGTH)
+        ):
             self._send_json(
-                400, api_error.error_body(api_error.INVALID_REQUEST, "email 칸 하나만 보내야 합니다.")
+                400, api_error.error_body(api_error.INVALID_REQUEST, "email과 session 칸만 보내야 합니다.")
             )
             return
         try:
-            result = self.account.delete_account(self.goals_db_path, email)
+            result = self.account.delete_account(self.goals_db_path, email, session)
         except AccountUnavailable:
             self._send_account_unavailable()
             return
@@ -703,22 +746,21 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_account_after_delete(result)
 
     def _send_account_after_delete(self, result: dict) -> None:
-        """계정 삭제 뒤의 응답. 서버에서 이미 지워졌으므로, 계정 상태를 읽지 못해도 503을 보내지 않고 결과만 200으로 알린다.
+        """계정 삭제 뒤의 응답. 서버에서 이미 지워졌으므로, 상태를 읽지 못해도 503을 보내지 않고 삭제 결과를 200으로 알린다.
 
-        (503을 보내면 화면은 "지우지 못했다"로 안내한다 — 이미 지워진 계정에 대해 틀린 말이다.)
+        (503을 보내면 화면은 "지우지 못했다"로 안내한다 — 이미 지워진 계정에 대해 틀린 말이다.) 다만 **읽지 못한 것은 단정하지 않는다**:
+        계정 상태를 읽지 못했으면 로그인 여부를 응답에 넣지 않고(화면이 다시 읽는다), 동기화 설정은 실제로 읽은 값을 준다 — 이 PC의 정리
+        (`connections_cleared`)가 실패해 설정이 켜진 채 남았다면 켜져 있다고 그대로 알린다.
         """
+        payload: dict = {}
         try:
             payload = self.account.snapshot()
         except Exception as error:
             logger.error("계정 삭제 뒤 상태를 읽지 못했습니다: %s", type(error).__name__)
-            payload = {
-                "available": True,
-                "signed_in": False,
-                "email": None,
-                "login": {"state": "idle", "message": None},
-                "providers": [],
-            }
-        self._send_json(200, {**payload, "sync_enabled": False, **result})
+        self._send_json(
+            200,
+            {**payload, "sync_enabled": self._sync_enabled(), "deletion_uncertain": False, "state_known": bool(payload), **result},
+        )
 
     def _send_account_unavailable(self) -> None:
         """계정 기능을 쓸 수 없는 환경(cloud 없음)의 요청에 503."""

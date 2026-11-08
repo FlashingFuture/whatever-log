@@ -2,7 +2,11 @@ import { openExternalLink } from "../../api";
 import { PRIVACY_DOC_URL } from "../../lib/links";
 import type { AccountState, AccountStore } from "../../state/accountStore";
 import { createButton } from "../common/Button";
-import { closePopover, togglePopover } from "../common/Popover";
+import {
+  closePopover,
+  closePopoverFor,
+  togglePopover,
+} from "../common/Popover";
 import {
   createSyncStatusChip,
   type SyncStatusChip,
@@ -35,8 +39,8 @@ export interface AccountMenuOptions {
   onOpenSync?: () => void;
   /** "기기 관리"를 눌렀다 — 서버에 기록을 보낸 기기 목록 창을 연다. */
   onOpenDevices?: () => void;
-  /** "계정 삭제"를 눌렀다(지울 계정의 이메일, 모르면 null) — 확인 창을 연다. */
-  onDeleteAccount?: (email: string | null) => void;
+  /** "계정 삭제"를 눌렀다(지울 로그인의 이메일과 세션 키) — 확인 창을 연다. */
+  onDeleteAccount?: (email: string | null, session: string | null) => void;
   /** 상태 칩을 바꿀 수 있다(테스트·미리보기). */
   statusChip?: SyncStatusChip;
 }
@@ -187,12 +191,15 @@ export function createAccountMenu(
     return button;
   };
   let currentEmail: string | null = null;
+  let currentSession: string | null = null;
+  // 계정 메뉴를 연 채 상태를 다시 읽었을 때, 로그인이 그대로인지 가리려고 마지막으로 본 세션을 기억한다.
+  let shownSession: string | null = null;
   menuPanel.append(
     menuItem("목표 동기화", () => options.onOpenSync?.()),
     menuItem("기기 관리", () => options.onOpenDevices?.()),
     menuItem(
       "계정 삭제",
-      () => options.onDeleteAccount?.(currentEmail),
+      () => options.onDeleteAccount?.(currentEmail, currentSession),
       "danger",
     ),
   );
@@ -206,6 +213,10 @@ export function createAccountMenu(
   const logoutError = document.createElement("span");
   logoutError.className = styles.inlineError;
   logoutError.setAttribute("role", "alert");
+  // 계정 삭제 결과를 알 수 없는 채로 남아 있을 때의 안내(로그아웃이 삭제의 증거는 아니다 — 다시 시도해 확인하게 한다).
+  const uncertainNotice = document.createElement("span");
+  uncertainNotice.className = styles.inlineError;
+  uncertainNotice.setAttribute("role", "status");
   const signedInGroup = document.createElement("div");
   signedInGroup.className = styles.signedIn;
   signedInGroup.append(
@@ -214,11 +225,17 @@ export function createAccountMenu(
     accountButton,
     logoutButton,
     logoutError,
+    uncertainNotice,
   );
 
   function render(state: AccountState): void {
     // 팝업 안에서 눌러 다시 그려지면 포커스가 사라진다 — 다시 그린 뒤 되돌려 놓는다.
     const hadFocus = panel.contains(document.activeElement);
+
+    if (state.phase !== "signedIn") {
+      shownSession = null;
+      closePopoverFor(accountButton); // 로그인이 풀렸다 — 계정 메뉴를 남기지 않는다
+    }
 
     switch (state.phase) {
       case "loading":
@@ -243,8 +260,17 @@ export function createAccountMenu(
         element.replaceChildren(loginButton);
         break;
       case "signedIn":
-        closePopover();
+        // 로그인 창(로그인 직후)은 닫는다. 계정 메뉴는 로그인이 그대로인 동안(예: 삭제가 실패해 상태를 다시 읽었을 때) 열어 둔다.
+        closePopoverFor(loginButton);
+        if (state.session !== shownSession) {
+          closePopoverFor(accountButton);
+        }
+        shownSession = state.session;
         currentEmail = state.email;
+        currentSession = state.session;
+        uncertainNotice.textContent = state.deletionUncertain
+          ? "계정 삭제 결과를 확인하지 못했어요. 계정 메뉴에서 다시 시도해 주세요."
+          : "";
         statusChip.setActive(true);
         email.textContent = state.email ?? "로그인됨";
         email.title = state.email ?? "";

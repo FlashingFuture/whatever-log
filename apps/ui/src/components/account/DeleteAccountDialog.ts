@@ -13,7 +13,7 @@ export interface DeleteAccountDialogProps {
 
 export interface DeleteAccountDialog {
   /** 지울 계정(지금 로그인한 계정의 이메일, 모르면 null)을 보여 주며 확인 창을 연다. */
-  open: (email: string | null) => void;
+  open: (email: string | null, session: string | null) => void;
   destroy: () => void;
 }
 
@@ -76,6 +76,8 @@ export function createDeleteAccountDialog(
     },
   });
   let email: string | null = null;
+  // 창을 연 때의 로그인 키. 삭제 요청에 되돌려 보낸다(그 사이 다른 로그인이 되면 hub가 거절한다).
+  let session: string | null = null;
   let understood = false;
   let typed = "";
   let busy = false;
@@ -90,7 +92,7 @@ export function createDeleteAccountDialog(
     failure = null;
     render();
     try {
-      result = await deleteAccount(email);
+      result = await deleteAccount(email, session);
       props.onDeleted();
     } catch (error) {
       failure = message(error);
@@ -204,7 +206,7 @@ export function createDeleteAccountDialog(
   }
 
   return {
-    open(next) {
+    open(nextEmail, nextSession) {
       // 삭제 요청이 진행 중이거나 끝난 결과가 아직 보이지 않았다면 새 확인 창으로 바꾸지 않는다. 바꾸면 처리 중 표시가 사라져 같은 요청을
       // 다시 보낼 수 있고, 먼저 보낸 요청의 결과가 새 창에 덮어써진다.
       if (busy || result !== null) {
@@ -212,7 +214,8 @@ export function createDeleteAccountDialog(
         modal.open();
         return;
       }
-      email = next;
+      email = nextEmail;
+      session = nextSession;
       understood = false;
       typed = "";
       failure = null;

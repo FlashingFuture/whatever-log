@@ -486,3 +486,15 @@ def test_the_cycle_reports_its_generation_so_a_late_status_can_be_refused(store,
     store.reset_sync()
 
     assert first.generation is not None and first.generation != store.generation()
+
+
+def test_a_cycle_cut_off_by_an_account_reset_still_reports_the_generation_it_started_with(store, state, server, recorder_db) -> None:
+    goal = store.create(**goal_fields())
+    store.set_sync_state(goal.id, "sync")
+    _enable(store)
+    started = store.generation()
+
+    report = _run(store, state, _ResetsMidCycle(server, store, "put_goal"), recorder_db, new_id=lambda: "r-new")
+
+    assert report.skipped == "account_changed"
+    assert report.generation == started != store.generation()  # 호출부가 이 세대로 상태 기록을 거절시킬 수 있다

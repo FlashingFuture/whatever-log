@@ -18,7 +18,7 @@ export interface NavBarOptions {
   /** 계정 메뉴의 "기기 관리"를 눌렀다. */
   onOpenDevices?: () => void;
   /** 계정 메뉴의 "계정 삭제"를 눌렀다(지울 계정의 이메일, 모르면 null). */
-  onDeleteAccount?: (email: string | null) => void;
+  onDeleteAccount?: (email: string | null, session: string | null) => void;
 }
 
 /**

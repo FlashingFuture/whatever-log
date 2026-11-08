@@ -52,6 +52,10 @@ export function createDevicesDialog(props: DevicesDialogProps): DevicesDialog {
   let devices: DeviceRow[] | null = null;
   // 목록을 받았을 때의 계정. 지우기 요청에 되돌려 보낸다(그 사이 계정이 바뀌면 hub가 거절한다).
   let listEmail: string | null = null;
+  // 목록을 받았을 때의 로그인 키. 이메일이 같거나 없어도 다른 로그인을 가려낸다.
+  let listSession: string | null = null;
+  // 지우는 중에 창을 닫았다 다시 열었다. 그 사이 다른 계정으로 바뀌었을 수 있어서, 지우기가 끝나면 목록을 새로 받는다.
+  let reloadAfterBusy = false;
   let failure: string | null = null;
   let confirming: string | null = null;
   let busy = false;
@@ -151,7 +155,7 @@ export function createDevicesDialog(props: DevicesDialogProps): DevicesDialog {
     render({ device: deviceId, role: "confirm" });
     let focus: Focus | undefined;
     try {
-      await deleteDevice(deviceId, listEmail);
+      await deleteDevice(deviceId, listEmail, listSession);
       confirming = null;
       devices = (devices ?? []).filter((item) => item.device_id !== deviceId);
     } catch (error) {
@@ -163,6 +167,11 @@ export function createDevicesDialog(props: DevicesDialogProps): DevicesDialog {
     } finally {
       busy = false;
       render(focus);
+    }
+    if (reloadAfterBusy) {
+      reloadAfterBusy = false;
+      await load();
+      render();
     }
   }
 
@@ -229,6 +238,7 @@ export function createDevicesDialog(props: DevicesDialogProps): DevicesDialog {
       if (id === loadId) {
         devices = loaded.devices;
         listEmail = loaded.email;
+        listSession = loaded.session;
         confirming = null;
       }
     } catch (error) {
@@ -247,6 +257,7 @@ export function createDevicesDialog(props: DevicesDialogProps): DevicesDialog {
       // 지우는 중에 창을 닫았다 다시 연 경우: 목록을 새로 받지 않고 진행 중인 화면을 그대로 보여 준다. 새로 받으면 처리 중 표시가
       // 사라져 다른 기기를 또 지울 수 있고, 먼저 보낸 삭제가 끝났을 때 새 화면의 상태를 덮어쓰게 된다.
       if (busy) {
+        reloadAfterBusy = true;
         render();
         modal.open();
         return;

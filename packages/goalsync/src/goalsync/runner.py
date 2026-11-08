@@ -94,8 +94,8 @@ def sync_once(
     except StaleSyncError:
         # 주기가 도는 사이에 계정이 정리되었다(화면에서 계정 삭제 등). 이번 주기의 나머지 결과는 버리고 다음 주기에 새로 시작한다.
         state.forget_all()
-        stale = SyncReport(skipped="account_changed")
-        return stale
+        # 세대는 그대로 들고 간다 — 호출부가 이 낡은 주기의 상태를 적으려 할 때 같은 세대 확인으로 거절되게 한다.
+        return SyncReport(skipped="account_changed", generation=report.generation)
     return report
 
 

@@ -205,7 +205,7 @@ export function createSyncDialog(props: SyncDialogProps): SyncDialog {
     failure = null;
     render();
     try {
-      result = await applySync([...selection], plan.email);
+      result = await applySync([...selection], plan.email, plan.session);
       if (result.merged > 0 || result.downloaded > 0) {
         props.onGoalsChanged();
       }

@@ -458,3 +458,51 @@ def test_the_agent_publishes_this_pcs_device_id_into_the_shared_goals_db(tmp_pat
     with GoalStore(goals_db) as store:
         published = store.get_meta(META_DEVICE_ID)
     assert published is not None and published == peek_device_id(tmp_path / "sync.db")
+
+
+# --- 리뷰 3: 실패한 주기·낡은 주기의 상태, 기기 ID를 먼저 알림 ---
+
+
+class _ResetsWhileFailing(FakeApi):
+    """서버 요청이 실패하는 순간, 다른 프로세스(화면)가 계정을 정리한 상황을 흉내 낸다."""
+
+    goals_db = None
+
+    def list_goals(self):
+        with GoalStore(type(self).goals_db) as store:
+            store.reset_sync()
+        raise ServerUnreachable
+
+
+def test_a_failure_from_a_cycle_whose_account_was_cleared_meanwhile_is_not_recorded(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("WHATEVER_LOG_TOKEN", "env-token")
+    goals_db = tmp_path / "goals.db"
+    _enable(goals_db)
+    _ResetsWhileFailing.goals_db = goals_db
+    monkeypatch.setattr(agent, "ServerApi", _ResetsWhileFailing)
+
+    assert agent.main(_args(tmp_path, "--once")) == 1
+
+    # 이전 계정 주기의 "서버에 닿지 못함"이 정리된 DB의 상태로 남아, 새 계정에서 동기화를 켰을 때 낡은 오류로 보이지 않는다.
+    assert _status(goals_db) is None
+
+
+def test_the_device_id_is_published_before_the_cycle_can_send_anything(tmp_path, monkeypatch) -> None:
+    from goals import META_DEVICE_ID
+
+    monkeypatch.setenv("WHATEVER_LOG_TOKEN", "env-token")
+    goals_db = tmp_path / "goals.db"
+    _enable(goals_db)
+    seen: list[str | None] = []
+
+    class Spy(FakeApi):
+        def list_goals(self):
+            with GoalStore(goals_db) as store:
+                seen.append(store.get_meta(META_DEVICE_ID))  # 주기가 서버를 부르는 시점에 이미 알려져 있는가
+            return super().list_goals()
+
+    monkeypatch.setattr(agent, "ServerApi", Spy)
+
+    agent.main(_args(tmp_path, "--once"))
+
+    assert seen and seen[0] is not None

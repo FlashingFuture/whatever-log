@@ -22,11 +22,12 @@ export function fetchSyncPlan(): Promise<SyncPlan> {
 export function applySync(
   accepted: readonly string[],
   email: string | null,
+  session: string | null,
 ): Promise<SyncResult> {
   return sendJson(
     "POST",
     "/api/sync/apply",
-    { accepted, email },
+    { accepted, email, session },
     SYNC_TIMEOUT_MS,
   );
 }
@@ -48,10 +49,11 @@ export function fetchDevices(): Promise<DeviceList> {
 export async function deleteDevice(
   deviceId: string,
   email: string | null,
+  session: string | null,
 ): Promise<void> {
   await sendJson(
     "DELETE",
-    `/api/devices/${encodeURIComponent(deviceId)}?${new URLSearchParams({ email: email ?? "" })}`,
+    `/api/devices/${encodeURIComponent(deviceId)}?${new URLSearchParams({ email: email ?? "", session: session ?? "" })}`,
     undefined,
     SYNC_TIMEOUT_MS,
   );
@@ -63,6 +65,12 @@ export async function deleteDevice(
  */
 export function deleteAccount(
   email: string | null,
+  session: string | null,
 ): Promise<DeleteAccountResult> {
-  return sendJson("POST", "/api/account/delete", { email }, SYNC_TIMEOUT_MS);
+  return sendJson(
+    "POST",
+    "/api/account/delete",
+    { email, session },
+    SYNC_TIMEOUT_MS,
+  );
 }
