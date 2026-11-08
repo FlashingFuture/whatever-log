@@ -1099,8 +1099,8 @@ def test_requests_are_logged_without_query_or_body(sync_server, caplog) -> None:
     call(port, "DELETE", f"/api/devices/{DEVICE_B}?email=secret@example.com&session=abcdef")
 
     lines = [record.getMessage() for record in caplog.records if record.name == "hub"]
-    assert any(line.startswith(f"DELETE /api/devices/{DEVICE_B} -> ") for line in lines)
-    assert not any("secret@example.com" in line or "abcdef" in line for line in lines)
+    assert any(line.startswith("DELETE /api/devices/:id -> ") for line in lines)
+    assert not any("secret@example.com" in line or "abcdef" in line or DEVICE_B in line for line in lines)
 
 
 def test_an_apply_body_with_missing_fields_logs_which_fields_arrived(sync_server, caplog) -> None:
@@ -1111,3 +1111,112 @@ def test_an_apply_body_with_missing_fields_logs_which_fields_arrived(sync_server
 
     assert status == 400
     assert any("받은 칸=['accepted', 'email']" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    ("path", "shown"),
+    [
+        ("/api/processes/secret.exe/usage", "/api/processes/:name/usage"),
+        ("/api/icons/secret.exe", "/api/icons/:name"),
+        ("/api/site-icons/private.example.com", "/api/site-icons/:domain"),
+        (f"/api/devices/{DEVICE_A}", "/api/devices/:id"),
+        ("/api/goals/12", "/api/goals/:id"),
+        ("/api/sync/apply", "/api/sync/apply"),
+        ("/api/goals/progress", "/api/goals/progress"),
+        ("/api/unknown/a/b/secret", "/other"),
+        ("/whatever/secret", "/other"),
+    ],
+)
+def test_the_access_log_hides_identifiers_in_paths(path, shown) -> None:
+    from hub.__main__ import loggable_path
+
+    assert loggable_path(path) == shown
+
+
+def test_a_new_login_is_refused_while_a_cancelled_one_is_still_finishing() -> None:
+    """취소했지만 끝나지 않은 로그인 스레드를 놓치면, 삭제가 그것을 기다리지 못해 삭제 뒤에 계정이 다시 만들어진다."""
+    import threading as _threading
+
+    from hub.account_service import SyncBusy
+
+    release = _threading.Event()
+
+    class Port:
+        def providers(self):
+            return (type("P", (), {"id": "google", "label": "Google"})(),)
+
+        def current(self):
+            return None
+
+        def sign_in(self, provider_id, *, cancelled):
+            release.wait(10)
+
+        def delete_account(self, goals_db, email, session):
+            return {}
+
+    service = AccountService(lambda: Port())
+    service.start_login("google")
+    service.cancel_login()
+    with service._lock:  # 삭제가 시간 초과로 물러나 상태를 idle로 되돌린 뒤의 모습
+        service._state = "idle"
+
+    with pytest.raises(SyncBusy):
+        service.start_login("google")
+
+    release.set()
+    service.wait_for_login(5)
+    service.start_login("google")  # 끝난 뒤에는 받는다
+    service.wait_for_login(5)
+
+
+def test_an_apply_that_outlives_an_account_reset_writes_nothing(sync_server, monkeypatch) -> None:
+    """계정 A의 올리기 응답을 기다리는 사이 계정이 정리(reset_sync)되면, 늦게 돌아온 응답이 이전 연결을 저장하지 않는다."""
+    port, goals_db, _ = sync_server
+    goal = _local_goal(goals_db)
+    plan = call(port, "GET", "/api/sync/plan")[1]
+    key = plan["items"][0]["key"]
+    original = FakeApi.put_goal
+
+    def reset_while_waiting(self, *args, **kwargs):
+        created = original(self, *args, **kwargs)
+        with GoalStore(goals_db) as store:
+            store.reset_sync()  # 응답을 기다리는 사이 다른 쪽에서 계정이 정리됐다
+        return created
+
+    monkeypatch.setattr(FakeApi, "put_goal", reset_while_waiting)
+
+    status, body = call(port, "POST", "/api/sync/apply", {"email": plan["email"], "session": plan["session"], "accepted": [key]})
+
+    assert status == 503 and "계정이 바뀌어서" in body["error"]["message"]
+    with GoalStore(goals_db) as store:
+        link = store.sync_links()[0]
+        assert link.remote_id is None  # 늦게 돌아온 연결이 정리된 DB에 되살아나지 않았다
+        assert store.get(goal.id).name == "공부"
+
+
+def test_the_sync_reset_for_a_rejected_session_happens_before_the_session_is_cleared(sync_server) -> None:
+    """초기화를 세션 정리 뒤에 하면 그 사이 같은 이메일로 다시 로그인해 켠 동기화를 지울 수 있다. 순서를 고정한다."""
+    port, goals_db, backend = sync_server
+    order: list[str] = []
+    original_delete = backend.delete_password
+    original_reset = GoalStore.reset_sync
+
+    def traced_delete(*args, **kwargs):
+        order.append("sign_out")
+        return original_delete(*args, **kwargs)
+
+    def traced_reset(self):
+        order.append("reset")
+        return original_reset(self)
+
+    backend.delete_password = traced_delete
+    GoalStore.reset_sync = traced_reset
+    try:
+        FakeApi.fail = ServerUnreachable()
+        _delete_account(port)  # 불확실 표시
+        FakeApi.fail = cloud.NotAuthorized()
+        call(port, "GET", "/api/devices")
+    finally:
+        GoalStore.reset_sync = original_reset
+
+    assert order == ["reset", "sign_out"]

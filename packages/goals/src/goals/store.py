@@ -532,13 +532,14 @@ class GoalStore:
         daily_target_minutes: int,
         weekdays: Collection[int],
         revision: int,
+        expect_generation: int | None = None,
     ) -> Goal:
         """서버에만 있던 목표를 이 PC에 만든다(프로세스·사이트 연결은 비어 있다). 서버 값이 규칙에 맞지 않거나 이름이 겹치거나
         개수 상한을 넘으면 GoalValidationError."""
         errors = _remote_value_errors(daily_target_minutes, weekdays)
         if errors:
             raise GoalValidationError(errors)
-        with self._write():
+        with self._write(expect_generation):
             (count,) = self._conn.execute("SELECT COUNT(*) FROM goals").fetchone()
             if count >= MAX_GOALS:
                 raise GoalValidationError([FieldError("goals", "too_many", f"목표는 {MAX_GOALS}개까지 만들 수 있습니다.")])

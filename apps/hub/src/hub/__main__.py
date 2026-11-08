@@ -215,6 +215,27 @@ MAX_EMAIL_LENGTH = 320
 MAX_SESSION_KEY_LENGTH = 64
 
 
+# 로그에 남길 때 식별자(프로세스 이름·사이트 도메인·기기 ID·목표 번호)를 가리는 경로 모양. 앞쪽부터 맞는 첫 규칙을 쓴다.
+_LOG_PATH_RULES = (
+    (re.compile(r"^/api/processes/.+/usage$"), "/api/processes/:name/usage"),
+    (re.compile(r"^/api/icons/.+$"), "/api/icons/:name"),
+    (re.compile(r"^/api/site-icons/.+$"), "/api/site-icons/:domain"),
+    (re.compile(r"^/api/devices/.+$"), "/api/devices/:id"),
+    (re.compile(r"^/api/goals/\d+$"), "/api/goals/:id"),
+)
+
+
+def loggable_path(path: str) -> str:
+    """접근 로그에 남길 경로. 프로세스 이름·사이트 도메인 같은 사용 식별자는 `:name` 같은 자리표시로 바꾼다.
+
+    알 수 없는 경로는 `/api/...`가 아니면 그대로 두지 않고 `/other`로 적는다(모르는 경로에 식별자가 있어도 남기지 않는다).
+    """
+    for rule, shown in _LOG_PATH_RULES:
+        if rule.match(path):
+            return shown
+    return path if path.startswith("/api/") and path.count("/") <= 3 else "/other"
+
+
 def _optional_text(value: object, limit: int) -> bool:
     """None이거나 limit 이하의 문자열인지(확인한 이메일·세션 키 칸 검사)."""
     return value is None or (isinstance(value, str) and len(value) <= limit)
@@ -1157,7 +1178,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def log_request(self, code: object = "-", size: object = "-") -> None:
         """요청 한 줄을 hub 로그에 남긴다: 메서드, 경로, 상태 코드만. 쿼리(이메일·세션 키)와 본문은 남기지 않는다."""
-        logger.info("%s %s -> %s", self.command, urlsplit(self.path).path, code)
+        logger.info("%s %s -> %s", self.command, loggable_path(urlsplit(self.path).path), code)
 
     def log_message(self, log_format: str, *args: object) -> None:
         pass  # 기본 동작(stderr에 접근 로그 출력)을 끈다.

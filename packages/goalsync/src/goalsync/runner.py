@@ -30,7 +30,7 @@ class _GenerationGuard:
     연결이나 상태가 정리된 DB에 되살아나지 않게 한다.
     """
 
-    _GUARDED = frozenset({"link_remote", "mark_pushed", "unlink", "apply_remote", "clear_deletion", "set_sync_state", "set_meta"})
+    _GUARDED = frozenset({"link_remote", "mark_pushed", "unlink", "apply_remote", "clear_deletion", "set_sync_state", "set_meta", "create_from_remote"})
 
     def __init__(self, store: GoalStore, generation: int) -> None:
         self._store = store
@@ -41,6 +41,12 @@ class _GenerationGuard:
         if name in self._GUARDED:
             return lambda *args, **kwargs: attribute(*args, expect_generation=self._generation, **kwargs)
         return attribute
+
+
+def guarded_store(store: GoalStore) -> GoalStore:
+    """지금의 동기화 세대로 쓰기를 확인하는 store. 서버를 부르기 **전에** 만들어야 한다 — 그 사이 계정이 정리되면 이후의 쓰기가
+    `StaleSyncError`로 거절된다(화면의 "동기화 적용"이 이전 계정의 응답으로 새 계정의 DB를 쓰지 못하게)."""
+    return _GenerationGuard(store, store.generation())  # type: ignore[return-value]
 
 
 @dataclass

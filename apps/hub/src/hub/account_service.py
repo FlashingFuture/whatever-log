@@ -207,6 +207,10 @@ class AccountService:
                 raise SyncBusy
             if self._state == "pending":
                 raise LoginInProgress
+            if self._thread is not None and self._thread.is_alive():
+                # 취소했지만 아직 끝나지 않은 이전 로그인(서버와 코드를 교환하는 중일 수 있다)이 있다. 그 스레드를 놓치면 삭제가 그것을
+                # 기다리지 못해, 삭제 뒤에 끝난 교환이 계정을 다시 만든다 — 끝날 때까지 새 로그인을 받지 않는다.
+                raise SyncBusy
             self._state = "pending"
             self._message = None
             self._cancel = cancel = threading.Event()
@@ -291,7 +295,9 @@ class AccountService:
             # 로그인 상태 표시를 먼저 되돌리고 같은 잠금 안에서 삭제 가드를 푼다 — 가드가 풀린 직후 시작된 새 로그인의 "진행 중"을
             # 이 정리가 idle로 덮어쓰지 않게 한다.
             with self._lock:
-                self._state, self._message = "idle", None
+                if self._thread is None or not self._thread.is_alive():
+                    self._state, self._message = "idle", None
+                # 끝나지 않은 로그인이 남아 있으면 그 스레드가 끝나면서 상태를 정한다(여기서 idle로 보이게 하지 않는다)
                 self._deleting = False
             self._sync_lock.release()
 

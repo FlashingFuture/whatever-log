@@ -506,3 +506,16 @@ def test_the_device_id_is_published_before_the_cycle_can_send_anything(tmp_path,
     agent.main(_args(tmp_path, "--once"))
 
     assert seen and seen[0] is not None
+
+
+def test_status_is_not_recorded_when_the_generation_could_not_be_read(tmp_path) -> None:
+    from goals.sync_status import read_record
+
+    goals_db = tmp_path / "goals.db"
+    with GoalStore(goals_db):
+        pass
+
+    agent.record_status(goals_db, result="ok", problems=0, interval=300, expect_generation=None)
+
+    with GoalStore(goals_db) as store:
+        assert read_record(store) is None

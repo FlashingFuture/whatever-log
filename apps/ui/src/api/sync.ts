@@ -9,6 +9,9 @@ import type {
 
 // hub가 서버(Cloudflare)를 한 번 부르고 DB를 쓰므로, 로컬 조회보다 넉넉하게 기다린다.
 const SYNC_TIMEOUT_MS = 30_000;
+// 계정 삭제는 hub가 취소한 로그인이 끝나기를 최대 30초 기다린 뒤 서버를 부른다(그 호출도 최대 수십 초). 그 합보다 길게 기다려야
+// 삭제가 끝났는데 화면만 먼저 시간 초과로 끊기지 않는다.
+const DELETE_ACCOUNT_TIMEOUT_MS = 90_000;
 
 /** 로그인 직후 확인 창의 계획: 서버의 목표와 이 PC의 목표를 견준 항목들. 서버에 닿지 못하면 ApiError(503)다. */
 export function fetchSyncPlan(): Promise<SyncPlan> {
@@ -71,6 +74,6 @@ export function deleteAccount(
     "POST",
     "/api/account/delete",
     { email, session },
-    SYNC_TIMEOUT_MS,
+    DELETE_ACCOUNT_TIMEOUT_MS,
   );
 }

@@ -12,6 +12,7 @@ from collections.abc import Callable, Collection
 from pathlib import Path
 from typing import Any
 
+from goals.errors import StaleSyncError
 from hub.account_service import (
     AccountUnavailable,
     CloudPort,
@@ -153,26 +154,30 @@ class _CloudBackend:
             current = self._account.session()
             if current is None or current.token != token:
                 return False  # 이미 다른 세션이거나 로그아웃됐다
+            # 동기화 초기화를 세션 정리보다 먼저, 같은 잠금 안에서 한다: 세션을 지운 뒤에 초기화하면 그 사이 같은 이메일로 다시 로그인해
+            # 동기화를 켠 새 연결을 이 늦은 초기화가 지울 수 있다. 이 시점에는 아직 거부된 세션이 현재 세션이다.
+            reset = False
+            if goals_db is not None:
+                try:
+                    with _open_goals(goals_db) as store:
+                        if store.get_meta(META_DELETION_UNCERTAIN) == session_key(token):
+                            store.reset_sync()  # 표시도 함께 지워진다(세대가 올라가 에이전트의 낡은 쓰기도 거절된다)
+                            reset = True
+                except Exception:
+                    pass
             try:
                 self._account.sign_out()
             except self._cloud.StorageError:
                 pass
-        if goals_db is None:
-            return False
-        try:
-            with _open_goals(goals_db) as store:
-                if store.get_meta(META_DELETION_UNCERTAIN) == session_key(token):
-                    store.reset_sync()  # 표시도 함께 지워진다(세대가 올라가 에이전트의 낡은 쓰기도 거절된다)
-                    return True
-        except Exception:
-            pass
-        return False
+        return reset
 
     def _guard(self, action, goals_db: Path | None = None):
         """서버 호출의 실패를 사용자용 SyncProblem으로 바꾼다(토큰·응답 내용은 담지 않는다)."""
         cloud = self._cloud
         try:
             return action()
+        except StaleSyncError:
+            raise SyncProblem("그 사이 계정이 바뀌어서 적용하지 않았어요. 목표 동기화를 다시 열어 확인해 주세요.") from None
         except cloud.NotAuthorized:
             # 서버가 이 토큰을 받지 않는다(만료 전에 폐기됐거나 서버에서 계정이 지워짐). 이 PC에 남겨 두면 로그인 상태로
             # 보이는데 아무것도 되지 않으므로 지워서 로그인 버튼이 보이게 한다.
@@ -215,8 +220,10 @@ class _CloudBackend:
             if not self._same_login(email, key, confirmed_email, confirmed_session):
                 raise SyncProblem("로그인한 계정이 바뀌었어요. 목표 동기화를 다시 열어 확인해 주세요.")
             with _open_goals(goals_db) as store:
-                plan = goalsync.build_plan(store, api.list_goals(), email)
-                result = goalsync.apply_choices(store, api, plan, set(accepted))
+                # 서버를 부르기 전에 세대를 잡는다: 응답을 기다리는 사이 다른 계정으로 바뀌어 동기화가 초기화되면, 이 적용의 쓰기는 거절된다.
+                guarded = goalsync.guarded_store(store)
+                plan = goalsync.build_plan(guarded, api.list_goals(), email)
+                result = goalsync.apply_choices(guarded, api, plan, set(accepted))
             return {
                 "uploaded": result.uploaded,
                 "merged": result.merged,

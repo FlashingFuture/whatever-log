@@ -123,6 +123,11 @@ def record_status(
 
     expect_generation이 있으면 그 주기가 시작한 뒤 계정이 정리되었을 때 적지 않는다(낡은 주기의 성공이 새 계정의 상태로 남지 않게).
     """
+    if expect_generation is None:
+        # 주기를 시작할 때 세대를 읽지 못했다. 동기화는 계속하지만, 그 사이 계정이 정리됐는지 확인할 수 없으니 이번 주기의 상태는 적지 않는다
+        # (이전 계정의 결과가 새 계정의 상태로 남지 않게).
+        logger.info("동기화 세대를 읽지 못해 이번 주기의 상태는 기록하지 않았습니다.")
+        return
     try:
         with GoalStore(goals_db) as store:
             status.record(store, result=result, problems=problems, interval=interval, expect_generation=expect_generation)
@@ -133,7 +138,7 @@ def record_status(
 
 
 def current_generation(goals_db: Path) -> int | None:
-    """주기를 시작하기 전의 동기화 세대. 읽지 못하면 None(그러면 상태 기록은 세대 확인 없이 한다 — 상태는 알림일 뿐이다)."""
+    """주기를 시작하기 전의 동기화 세대. 읽지 못하면 None(그러면 이번 주기의 상태는 적지 않는다 — 계정이 정리됐는지 확인할 수 없다)."""
     try:
         with GoalStore(goals_db) as store:
             return store.generation()
