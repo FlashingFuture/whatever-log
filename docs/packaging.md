@@ -102,6 +102,10 @@ Actions가 태그와 `VERSION`이 같은지 확인하고(다르면 멈춘다), �
   이전 폴더의 프로그램이 떠 있을 수 있어서 `install`이 알려 준다 — 이전 폴더에서 `whatever-log stop`을 먼저 실행하고, 확인한 뒤 이전 폴더를 지운다.
 - **제거:** `uv run whatever-log uninstall`(데이터는 지우지 않는다). 데이터까지 지우려면 `%LOCALAPPDATA%\whatever.log` 폴더를 직접 지운다.
 
+### 시험
+
+번들을 깨끗한 윈도우에서 설치부터 제거까지 확인하는 체크리스트는 **[docs/release-testing.md](release-testing.md)**(Windows Sandbox 기준)다.
+
 ### 아직 없는 것
 
 - **실행 파일(.exe)·설치 마법사**: 파이썬을 통째로 묶어야 하고(pywebview·pythonnet·WebView2), 서명 없는 exe는 백신 오탐이 잦다. 지금은 uv가 파이썬 환경을 만든다.
