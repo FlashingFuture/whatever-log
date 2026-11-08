@@ -5,7 +5,7 @@ SVG를 그리는 데는 윈도우에 기본으로 있는 Edge(headless)를 쓰�
 
     uv run --with pillow python apps/desktop/tools/build_icon.py
 
-작은 크기(16~32px)에서는 책 쌓기가 뭉개지므로 책으로 만든 w만 굵게 그린 mark를, 48px 이상에서는 전체 아이콘(w + 쌓은 책)을 쓴다.
+작은 크기(16~32px)에서는 세부가 뭉개지므로 굵게 그린 mark를, 48px 이상에서는 전체 아이콘을 쓴다(둘 다 책으로 만든 w + 세워 둔 책 한 권).
 """
 
 import subprocess

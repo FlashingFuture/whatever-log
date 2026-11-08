@@ -1,27 +1,23 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="whatever.log">
 <rect width="256" height="256" rx="58" fill="#d4e4fb"/>
-<g transform="translate(44.0 128.0) rotate(75.5)">
-  <rect x="-53.8" y="-13.5" width="107.6" height="27.0" rx="4" fill="#2c6bd6"/>
-  <rect x="-36.6" y="-10.0" width="73.1" height="20.0" fill="#ffffff"/>
+<g transform="translate(45.0 133.0) rotate(73.6)">
+  <rect x="-51.2" y="-13.5" width="102.3" height="27.0" rx="4" fill="#2c6bd6"/>
+  <rect x="-34.8" y="-10.0" width="69.6" height="20.0" fill="#ffffff"/>
 </g>
-<g transform="translate(72.0 147.0) rotate(-68.2)">
-  <rect x="-35.7" y="-13.5" width="71.4" height="27.0" rx="4" fill="#1f55b8"/>
-  <rect x="-23.7" y="-10.0" width="47.4" height="20.0" fill="#ffffff"/>
+<g transform="translate(75.0 152.0) rotate(-64.9)">
+  <rect x="-33.3" y="-13.5" width="66.7" height="27.0" rx="4" fill="#1f55b8"/>
+  <rect x="-21.3" y="-10.0" width="42.7" height="20.0" fill="#ffffff"/>
 </g>
-<g transform="translate(100.0 147.0) rotate(68.2)">
-  <rect x="-35.7" y="-13.5" width="71.4" height="27.0" rx="4" fill="#3b7be0"/>
-  <rect x="-23.7" y="-10.0" width="47.4" height="20.0" fill="#ffffff"/>
+<g transform="translate(105.0 152.0) rotate(64.9)">
+  <rect x="-33.3" y="-13.5" width="66.7" height="27.0" rx="4" fill="#3b7be0"/>
+  <rect x="-21.3" y="-10.0" width="42.7" height="20.0" fill="#ffffff"/>
 </g>
-<g transform="translate(128.0 128.0) rotate(-75.5)">
-  <rect x="-53.8" y="-13.5" width="107.6" height="27.0" rx="4" fill="#2c6bd6"/>
-  <rect x="-36.6" y="-10.0" width="73.1" height="20.0" fill="#ffffff"/>
+<g transform="translate(139.0 128.0) rotate(-71.3)">
+  <rect x="-57.1" y="-13.5" width="114.3" height="27.0" rx="4" fill="#2c6bd6"/>
+  <rect x="-38.9" y="-10.0" width="77.7" height="20.0" fill="#ffffff"/>
 </g>
-<g transform="translate(206.0 164.0) rotate(0.0)">
-  <rect x="-38.0" y="-20.0" width="76.0" height="40.0" rx="7" fill="#1f55b8"/>
-  <rect x="-22.8" y="-14.8" width="45.6" height="29.6" fill="#ffffff"/>
-</g>
-<g transform="translate(208.0 121.0) rotate(0.0)">
-  <rect x="-35.0" y="-20.0" width="70.0" height="40.0" rx="7" fill="#2c6bd6"/>
-  <rect x="-21.0" y="-14.8" width="42.0" height="29.6" fill="#ffffff"/>
+<g transform="translate(188.0 124.0) rotate(90.0)">
+  <rect x="-75.0" y="-20.0" width="150.0" height="40.0" rx="7" fill="#1f55b8"/>
+  <rect x="-55.5" y="-14.8" width="111.0" height="29.6" fill="#ffffff"/>
 </g>
 </svg>

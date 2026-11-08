@@ -42,8 +42,8 @@ flowchart TD
 
 ## 아이콘
 
-- 원본은 `apps/desktop/src/desktop/assets/icon.svg`(전체)와 `icon-mark.svg`(작은 크기용)이다. **책으로 만든 `w`**(양 끝은 하드커버 색, 가운데는 흰 종이인 책 네 권)와 오른쪽에 **쌓은 책 두 권**이고, 책 색은 화면의 포인트색(`--color-active`)의 진한 쪽 파랑이다. 글꼴에 기대지 않고 도형으로 그린다.
-- `icon.ico`는 **크기별로 다른 그림**을 담는다: 16·24·32px은 mark(작은 크기에서 책 쌓기가 뭉개지므로, 책으로 만든 `w`만 굵게), 48px 이상은 전체 아이콘이다. 바꿀 때만
+- 원본은 `apps/desktop/src/desktop/assets/icon.svg`(전체)와 `icon-mark.svg`(작은 크기용)이다. **책으로 만든 `w`**(양 끝은 하드커버 색, 가운데는 흰 종이인 책 네 권)가 오른쪽 끝에 **세워 둔 책 한 권**(`l`)에 기대어 있어서 `wl`로도 읽힌다. 책 색은 화면의 포인트색(`--color-active`)의 진한 쪽 파랑이고, 글꼴에 기대지 않고 도형으로 그린다.
+- `icon.ico`는 **크기별로 다른 그림**을 담는다: 16·24·32px은 mark(작은 크기에서 세부가 뭉개지므로 더 굵게), 48px 이상은 전체 아이콘이다. 바꿀 때만
   `uv run --with pillow python apps/desktop/tools/build_icon.py`로 다시 만든다(윈도우의 Edge로 SVG를 그리고 Pillow로 묶는다).
 - 쓰이는 곳: 시작 메뉴·바탕화면 바로가기(`launcher.shortcuts`), 데스크톱 창의 제목 표시줄·작업표시줄(`desktop.window_icon`: AppUserModelID를 주고 `WM_SETICON`으로 아이콘을 붙인다), 화면의 favicon(`apps/ui/public/favicon.svg` = mark).
 
