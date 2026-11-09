@@ -20,7 +20,7 @@ META_STATUS = "sync_status"
 
 # 마지막 시도의 결과 종류. ok 외에는 "왜 안 됐는지"의 분류다.
 RESULT_OK = "ok"
-RESULT_SIGNED_OUT = "signed_out"  # 로그인되어 있지 않아 건너뜀(오류 아님)
+RESULT_SIGNED_OUT = "signed_out"  # 로그인되어 있지 않아 건너뜀
 RESULT_NOT_ENABLED = "not_enabled"  # 사용자가 아직 동기화를 켜지 않아 건너뜀(오류 아님)
 RESULT_ACCOUNT_CHANGED = "account_changed"  # 다른 계정이라 연결을 끊음(다시 확인이 필요하다)
 RESULT_UNREACHABLE = "unreachable"
@@ -30,6 +30,7 @@ RESULT_INTERNAL = "internal"
 
 # 오류로 보는 결과들(화면이 빨간 안내를 띄운다). 로그인 안 됨은 화면(hub)이 로그인되어 있는데 에이전트가 로그인 정보를 못 찾는다는 뜻이라
 # (자격 증명 저장소가 다르다 등) 이후 변경이 서버에 반영되지 않으므로 오류다 — 정상으로 두면 낡은 "동기화됨"이 계속 보인다.
+# 단, 그 기록이 로그인보다 앞서면 로그인 전 주기의 것이라 오류가 아니다(`describe`의 `pending`).
 ERROR_RESULTS = frozenset(
     {RESULT_UNREACHABLE, RESULT_NOT_AUTHORIZED, RESULT_SERVER_ERROR, RESULT_INTERNAL, RESULT_SIGNED_OUT}
 )
@@ -101,6 +102,7 @@ STATE_WAITING = "waiting"  # 켰지만 에이전트가 아직 한 번도 돌지 
 STATE_OK = "ok"
 STATE_ERROR = "error"
 STATE_STALE = "stale"  # 켰는데 에이전트가 한동안 돌지 않음
+STATE_PENDING = "pending"  # 방금 로그인해서 에이전트가 아직 로그인 뒤의 주기를 돌지 않음(다음 주기에 동기화된다)
 
 
 def _parse(stamp: str | None) -> datetime | None:
@@ -113,12 +115,18 @@ def _parse(stamp: str | None) -> datetime | None:
     return parsed if parsed.tzinfo is not None else None
 
 
-def describe(record_: StatusRecord | None, *, enabled: bool, now: datetime) -> dict[str, Any]:
+def describe(
+    record_: StatusRecord | None, *, enabled: bool, now: datetime, signed_in_since: datetime | None = None
+) -> dict[str, Any]:
     """화면에 줄 상태. state 하나로 그림을 정하고, 나머지는 설명에 쓴다. 이름·토큰은 없다.
 
     - 동기화를 켜지 않았으면 `off`(에이전트가 돌든 말든 상관없다).
     - 켰는데 기록이 없으면 `waiting`, 마지막 기록이 `interval`의 몇 배보다 오래됐으면 `stale`(에이전트가 꺼져 있다).
+    - 마지막 기록이 "로그인 안 됨"인데 그게 `signed_in_since`(화면 쪽이 지금 로그인을 알게 된 시각)보다 앞서면 `pending` —
+      로그인 전의 주기가 남긴 것이라 오류가 아니다. 에이전트는 주기마다 돌므로 다음 주기에 동기화된다.
     - 마지막 시도가 오류면 `error`(`result`가 종류), 아니면 `ok`(건너뜀 결과도 오류는 아니다).
+
+    `interval_seconds`는 에이전트의 주기라 화면이 "몇 분마다 동기화돼요"를 알릴 수 있다.
     """
     base: dict[str, Any] = {
         "enabled": enabled,
@@ -127,6 +135,7 @@ def describe(record_: StatusRecord | None, *, enabled: bool, now: datetime) -> d
         "last_attempt_at": None,
         "last_success_at": None,
         "problems": 0,
+        "interval_seconds": None,
     }
     if not enabled:
         return base
@@ -137,9 +146,12 @@ def describe(record_: StatusRecord | None, *, enabled: bool, now: datetime) -> d
         last_attempt_at=record_.at,
         last_success_at=record_.last_success_at,
         problems=record_.problems,
+        interval_seconds=record_.interval,
     )
     attempted = _parse(record_.at)
     limit = max(MIN_STALE_SECONDS, record_.interval * STALE_AFTER_INTERVALS)
     if attempted is None or (now - attempted).total_seconds() > limit:
         return {**base, "state": STATE_STALE}
+    if record_.result == RESULT_SIGNED_OUT and signed_in_since is not None and attempted < signed_in_since:
+        return {**base, "state": STATE_PENDING}
     return {**base, "state": STATE_ERROR if record_.result in ERROR_RESULTS else STATE_OK}
