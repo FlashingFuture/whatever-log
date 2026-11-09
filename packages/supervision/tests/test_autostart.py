@@ -11,6 +11,15 @@ def test_module_command_runs_the_module_with_pythonw() -> None:
     assert parsed[0].endswith("pythonw.exe") and parsed[1:] == ["-m", "sync_agent.supervisor", "--interval", "300"]
 
 
+def test_pythonw_is_next_to_the_running_virtualenv_python(monkeypatch, tmp_path) -> None:
+    """자동 시작은 지금 가상환경의 pythonw.exe로 띄운다 — 다른 폴더의 파이썬을 등록하면 그 환경의 패키지로 뜬다."""
+    scripts = tmp_path / ".venv" / "Scripts"
+    monkeypatch.setattr(autostart.sys, "executable", str(scripts / "python.exe"))
+
+    assert autostart.pythonw_path() == scripts / "pythonw.exe"
+    assert _split_windows_command_line(autostart.module_command("recorder.supervisor"))[0] == str(scripts / "pythonw.exe")
+
+
 def test_arguments_with_spaces_and_quotes_stay_single_arguments() -> None:
     """공백이 든 경로를 그냥 이어 붙이면 인자가 둘로 쪼개져 자동 시작 때 인자 오류로 죽는다."""
     command = autostart.module_command("recorder.supervisor", "--db-path", r"C:\My Logs\state.db", 'a"b')

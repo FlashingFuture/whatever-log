@@ -17,6 +17,14 @@ from supervision.autostart import pythonw_path
 
 from launcher.components import REPO_ROOT
 
+
+def powershell_path() -> str:
+    """Windows PowerShell의 전체 경로. 이름만 주면 Windows가 현재 폴더·PATH에서도 찾으므로, 거기 놓인 다른 powershell.exe가
+    대신 실행될 수 있다 — 시스템 폴더의 것만 쓴다."""
+    root = os.environ.get("SystemRoot") or r"C:\Windows"
+    return str(Path(root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
+
+
 SHORTCUT_NAME = "whatever.log.lnk"
 
 _SCRIPT = (
@@ -74,7 +82,7 @@ def create(directory: Path) -> Path:
         "WL_CWD": str(REPO_ROOT),
         "WL_ICON": f"{ICON_PATH},0",
     }
-    subprocess.run(["powershell", "-NoProfile", "-Command", _SCRIPT], env=env, check=True, capture_output=True)
+    subprocess.run([powershell_path(), "-NoProfile", "-Command", _SCRIPT], env=env, check=True, capture_output=True)
     return link
 
 
@@ -88,7 +96,7 @@ _READ_SCRIPT = (
 def working_directory(link: Path) -> Path | None:
     """바로가기가 가리키는 작업 폴더(어느 설치본의 바로가기인지 알아보는 데 쓴다). 읽지 못하면 None."""
     result = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", _READ_SCRIPT],
+        [powershell_path(), "-NoProfile", "-Command", _READ_SCRIPT],
         env={**os.environ, "WL_LINK": str(link)},
         capture_output=True,
         encoding="utf-8",

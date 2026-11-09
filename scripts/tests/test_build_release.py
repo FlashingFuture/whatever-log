@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import re
 import zipfile
 from pathlib import Path
 
@@ -85,10 +86,16 @@ def test_the_pinned_python_matches_what_ci_and_the_release_build_use() -> None:
     pinned = (root / ".python-version").read_text(encoding="utf-8").strip()
     workflows = root / ".github" / "workflows"
 
+    installed = {}
     for workflow in sorted(workflows.glob("*.yml")):
-        text = workflow.read_text(encoding="utf-8")
-        if "uv python install" in text:
-            assert f"uv python install {pinned}" in text, workflow.name
+        versions = re.findall(r"uv python install (\S+)", workflow.read_text(encoding="utf-8"))
+        if versions:
+            installed[workflow.name] = versions
+
+    assert installed  # 워크플로가 파이썬을 설치하는 방식이 바뀌면 이 검사도 바꿔야 한다
+    for name, versions in installed.items():
+        assert versions == [pinned] * len(versions), name  # 3.14.1과 3.14.10처럼 앞부분만 같은 것도 다르다고 본다
+
 
 
 # --- 번들 내용 ---

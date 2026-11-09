@@ -657,3 +657,13 @@ def test_install_is_quiet_when_the_registration_is_already_this_folders() -> Non
         commands.install(lines.append)
 
     assert not any("다른 폴더의 설치" in line for line in lines)
+
+
+def test_powershell_is_run_from_the_system_folder_not_found_by_name(monkeypatch) -> None:
+    """이름만 주면 현재 폴더·PATH의 다른 powershell.exe가 대신 실행될 수 있다."""
+    assert Path(shortcuts.powershell_path()).is_file()
+
+    monkeypatch.setenv("SystemRoot", r"D:\Win")
+    assert shortcuts.powershell_path() == r"D:\Win\System32\WindowsPowerShell\v1.0\powershell.exe"
+    monkeypatch.delenv("SystemRoot")
+    assert shortcuts.powershell_path() == r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
