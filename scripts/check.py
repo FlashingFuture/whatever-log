@@ -16,6 +16,7 @@
 """
 
 import argparse
+import re
 import shutil
 import subprocess
 import sys
@@ -31,6 +32,8 @@ NODE_EVERYTHING = ("package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "bio
 
 # 로컬 기능이 cloud를 import하지 않는지 모든 앱·패키지의 pyproject.toml과 소스를 읽어 검사한다 — 파이썬 프로젝트가 바뀌면 늘 돌린다
 ISOLATION_TEST = "packages/cloud/tests/test_isolation.py"
+# 이 선택기의 시험: 실제 워크스페이스의 의존 관계를 읽어 검사한다 — 멤버의 pyproject.toml이 바뀌면 함께 돌린다
+SELECTOR_TEST = "scripts/tests/test_check.py"
 
 # 바뀐 경로(앞부분) → 그것을 직접 읽어 검사하는 테스트
 CROSS_CHECKS = {
@@ -67,11 +70,16 @@ def python_projects(root: Path = ROOT) -> dict[str, tuple[str, set[str]]]:
     projects = {}
     for member in workspace["tool"]["uv"]["workspace"]["members"]:
         project = tomllib.loads((root / member / "pyproject.toml").read_text(encoding="utf-8"))["project"]
-        names = {_requirement_name(requirement) for requirement in project.get("dependencies", [])}
-        projects[project["name"]] = (member, names)
+        names = {_normalize(_requirement_name(requirement)) for requirement in project.get("dependencies", [])}
+        projects[_normalize(project["name"])] = (member, names)
     for name, (member, names) in projects.items():
         projects[name] = (member, names & projects.keys())
     return projects
+
+
+def _normalize(name: str) -> str:
+    """패키지 이름을 PEP 503 규칙으로 맞춘다(`Common`·`my_pkg`·`my.pkg`를 같은 이름으로) — 안 맞추면 의존 관계가 누락되어 테스트가 빠진다."""
+    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def _requirement_name(requirement: str) -> str:
@@ -98,6 +106,8 @@ def plan(changed: list[str], root: Path = ROOT, *, everything: bool = False) -> 
         return Plan(lint=[], pytest=["."], node=list(NODE_CHECKS))
 
     result = Plan(lint=[path for path in changed if (root / path).is_file()] or None)
+    if "biome.json" in changed:
+        result.lint = []  # 규칙이 바뀌면 건드리지 않은 파일도 새 규칙에 걸릴 수 있다 — 저장소 전체를 검사한다
 
     projects = python_projects(root)
     members = {member for member, _ in projects.values()}
@@ -111,6 +121,9 @@ def plan(changed: list[str], root: Path = ROOT, *, everything: bool = False) -> 
         for prefix, extra in CROSS_CHECKS.items():
             if any(path == prefix or path.startswith(prefix) for path in changed):
                 tests.update(extra)
+        if any(path == member + "/pyproject.toml" for member in members for path in changed):
+            # 멤버의 의존성이 바뀌면 이 선택기가 쓰는 의존 관계도 바뀐다 — 선택기 자신의 시험(실제 워크스페이스를 읽는 것)도 돌린다
+            tests.add(SELECTOR_TEST)
         result.pytest = sorted(path for path in tests if (root / path).exists())
 
     if any(path in NODE_EVERYTHING for path in changed):
@@ -124,11 +137,15 @@ def changed_files(base: str, root: Path = ROOT) -> list[str]:
     """`base`에서 갈라진 뒤 바뀐 파일 — 커밋한 것, 아직 커밋 안 한 것, git이 모르는 새 파일까지."""
 
     def git(*args: str) -> list[str]:
-        output = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, encoding="utf-8", check=True)
-        return [line for line in output.stdout.splitlines() if line]
+        # -z: 경로를 NUL로 구분해 받는다. 기본 출력은 한글 같은 비ASCII 경로를 따옴표와 8진수 이스케이프("\354...")로 바꿔서,
+        # 그 파일이 실제로는 없는 경로로 읽혀 검사에서 빠진다.
+        output = subprocess.run(["git", *args, "-z"], cwd=root, capture_output=True, text=True, encoding="utf-8", check=True)
+        return [path for path in output.stdout.split("\0") if path]
 
-    since_base = git("diff", "--name-only", f"{base}...HEAD")
-    uncommitted = git("diff", "--name-only", "HEAD")
+    # --no-renames: 옮긴 파일을 "새 경로 하나"로 합쳐 보여 주지 않고 이전 경로(삭제)와 새 경로(추가)를 둘 다 알려 준다 —
+    # 이전 경로에 있던 코드의 테스트도 돌아야 한다
+    since_base = git("diff", "--no-renames", "--name-only", f"{base}...HEAD")
+    uncommitted = git("diff", "--no-renames", "--name-only", "HEAD")
     untracked = git("ls-files", "--others", "--exclude-standard")
     return sorted(set(since_base) | set(uncommitted) | set(untracked))
 
@@ -142,7 +159,7 @@ def commands(planned: Plan, *, only: str | None = None) -> list[tuple[str, list[
         steps.append(
             (
                 "Biome",
-                [corepack, "pnpm", "exec", "biome", "check", "--no-errors-on-unmatched", "--files-ignore-unknown=true", *targets],
+                [corepack, "pnpm", "exec", "biome", "check", "--no-errors-on-unmatched", "--files-ignore-unknown=true", "--", *targets],
             )
         )
     if only != "node" and planned.pytest:
@@ -177,7 +194,13 @@ def main(argv: list[str] | None = None) -> int:
     for label, command in steps:
         program = Path(command[0]).stem
         print(f"\n== {label}: {program} {' '.join(command[1:])}", flush=True)
-        if not args.dry_run and subprocess.run(command, cwd=ROOT).returncode != 0:
+        if args.dry_run:
+            continue
+        try:
+            if subprocess.run(command, cwd=ROOT).returncode != 0:
+                failed.append(label)
+        except OSError as error:  # 실행 파일이 없거나 실행할 수 없다 — 이것도 실패로 기록하고 나머지 검사는 계속한다
+            print(f"실행하지 못했어요: {error}", file=sys.stderr)
             failed.append(label)
 
     if args.dry_run:

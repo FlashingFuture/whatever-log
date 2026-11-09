@@ -27,6 +27,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # base 브랜치와 비교해 바뀐 파일을 찾는다
+          persist-credentials: false # PR의 테스트 코드가 토큰을 읽지 못하게(이후 git 명령은 로컬 기록만 읽는다)
 
       - uses: astral-sh/setup-uv@v10.3.0
 
@@ -46,6 +47,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-node@v7
         with:

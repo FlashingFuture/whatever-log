@@ -1,3 +1,4 @@
+import threading
 import urllib.request
 
 import pytest
@@ -20,6 +21,10 @@ def _handler_uses_temp_dbs(tmp_path, monkeypatch):
     monkeypatch.setattr(_Handler, "db_path", data / "recorder.db")
     monkeypatch.setattr(_Handler, "goals_db_path", data / "goals.db")
     monkeypatch.setattr(_Handler, "sync_db_path", data / "sync.db")
+    yield
+    # 이 아래는 monkeypatch가 경로를 되돌리기 **전에** 돈다(monkeypatch를 받은 픽스처라서). 요청을 처리 중인 작업자가 남아 있으면, 경로가
+    # 되돌려진 뒤에 그 요청이 진짜 개발용 DB(apps/hub/goals.db 등)를 열 수 있다 — 서버를 닫는 server_close()는 데몬 작업자를 기다리지 않는다.
+    _wait_for_request_workers()
 
 
 @pytest.fixture
@@ -30,3 +35,21 @@ def ui_request():
         return urllib.request.Request(url, headers={"Referer": UI_REFERER, **headers})
 
     return make
+
+
+#: ThreadingHTTPServer가 요청마다 띄우는 작업자 스레드의 이름 꼬리(`Thread-7 (process_request_thread)`)
+_WORKER_NAME_SUFFIX = "(process_request_thread)"
+_WORKER_WAIT_SECONDS = 10.0
+
+
+def _wait_for_request_workers() -> None:
+    """이 테스트가 띄운 hub 요청 작업자가 모두 끝나기를 기다린다. 끝나지 않으면 테스트를 실패시킨다(다음 테스트나 개발용 DB를 건드릴 수 있다)."""
+    stuck = []
+    for thread in threading.enumerate():
+        if thread is threading.current_thread() or not thread.name.endswith(_WORKER_NAME_SUFFIX):
+            continue
+        thread.join(timeout=_WORKER_WAIT_SECONDS)
+        if thread.is_alive():
+            stuck.append(thread.name)
+    if stuck:
+        pytest.fail(f"요청 작업자가 {_WORKER_WAIT_SECONDS:.0f}초 안에 끝나지 않았어요: {stuck}")
