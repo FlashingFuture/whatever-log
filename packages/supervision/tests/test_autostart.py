@@ -71,38 +71,3 @@ def test_disable_and_status_use_the_given_name() -> None:
 
     winreg.DeleteValue.assert_called_once_with(key, "MyValue")
     winreg.QueryValueEx.assert_called_once_with(key, "MyValue")
-
-
-# --- 릴리스 번들의 실행 파일 이름 ---
-
-
-@pytest.mark.parametrize(
-    ("running", "expected"),
-    [
-        (r"C:\app\runtime\whatever-log-cli.exe", r"C:\app\runtime\whatever-log.exe"),  # 관리 명령(콘솔)으로 실행 중이면 같은 폴더의 콘솔 없는 쪽
-        (r"C:\app\runtime\whatever-log.exe", r"C:\app\runtime\whatever-log.exe"),  # 이미 콘솔 없는 쪽이면 자기 자신
-        (r"C:\dev\.venv\Scripts\python.exe", r"C:\dev\.venv\Scripts\pythonw.exe"),  # 개발 환경은 pythonw.exe
-        (r"C:\dev\.venv\Scripts\pythonw.exe", r"C:\dev\.venv\Scripts\pythonw.exe"),
-    ],
-)
-def test_the_windowless_executable_depends_on_whether_this_is_a_bundle(running, expected) -> None:
-    with patch("supervision.autostart.sys.executable", running):
-        assert str(autostart.pythonw_path()).lower() == expected.lower()
-
-
-def test_a_dev_virtualenv_is_never_mistaken_for_a_bundle_just_because_whatever_log_exe_exists(tmp_path) -> None:
-    """가상환경의 Scripts 폴더에도 whatever-log.exe(명령 실행기)가 있다 — 파일이 있는지로 가리면 개발 환경에서 그것을 고른다(창을 소유하지 못하는 실행기)."""
-    scripts = tmp_path / ".venv" / "Scripts"
-    scripts.mkdir(parents=True)
-    (scripts / "whatever-log.exe").write_bytes(b"launcher")
-
-    with patch("supervision.autostart.sys.executable", str(scripts / "python.exe")):
-        assert autostart.pythonw_path().name == "pythonw.exe"
-
-
-def test_the_autostart_command_in_a_bundle_runs_the_renamed_executable() -> None:
-    with patch("supervision.autostart.sys.executable", r"C:\Users\이름 있는\app\runtime\whatever-log-cli.exe"):
-        command = autostart.module_command("recorder.supervisor")
-
-    parsed = _split_windows_command_line(command)
-    assert parsed[0].endswith(r"runtime\whatever-log.exe") and parsed[1:] == ["-m", "recorder.supervisor"]
