@@ -67,6 +67,7 @@ def test_a_recent_success_is_ok_and_a_recent_failure_is_an_error(store) -> None:
         "last_attempt_at": NOW.isoformat(),
         "last_success_at": NOW.isoformat(),
         "problems": 1,
+        "interval_seconds": 300.0,
     }
 
     for result in (st.RESULT_UNREACHABLE, st.RESULT_NOT_AUTHORIZED, st.RESULT_SERVER_ERROR, st.RESULT_INTERNAL):
@@ -84,6 +85,26 @@ def test_skips_the_user_chose_are_not_errors_but_a_missing_login_is(store) -> No
     # 화면은 로그인되어 있는데 에이전트가 로그인 정보를 못 찾는다 — 이후 변경이 반영되지 않으니 낡은 "동기화됨"으로 두지 않는다.
     signed_out = record(store, result=st.RESULT_SIGNED_OUT, problems=0, interval=300, now=NOW)
     assert describe(signed_out, enabled=True, now=NOW)["state"] == "error"
+
+
+def test_a_missing_login_from_before_the_sign_in_is_pending_not_an_error(store) -> None:
+    """로그인 직후에는 에이전트의 마지막 기록이 아직 로그인 전 주기의 "로그인 안 됨"이다 — 다음 주기에 동기화되니 오류가 아니다."""
+    signed_out = record(store, result=st.RESULT_SIGNED_OUT, problems=0, interval=300, now=NOW)
+
+    before = describe(signed_out, enabled=True, now=NOW + timedelta(minutes=1), signed_in_since=NOW + timedelta(seconds=30))
+    after = describe(signed_out, enabled=True, now=NOW + timedelta(minutes=1), signed_in_since=NOW - timedelta(seconds=30))
+
+    assert (before["state"], before["interval_seconds"]) == ("pending", 300.0)
+    assert after["state"] == "error"  # 로그인한 뒤의 주기도 로그인 정보를 못 찾았다
+
+
+def test_pending_only_softens_a_missing_login(store) -> None:
+    failed = record(store, result=st.RESULT_UNREACHABLE, problems=0, interval=300, now=NOW)
+    assert describe(failed, enabled=True, now=NOW, signed_in_since=NOW + timedelta(seconds=1))["state"] == "error"
+
+    signed_out = record(store, result=st.RESULT_SIGNED_OUT, problems=0, interval=300, now=NOW)
+    later = NOW + timedelta(hours=1)
+    assert describe(signed_out, enabled=True, now=later, signed_in_since=later)["state"] == "stale"  # 에이전트가 돌지 않으면 기다려도 안 된다
 
 
 def test_an_old_record_means_the_agent_is_not_running(store) -> None:

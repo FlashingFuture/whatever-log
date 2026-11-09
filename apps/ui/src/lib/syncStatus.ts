@@ -2,11 +2,12 @@
 
 export interface StatusLike {
   enabled: boolean;
-  state: "off" | "waiting" | "ok" | "error" | "stale";
+  state: "off" | "waiting" | "pending" | "ok" | "error" | "stale";
   result: string | null;
   last_attempt_at: string | null;
   last_success_at: string | null;
   problems: number;
+  interval_seconds: number | null;
 }
 
 /** 칩의 톤: neutral(회색), good(정상), warn(주의), bad(오류). 색에만 기대지 않도록 글자도 항상 함께 보여 준다. */
@@ -46,16 +47,28 @@ export function relativeTime(stamp: string | null, now: Date): string | null {
   return `${Math.floor(hours / 24)}일 전`;
 }
 
+/** 에이전트의 주기를 "5분마다"처럼. 모르면 "주기마다". */
+export function everyText(seconds: number | null): string {
+  if (seconds === null || !Number.isFinite(seconds) || seconds <= 0) {
+    return "주기마다";
+  }
+  if (seconds < 60) {
+    return `${Math.round(seconds)}초마다`;
+  }
+  return `${Math.round(seconds / 60)}분마다`;
+}
+
 /** 오류 종류를 사용자가 할 일이 보이는 문장으로. 모르는 종류는 일반 문장으로 둔다. */
-function errorDetail(result: string | null): string {
+function errorDetail(result: string | null, every: string): string {
   switch (result) {
     case "unreachable":
       return "서버에 연결하지 못했어요. 인터넷 연결을 확인해 주세요. 연결되면 자동으로 이어서 동기화해요.";
     case "not_authorized":
       return "로그인이 만료됐어요. 로그아웃한 뒤 다시 로그인해 주세요.";
     case "signed_out":
-      // 화면은 로그인되어 있는데 동기화 에이전트가 로그인 정보를 찾지 못했다 — 에이전트가 다른 저장소를 보고 있을 수 있다.
-      return "동기화 에이전트가 로그인 정보를 찾지 못했어요. 이 PC의 목표 변경과 달성 시간이 서버에 반영되지 않고 있어요. 에이전트를 같은 계정의 자격 증명(Windows 자격 증명 관리자)으로 실행했는지 확인하거나, 로그아웃한 뒤 다시 로그인해 주세요.";
+      // 로그인한 뒤의 주기에서도 에이전트가 로그인 정보를 찾지 못했다(로그인 전 주기의 기록이면 hub가 pending으로 준다).
+      // 한 번은 순간적인 문제일 수 있어 다시 시도한다는 것을 먼저 알리고, 계속될 때 할 일을 그다음에 적는다.
+      return `아직 동기화되지 않았어요. 동기화 에이전트가 로그인 정보를 찾지 못해 이 PC의 목표 변경과 달성 시간이 서버에 반영되지 않았어요. 에이전트는 ${every} 다시 시도해요. 계속 이 안내가 보이면 에이전트가 Windows 자격 증명 관리자에서 로그인 정보를 읽지 못하는 것일 수 있어요 — 로그아웃한 뒤 다시 로그인해 주세요.`;
     case "server_error":
       return "서버가 요청을 처리하지 못했어요. 잠시 뒤 자동으로 다시 시도해요.";
     default:
@@ -67,6 +80,7 @@ function errorDetail(result: string | null): string {
  * 상태를 칩 하나로. 켜지 않았으면 null(칩을 그리지 않는다 — 동기화를 안 쓰는 사람에게 상태를 들이밀지 않는다).
  * - ok: "동기화됨 · 5분 전"(올리지 못한 항목이 있으면 주의)
  * - waiting: 켰지만 에이전트가 아직 한 번도 안 돌았다 → 에이전트를 실행해야 한다
+ * - pending: 방금 로그인했다 → 에이전트의 다음 주기에 동기화된다(오류가 아니다)
  * - stale: 에이전트가 한동안 돌지 않았다 → 마지막 성공 시각과 함께 알린다
  * - error: 마지막 시도가 실패 → 종류별 안내
  */
@@ -76,7 +90,14 @@ export function chipFor(status: StatusLike, now: Date): Chip | null {
   }
   const lastSuccess = relativeTime(status.last_success_at, now);
   const since = lastSuccess ? ` 마지막으로 동기화된 때: ${lastSuccess}.` : "";
+  const every = everyText(status.interval_seconds);
   switch (status.state) {
+    case "pending":
+      return {
+        label: "곧 동기화돼요",
+        detail: `아직 동기화되지 않았어요. 동기화 에이전트는 ${every} 서버와 맞춰서, 로그인 직후에는 다음 차례까지 기다려요. 그때 자동으로 동기화돼요.`,
+        tone: "neutral",
+      };
     case "waiting":
       return {
         label: "동기화 대기 중",
@@ -93,7 +114,7 @@ export function chipFor(status: StatusLike, now: Date): Chip | null {
     case "error":
       return {
         label: "동기화 오류",
-        detail: `${errorDetail(status.result)}${since}`,
+        detail: `${errorDetail(status.result, every)}${since}`,
         tone: "bad",
       };
     case "ok": {

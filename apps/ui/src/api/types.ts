@@ -200,18 +200,21 @@ export interface SyncResult {
 }
 
 /**
- * 동기화가 잘 되고 있는지(`GET /api/sync/status`). off(켜지 않음) / waiting(켰지만 에이전트가 아직 한 번도 안 돎) / ok / error(마지막
- * 시도가 실패, result가 종류) / stale(에이전트가 한동안 돌지 않음). 목표 이름·프로세스는 없다 — 개수와 종류와 시각뿐이다.
+ * 동기화가 잘 되고 있는지(`GET /api/sync/status`). off(켜지 않음) / waiting(켰지만 에이전트가 아직 한 번도 안 돎) / pending(방금
+ * 로그인해서 에이전트의 다음 주기를 기다림) / ok / error(마지막 시도가 실패, result가 종류) / stale(에이전트가 한동안 돌지 않음).
+ * 목표 이름·프로세스는 없다 — 개수와 종류와 시각뿐이다.
  */
 export interface SyncStatus {
   enabled: boolean;
-  state: "off" | "waiting" | "ok" | "error" | "stale";
+  state: "off" | "waiting" | "pending" | "ok" | "error" | "stale";
   /** 마지막 시도의 결과 종류(ok, signed_out, not_enabled, account_changed, unreachable, not_authorized, server_error, internal). */
   result: string | null;
   last_attempt_at: string | null;
   last_success_at: string | null;
   /** 이번 주기에 올리지 못한 항목 수. */
   problems: number;
+  /** 에이전트가 몇 초마다 동기화하는지. 기록이 없으면 null. */
+  interval_seconds: number | null;
 }
 
 /** 달성도를 보낸 기기 하나. 이름은 없다 — 무작위 기기 ID와 마지막으로 보낸 시각, 서버에 있는 줄 수뿐이다. */

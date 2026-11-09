@@ -433,6 +433,21 @@ def test_the_sync_status_reports_waiting_ok_error_and_a_silent_agent(sync_server
     assert call(port, "GET", "/api/sync/status")[1]["state"] == "stale"
 
 
+def test_a_missing_login_recorded_before_hub_knew_of_the_login_is_pending(sync_server) -> None:
+    """hub가 로그인을 알게 된 때(로그인을 마친 때, 아니면 hub가 뜬 때)보다 앞선 "로그인 안 됨"은 로그인 전 주기의 기록이다."""
+    from datetime import UTC, datetime, timedelta
+
+    port, goals_db, _ = sync_server
+    with GoalStore(goals_db) as store:
+        store.set_meta(META_SYNC_ENABLED, "1")
+
+    _record(goals_db, result="signed_out", problems=0, interval=300, now=datetime.now(UTC) - timedelta(minutes=2))
+    assert call(port, "GET", "/api/sync/status")[1]["state"] == "pending"
+
+    _record(goals_db, result="signed_out", problems=0, interval=300, now=datetime.now(UTC) + timedelta(seconds=1))
+    assert call(port, "GET", "/api/sync/status")[1]["state"] == "error"
+
+
 def test_the_sync_status_needs_no_login_and_never_calls_the_server(sync_server) -> None:
     port, goals_db, backend = sync_server
     backend.items.clear()
@@ -449,7 +464,7 @@ def test_the_sync_status_has_only_counts_kinds_and_times(sync_server) -> None:
 
     body = call(port, "GET", "/api/sync/status")[1]
 
-    assert set(body) == {"enabled", "state", "result", "last_attempt_at", "last_success_at", "problems"}
+    assert set(body) == {"enabled", "state", "result", "last_attempt_at", "last_success_at", "problems", "interval_seconds"}
 
 
 def test_the_sync_status_is_readable_even_without_the_account_feature(sync_server) -> None:
