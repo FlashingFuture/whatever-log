@@ -56,17 +56,41 @@ flowchart TD
 
 ## 릴리스 번들 (사용자용 배포)
 
-저장소를 통째로 받지 않고, 사용자 PC에 필요한 것만 담은 zip을 배포한다. **설치 과정은 똑같다** — 같은 `whatever-log install`을 쓰고, 달라지는 건 내용물이다.
+저장소를 통째로 받지 않고, 사용자 PC에 필요한 것만 **파이썬까지 담은** zip을 배포한다. 설치 명령은 같은 `whatever-log install`이고, 달라지는 건 내용물과 실행 파일이다.
 
 | | 저장소를 clone해서 쓸 때(개발) | 릴리스 번들(사용자) |
 | --- | --- | --- |
-| 받는 것 | 저장소 전체(서버·테스트·문서 포함) | 앱·패키지 소스 + **미리 빌드한 화면** |
-| 필요한 것 | uv, Node.js | **uv만**(Node 불필요) |
-| 설치 | `uv sync` → `uv run whatever-log install` | **`install.cmd`**(위 두 단계를 대신 한다) |
+| 받는 것 | 저장소 전체(서버·테스트·문서 포함) | 앱·패키지 소스 + **미리 빌드한 화면** + **파이썬 런타임** |
+| 필요한 것 | uv, Node.js | **없음**(uv·파이썬·Node 모두 불필요) |
+| 설치 | `uv sync` → `uv run whatever-log install` | **`install.cmd`**(번들 안의 파이썬으로 `whatever-log install`을 실행) |
+| 앱 창을 소유하는 프로세스 | `pythonw.exe` | **`whatever-log.exe`**(이름을 바꾼 pythonw) |
+| 관리 명령 | `uv run whatever-log status` | `whatever-log.cmd status` |
 | 데이터·로그 위치 | 앱 폴더 안(`apps/recorder/recorder.db` 등) | **`%LOCALAPPDATA%\whatever.log`** |
 
-번들에 **들어가지 않는 것**: 서버(`apps/server`, Cloudflare는 사용자 PC에서 쓰지 않는다), 화면 소스와 Node 의존성, 테스트, 문서, Docker 파일.
-파이썬 환경(`.venv`)은 번들에 넣지 않고 설치할 때 `uv sync --frozen`(= `uv.lock` 그대로)으로 만든다 — 가상환경은 경로가 박혀 있어서 옮길 수 없기 때문이다.
+번들에 **들어가지 않는 것**: 서버(`apps/server`, Cloudflare는 사용자 PC에서 쓰지 않는다), 화면 소스와 Node 의존성, 테스트, 문서, Docker 파일, uv.
+
+### 번들 구조와 파이썬 런타임
+
+```
+whatever-log-<버전>/
+  install.cmd  whatever-log.cmd  release.json  VERSION  LICENSE  README.md
+  runtime/                 파이썬 임베더블 배포판(python.org) + 의존성(Lib/site-packages)
+    whatever-log.exe       pythonw.exe의 복사본(콘솔 없음) — 앱 창·기록기·hub가 이 이름으로 뜬다
+    whatever-log-cli.exe   python.exe의 복사본(콘솔 있음) — 관리 명령(install 등)
+    python314._pth         앱·패키지 소스 폴더를 모듈 검색 경로에 넣는다(runtime 기준 상대 경로)
+  apps/<앱>/src  packages/<패키지>/src   개발 저장소와 같은 모양이라 경로 규칙(common.paths 등)이 그대로 맞는다
+  apps/ui/dist
+```
+
+- **왜 실행 파일 이름을 바꾸나:** recorder는 "창을 가진 프로세스의 실행 파일 이름"을 기록한다. 앱 창은 파이썬이 소유하므로 이름이 `pythonw.exe`면 사용자의 다른 파이썬 프로그램과 구분되지 않고
+  작업 관리자에도 Python으로 보인다. 이름을 바꾼 복사본이라 **Python 재단의 서명이 그대로 유지된다**(내용을 건드리지 않는다). 아이콘은 exe에 넣지 않고 창에 `WM_SETICON`으로 붙인다(넣으면 서명이 깨진다).
+- 원래 이름(`python.exe`·`pythonw.exe`)은 번들에 남기지 않는다 — 어느 쪽으로 실행했는지에 따라 기록되는 이름이 갈리지 않게 하려는 것이다.
+- **의존성**은 빌드할 때 `uv.lock` 그대로(`uv export` → `uv pip install --target`, 대상은 Windows·번들의 파이썬 버전) 설치해 넣는다. 사용자 PC에서는 아무것도 내려받지 않는다.
+- **파이썬 버전**은 `.mise.toml`의 `python`(정확한 패치 버전) 한 곳에서 온다. 임베더블 zip은 python.org에서 받고 **SHA-256을 `scripts/build_release.py`에 박아 두고 확인한다**(다르면 빌드가 멈춘다). 버전을 올릴 때는 해시도 같이 바꾼다 — 안 바꾸면 빌드가 해시가 없다고 멈춘다(테스트가 확인한다).
+- `_pth` 파일이 있으면 임베더블 파이썬은 환경변수와 현재 작업 폴더를 모듈 검색에서 무시한다 — 작업 폴더에 놓인 파일이 import되는 일이 없다.
+- 코드 쪽: `supervision.autostart.pythonw_path()`가 "콘솔 없는 실행 파일"을 정한다. 지금 실행 중인 파이썬의 파일 이름이 `whatever-log(-cli).exe`면 번들이라서 같은 폴더의 `whatever-log.exe`를, 아니면 `pythonw.exe`를 쓴다
+  (가상환경의 `Scripts`에도 `whatever-log.exe`(명령 실행기)가 있어서 "파일이 있는지"로 가리면 개발 환경에서 잘못 고른다).
+- 번들은 약 15MB(압축 후)이고 풀면 약 30MB다.
 
 ### 데이터 위치 (`common.paths`)
 
@@ -101,13 +125,14 @@ Actions가 태그와 `VERSION`이 같은지 확인하고(다르면 멈춘다), �
 
 ### 사용자가 설치·업데이트하는 법
 
-- **설치:** zip을 풀고 `install.cmd`를 실행한다(uv가 없으면 설치 명령을 안내한다). 그 폴더가 앱의 자리가 되므로 **옮기지 않을 곳**에 푼다.
+- **설치:** zip을 풀고 `install.cmd`를 실행한다(uv·파이썬은 필요 없다). 그 폴더가 앱의 자리가 되므로 **옮기지 않을 곳**에 푼다.
 - **업데이트:** 새 zip을 **새 폴더**에 풀고 `install.cmd`를 실행한다. 자동 시작·바로가기가 새 폴더로 바뀌고, 이전 폴더에서 떠 있던 기록기·에이전트는 `install`이 끄고 새 폴더의 것을 띄운다.
   데이터는 사용자 데이터 폴더에 있어서 그대로 이어진다. 이전 버전의 창이 열려 있으면 닫고 시작 메뉴에서 다시 연다. 확인한 뒤 이전 폴더를 지운다.
-- **제거:** `uv run whatever-log uninstall`(데이터는 지우지 않는다). 데이터까지 지우려면 `%LOCALAPPDATA%\whatever.log` 폴더를 직접 지운다.
+- **제거:** 설치 폴더에서 `whatever-log.cmd uninstall`(데이터는 지우지 않는다). 데이터까지 지우려면 `%LOCALAPPDATA%\whatever.log` 폴더를 직접 지운다.
 
 ### 아직 없는 것
 
-- **실행 파일(.exe)·설치 마법사**: 파이썬을 통째로 묶어야 하고(pywebview·pythonnet·WebView2), 서명 없는 exe는 백신 오탐이 잦다. 지금은 uv가 파이썬 환경을 만든다.
-  나중에 넣게 되면 `whatever-log`(`launcher`)를 그대로 진입점으로 묶으면 된다.
+- **설치 마법사(.exe 설치 프로그램)**: PyInstaller처럼 파이썬을 한 파일로 묶는 방식은 쓰지 않았다(자식 프로세스를 `-m`으로 띄우는 구조를 다시 설계해야 하고, 서명 없는 exe는 백신 오탐이 잦다).
+  대신 서명된 파이썬을 이름만 바꿔 쓴다. 설치 마법사가 필요해지면 이 번들 폴더를 그대로 담으면 된다.
+- WebView2 런타임은 번들에 없다(Windows 11에는 기본으로 있다). Windows 10에서 창이 안 뜨면 Microsoft의 WebView2 런타임 설치가 필요하다.
 - **코드 서명**, **자동 업데이트**(새 버전 알림·내려받기).

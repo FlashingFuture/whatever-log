@@ -2,6 +2,8 @@
 # 하이픈이 든 태그(v1.0.0-beta.1)는 "시험 버전(pre-release)"으로 표시된다. 절차는 docs/packaging.md의 "릴리스 만들기".
 # 올리기 전에 만든 zip을 사용자처럼 풀어 install.cmd로 설치해 보고, 실패하면 Release를 만들지 않는다
 # (v1.0.0-beta.1은 테스트가 다 통과했는데도 install.cmd가 실행되지 않는 채로 나갔다).
+# 번들에는 파이썬이 들어 있어서 사용자 PC에 uv·파이썬이 필요 없다. 설치 시험은 그것을 확인하려고 PATH를 비운 채로 한다
+# (러너에는 uv·파이썬이 깔려 있어서, 그냥 돌리면 번들이 그것에 기대도 통과해 버린다).
 # Actions 화면에서 직접 실행(workflow_dispatch)하면 번들 만들기와 설치 시험까지만 하고 Release는 올리지 않는다 — 태그 전 예행연습용.
 name: release
 
@@ -51,13 +53,27 @@ jobs:
           $app = (Get-ChildItem -LiteralPath $dir -Directory | Select-Object -First 1).FullName
           "app=$app" >> $env:GITHUB_OUTPUT
 
-      # 사용자가 더블클릭하는 것과 같게 cmd로 실행한다. 러너에서 기록기를 띄울 필요는 없어서 등록까지만 한다(--no-start).
-      - name: 설치 시험 — install.cmd 실행
+      # 사용자가 더블클릭하는 것과 같게 cmd로 실행한다. PATH를 시스템 폴더만 남기고 비운다 — uv·파이썬이 없는 PC와 같은 조건이다.
+      # 러너에서 기록기를 띄울 필요는 없어서 등록까지만 한다(--no-start).
+      - name: 설치 시험 — install.cmd 실행(uv·파이썬 없이)
         shell: cmd
         working-directory: ${{ steps.unpack.outputs.app }}
         run: |
+          set PATH=%SystemRoot%\System32;%SystemRoot%\System32\WindowsPowerShell\v1.0
           call install.cmd --no-start < NUL
           if errorlevel 1 exit /b 1
+
+      # 번들 안의 모든 모듈이 번들의 파이썬으로 불러와지는지(누락된 의존성·경로 설정 오류를 잡는다), 창을 소유할 실행 파일이 이름을 바꾼 것인지 본다.
+      - name: 설치 시험 — 모듈 불러오기
+        shell: cmd
+        working-directory: ${{ steps.unpack.outputs.app }}
+        run: |
+          set PATH=%SystemRoot%\System32
+          runtime\whatever-log-cli.exe -c "import launcher.__main__, desktop.__main__, hub.__main__, recorder.__main__, recorder.supervisor, sync_agent.__main__, sync_agent.supervisor, webview, psutil, keyring, filelock, clr_loader; import sys; print(sys.executable)"
+          if errorlevel 1 exit /b 1
+          if not exist runtime\whatever-log.exe exit /b 1
+          if exist runtime\pythonw.exe exit /b 1
+          if exist runtime\python.exe exit /b 1
 
       - name: 설치 시험 — 버전·상태 확인 후 제거
         shell: bash
@@ -66,7 +82,7 @@ jobs:
           PYTHONIOENCODING: utf-8
           VERSION: ${{ steps.build.outputs.version }}
         run: |
-          run() { uv run --frozen --no-dev whatever-log "$@"; }
+          run() { PATH="/c/Windows/System32" ./runtime/whatever-log-cli.exe -m launcher "$@"; }
           expected="whatever.log ${VERSION}"
           version="$(run --version)"
           [ "$version" = "$expected" ] || { echo "버전이 달라요: '$version' (기대: '$expected')"; exit 1; }
@@ -75,6 +91,7 @@ jobs:
           echo "$status"
           echo "$status" | grep -q "(개발)" && { echo "번들인데 개발용 저장소로 인식했어요(release.json)"; exit 1; }
           [ "$(echo "$status" | grep -c '자동 시작 등록됨')" -eq 2 ] || { echo "기록기·동기화 에이전트가 자동 시작에 등록되지 않았어요"; exit 1; }
+          echo "$status" | grep -q "runtime.whatever-log-cli.exe" || { echo "번들 안의 파이썬으로 실행되지 않았어요"; exit 1; }
 
           run uninstall
           [ "$(run status | grep -c '자동 시작 등록 안 됨')" -eq 2 ] || { echo "uninstall 뒤에도 자동 시작이 남아 있어요"; exit 1; }
@@ -92,4 +109,4 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" "$ARCHIVE" $flags \
             --title "whatever.log ${GITHUB_REF_NAME}" \
             --generate-notes \
-            --notes "설치: zip을 풀고 install.cmd를 실행하세요(uv 필요). SHA-256: ${SHA256}"
+            --notes "설치: zip을 풀고 install.cmd를 실행하세요(uv·파이썬은 따로 필요 없어요). SHA-256: ${SHA256}"
