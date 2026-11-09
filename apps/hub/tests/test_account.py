@@ -92,6 +92,22 @@ def test_a_successful_login_ends_signed_in() -> None:
     assert snapshot["login"] == {"state": "idle", "message": None}
 
 
+def test_a_finished_login_moves_the_time_hub_learned_of_the_login() -> None:
+    """동기화 상태가 "로그인 전 주기의 기록"을 가려낼 기준. 실패한 로그인은 바꾸지 않는다."""
+    service, port = make_service()
+    started = service.signed_in_since()
+
+    port.outcome = LoginProblem("거절됨")
+    service.start_login("google")
+    service.wait_for_login(5)
+    assert service.signed_in_since() == started
+
+    port.outcome = None
+    service.start_login("google")
+    service.wait_for_login(5)
+    assert service.signed_in_since() > started
+
+
 def test_login_is_pending_while_the_user_is_in_the_browser() -> None:
     port = FakePort()
     port.hold = True

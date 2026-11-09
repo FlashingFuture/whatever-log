@@ -106,6 +106,7 @@ test("상태는 GET /api/sync/status이고 서버를 부르지 않는 로컬 읽
     last_attempt_at: "t",
     last_success_at: "t",
     problems: 0,
+    interval_seconds: 300,
   };
   const calls = stubFetch(() => json(status));
 

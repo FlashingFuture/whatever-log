@@ -684,7 +684,8 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_json(200, result)
 
     def _get_sync_status(self) -> None:
-        """GET /api/sync/status — 동기화가 잘 되고 있는지(꺼짐/기다리는 중/정상/오류/에이전트 멈춤). 이 PC의 goals.db만 읽고 서버를 부르지 않는다."""
+        """GET /api/sync/status — 동기화가 잘 되고 있는지(꺼짐/기다리는 중/곧 동기화/정상/오류/에이전트 멈춤). 이 PC의 goals.db만 읽고
+        서버를 부르지 않는다."""
         try:
             with GoalStore(self.goals_db_path) as store:
                 enabled = store.get_meta(META_SYNC_ENABLED) == "1"
@@ -692,7 +693,10 @@ class _Handler(BaseHTTPRequestHandler):
         except (sqlite3.Error, SchemaVersionError) as error:
             self._send_unavailable("목표 DB", error)
             return
-        self._send_json(200, sync_status.describe(record, enabled=enabled, now=datetime.now(UTC)))
+        described = sync_status.describe(
+            record, enabled=enabled, now=datetime.now(UTC), signed_in_since=self.account.signed_in_since()
+        )
+        self._send_json(200, described)
 
     def _get_devices(self) -> None:
         """GET /api/devices — 달성도를 보낸 기기들(서버에서 받는다). 이 PC의 기기에는 `is_this_device`가 켜진다."""

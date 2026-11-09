@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   chipFor,
+  everyText,
   pollIntervalMs,
   relativeTime,
   type StatusLike,
@@ -20,6 +21,7 @@ function status(over: Partial<StatusLike> = {}): StatusLike {
     last_attempt_at: ago(10),
     last_success_at: ago(10),
     problems: 0,
+    interval_seconds: 300,
     ...over,
   };
 }
@@ -113,8 +115,8 @@ test("오류는 종류별로 사용자가 할 일을 알려 준다", () => {
   assert.match(detail("not_authorized"), /다시 로그인/);
   assert.match(detail("server_error"), /서버가 요청을 처리하지 못했어요/);
   assert.match(detail("internal"), /문제가 생겼어요/);
-  assert.match(detail("signed_out"), /로그인 정보를 찾지 못했어요/);
-  assert.match(detail("signed_out"), /반영되지 않고 있어요/);
+  assert.match(detail("signed_out"), /로그인 정보를 찾지 못해/);
+  assert.match(detail("signed_out"), /반영되지 않았어요/);
   assert.match(detail("something_new"), /문제가 생겼어요/);
   assert.equal(
     chipFor(status({ state: "error", result: "unreachable" }), NOW)?.tone,
@@ -149,4 +151,37 @@ test("화면은 로그인되어 있는데 에이전트가 로그인 정보를 �
 
   assert.deepEqual([chip?.label, chip?.tone], ["동기화 오류", "bad"]);
   assert.match(chip?.detail ?? "", /마지막으로 동기화된 때: 2시간 전/);
+});
+
+test("방금 로그인해 에이전트의 다음 주기를 기다리는 중이면 오류가 아니라 곧 동기화된다고 알린다", () => {
+  const chip = chipFor(
+    status({ state: "pending", result: "signed_out", last_success_at: null }),
+    NOW,
+  );
+
+  assert.deepEqual([chip?.label, chip?.tone], ["곧 동기화돼요", "neutral"]);
+  assert.match(chip?.detail ?? "", /아직 동기화되지 않았어요/);
+  assert.match(chip?.detail ?? "", /5분마다/);
+  assert.equal(pollIntervalMs(status({ state: "pending" })), 15_000); // 다음 주기가 끝나면 곧 바뀌어 보이게
+});
+
+test("로그인한 뒤에도 로그인 정보를 못 찾으면: 아직 안 됨 → 주기마다 다시 시도 → 계속되면 자격 증명·다시 로그인 순으로 알린다", () => {
+  const detail =
+    chipFor(status({ state: "error", result: "signed_out" }), NOW)?.detail ?? "";
+
+  const order = [
+    "아직 동기화되지 않았어요",
+    "5분마다 다시 시도해요",
+    "자격 증명 관리자",
+    "로그아웃한 뒤 다시 로그인",
+  ].map((phrase) => detail.indexOf(phrase));
+  assert.ok(order.every((index) => index >= 0), detail);
+  assert.deepEqual(order, [...order].sort((a, b) => a - b));
+});
+
+test("주기 글자: 분·초, 모르면 주기마다", () => {
+  assert.equal(everyText(300), "5분마다");
+  assert.equal(everyText(30), "30초마다");
+  assert.equal(everyText(null), "주기마다");
+  assert.equal(everyText(0), "주기마다");
 });

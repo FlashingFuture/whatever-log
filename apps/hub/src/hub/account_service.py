@@ -15,6 +15,7 @@ import logging
 import threading
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -155,6 +156,8 @@ class AccountService:
         self._thread: threading.Thread | None = None
         self._state = "idle"  # idle | pending | failed
         self._message: str | None = None
+        # 이 hub가 지금의 로그인을 알게 된 시각: 로그인을 마친 때, 그 전부터 로그인되어 있었다면 hub가 뜬 때(이 객체를 만든 때).
+        self._signed_in_since = datetime.now(UTC)
 
     def _get_port(self) -> CloudPort:
         """포트를 (처음이면 만들어) 돌려준다. 만들 수 없으면 AccountUnavailable."""
@@ -225,6 +228,8 @@ class AccountService:
         state, message = "idle", None
         try:
             port.sign_in(provider_id, cancelled=cancel.is_set)
+            with self._lock:
+                self._signed_in_since = datetime.now(UTC)
         except LoginProblem as problem:
             if not problem.cancelled:
                 state, message = "failed", problem.message
@@ -234,6 +239,12 @@ class AccountService:
         with self._lock:
             if self._cancel is cancel:  # 그 사이 새 로그인이 시작됐다면 그 쪽 상태를 건드리지 않는다
                 self._state, self._message = state, message
+
+    def signed_in_since(self) -> datetime:
+        """이 hub가 지금의 로그인을 알게 된 시각. 동기화 에이전트의 "로그인 안 됨" 기록이 이보다 앞서면 로그인 전 주기의
+        기록이라 오류로 보지 않는다(로그인 직후 다음 주기까지 오류가 보이지 않게)."""
+        with self._lock:
+            return self._signed_in_since
 
     def cancel_login(self) -> None:
         """진행 중인 로그인을 취소한다(없으면 아무 일도 없다). 스레드가 곧 끝나면서 상태가 idle로 돌아온다."""

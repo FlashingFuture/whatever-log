@@ -13,9 +13,23 @@ from pathlib import Path
 RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
+#: 릴리스 번들의 파이썬 실행 파일 이름. `whatever-log.exe`는 콘솔이 없는 쪽(pythonw의 복사본)이고, 창을 소유하는 프로세스가 이 이름이라
+#: 사용 현황·작업 관리자에서 `pythonw.exe`가 아니라 앱 이름으로 보인다. `whatever-log-cli.exe`는 콘솔이 있는 쪽(python의 복사본)이다.
+BUNDLED_WINDOWLESS_EXE = "whatever-log.exe"
+BUNDLED_CONSOLE_EXE = "whatever-log-cli.exe"
+
+
 def pythonw_path() -> Path:
-    """지금 파이썬(가상환경)의 pythonw.exe. 콘솔 창 없이 모듈을 실행하는 데 쓴다."""
-    return Path(sys.executable).with_name("pythonw.exe")
+    """콘솔 창 없이 모듈을 실행할 파이썬 실행 파일.
+
+    릴리스 번들에서는 같은 폴더의 `whatever-log.exe`, 개발 환경(가상환경)에서는 `pythonw.exe`다. 번들인지는 지금 실행 중인 파이썬의
+    파일 이름으로 가린다 — 가상환경의 `Scripts` 폴더에도 `whatever-log.exe`(명령 실행기)가 있어서, 파일이 있는지만 보면 개발 환경에서
+    그것을 잘못 고른다.
+    """
+    current = Path(sys.executable)
+    if current.name.lower() in (BUNDLED_WINDOWLESS_EXE, BUNDLED_CONSOLE_EXE):
+        return current.with_name(BUNDLED_WINDOWLESS_EXE)
+    return current.with_name("pythonw.exe")
 
 
 def module_command(module: str, *args: str) -> str:
@@ -36,7 +50,7 @@ def enable(value_name: str, command: str) -> None:
     """
     executable = pythonw_path()
     if not executable.exists():
-        raise FileNotFoundError(f"pythonw.exe를 찾을 수 없습니다: {executable}")
+        raise FileNotFoundError(f"콘솔 없는 파이썬 실행 파일을 찾을 수 없습니다: {executable}")
     with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_KEY_PATH, 0, winreg.KEY_SET_VALUE) as key:
         winreg.SetValueEx(key, value_name, 0, winreg.REG_SZ, command)
 
