@@ -1,0 +1,63 @@
+# PR과 main에 들어오는 커밋마다 검사를 돌린다: Biome, 파이썬 테스트(Windows), 화면·서버의 타입 검사와 테스트.
+# 로컬 PC의 Node·Python 버전에 기대지 않고 같은 환경에서 확인하려는 것이다. 무엇을 돌릴지는 로컬의 `pnpm check`와 같은
+# scripts/check.py가 정한다 — PR에서는 base 브랜치와 갈라진 뒤 바뀐 것에 해당하는 검사만, main에서는 전부.
+# 실제 서버가 필요한 시험(apps/sync/tests/test_e2e_server.py)은 환경 변수가 없으면 스스로 건너뛴다.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CHECK_SCOPE: ${{ github.event_name == 'pull_request' && format('--base origin/{0}', github.base_ref) || '--all' }}
+
+jobs:
+  python:
+    # recorder·launcher 등은 Windows API(레지스트리, 창 목록)를 쓰므로 사용자 PC와 같은 Windows에서 돌린다
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # base 브랜치와 비교해 바뀐 파일을 찾는다
+          persist-credentials: false # PR의 테스트 코드가 토큰을 읽지 못하게(이후 git 명령은 로컬 기록만 읽는다)
+
+      - uses: astral-sh/setup-uv@v10.3.0
+
+      - name: 파이썬 환경
+        shell: bash
+        run: |
+          uv python install 3.14
+          uv sync --locked --all-packages
+
+      - name: 파이썬 테스트
+        shell: bash
+        run: uv run python scripts/check.py --only python $CHECK_SCOPE
+
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: 의존성
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      # check.py는 표준 라이브러리만 쓰므로 러너에 있는 python3로 부른다
+      - name: Biome, 화면·서버 검사
+        run: python3 scripts/check.py --only node $CHECK_SCOPE

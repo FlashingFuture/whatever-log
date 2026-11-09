@@ -14,7 +14,9 @@
   "scripts": {
     "prepare": "husky",
     "lint": "biome check .",
-    "format": "biome check --write ."
+    "format": "biome check --write .",
+    "check": "uv run python scripts/check.py",
+    "check:all": "uv run python scripts/check.py --all"
   },
   "lint-staged": {
     "*": [

@@ -45,8 +45,11 @@ def test_encode_png_rejects_wrong_pixel_count() -> None:
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows 전용 API")
 def test_extracts_a_real_icon_from_an_exe() -> None:
-    """실제 exe(이 테스트를 돌리는 python)에서 투명하지 않은 픽셀이 있는 아이콘이 나와야 한다."""
-    png = extract_icon_png(sys.executable, size=32)
+    """실제 exe(이 테스트를 돌리는 python)에서 투명하지 않은 픽셀이 있는 아이콘이 나와야 한다.
+
+    venv의 python.exe는 uv가 만든 실행 래퍼라 아이콘이 없을 수 있어서, venv가 가리키는 원래 python을 쓴다.
+    """
+    png = extract_icon_png(getattr(sys, "_base_executable", sys.executable), size=32)
 
     assert png is not None
     width, height, pixels = _decode_png(png)

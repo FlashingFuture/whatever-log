@@ -113,7 +113,7 @@ def sync_server(tmp_path, monkeypatch):
     _Handler.goals_db_path = goals_db
     _Handler.allowed_origins = frozenset({UI_ORIGIN})
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     try:
         yield server.server_port, goals_db, backend
     finally:

@@ -321,7 +321,7 @@ def site_server(tmp_path):
     _Handler.db_path = db_path
     _Handler.site_icon_store = SiteIconStore([tmp_path / "chrome"])
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     try:
         yield f"http://127.0.0.1:{server.server_port}"
     finally:
@@ -387,7 +387,7 @@ def test_sites_endpoint_treats_a_pre_site_database_as_empty(tmp_path) -> None:
     conn.close()
     _Handler.db_path = old_db
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     query = urllib.parse.urlencode(
         {
             "start": _TICK_AT.isoformat(),
@@ -457,7 +457,7 @@ def test_site_icon_endpoint_is_404_for_a_pre_site_database(tmp_path, ui_request)
     _Handler.db_path = old_db
     _Handler.site_icon_store = SiteIconStore([tmp_path / "chrome"])
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     try:
         with pytest.raises(urllib.error.HTTPError) as exc_info:
             urllib.request.urlopen(
