@@ -167,7 +167,8 @@ test("방금 로그인해 에이전트의 다음 주기를 기다리는 중이�
 
 test("로그인한 뒤에도 로그인 정보를 못 찾으면: 아직 안 됨 → 주기마다 다시 시도 → 계속되면 자격 증명·다시 로그인 순으로 알린다", () => {
   const detail =
-    chipFor(status({ state: "error", result: "signed_out" }), NOW)?.detail ?? "";
+    chipFor(status({ state: "error", result: "signed_out" }), NOW)?.detail ??
+    "";
 
   const order = [
     "아직 동기화되지 않았어요",
@@ -175,8 +176,14 @@ test("로그인한 뒤에도 로그인 정보를 못 찾으면: 아직 안 됨 �
     "자격 증명 관리자",
     "로그아웃한 뒤 다시 로그인",
   ].map((phrase) => detail.indexOf(phrase));
-  assert.ok(order.every((index) => index >= 0), detail);
-  assert.deepEqual(order, [...order].sort((a, b) => a - b));
+  assert.ok(
+    order.every((index) => index >= 0),
+    detail,
+  );
+  assert.deepEqual(
+    order,
+    [...order].sort((a, b) => a - b),
+  );
 });
 
 test("주기 글자: 분·초, 모르면 주기마다", () => {

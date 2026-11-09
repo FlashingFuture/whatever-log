@@ -45,7 +45,7 @@
   - Python 등 다른 스택이 들어오면 `Dockerfile`에 추가하되, 아직 쓰이지 않는 스택을 미리 넣지 마세요.
 - **mise (`.mise.toml`, 루트)**: Node와 Python 버전이 고정되어 있습니다(`node = "24.22.1"`, `python = "3.14.8"`). `engines.node`/Dockerfile의 Node 버전과 반드시 같이 맞추세요.
 - **Python 버전**: 3.14. 개발은 uv가 읽는 `.python-version`(`3.14`)이 기준이고, **릴리스 번들에는 `.mise.toml`의 정확한 버전(`3.14.8`)의 임베더블 파이썬이 통째로 들어갑니다**(사용자 PC에 uv·파이썬이 필요 없습니다). 올릴 때는 `.python-version`, 워크플로들의 `uv python install`, `.mise.toml`, Dockerfile을 함께 바꾸고, **`scripts/build_release.py`의 `EMBEDDED_PYTHON_SHA256`도 새 버전의 python.org 임베더블 zip 해시로 바꾸세요**(안 바꾸면 번들 빌드가 멈추고 테스트가 잡습니다).
-- **테스트·검사**: `uv run pytest`(파이썬 전체, 루트에서), `pnpm lint`, `pnpm --filter ui build`(tsc 포함)·`test`, `pnpm --filter server typecheck`·`test`. PR과 main 커밋마다 `.github/workflows/ci.yml`이 같은 것을 돌립니다(파이썬은 Windows 러너). 테스트는 실제 개발 폴더의 DB·lock을 건드리지 않게 임시 폴더를 쓰세요.
+- **테스트·검사**: `pnpm check`가 바뀐 파일에 해당하는 것만 골라 돌립니다(Biome, 영향받는 파이썬 프로젝트의 pytest, 화면·서버의 타입 검사와 테스트 — 규칙은 `scripts/check.py`). 전부는 `pnpm check:all`. PR에서는 `.github/workflows/ci.yml`이 같은 스크립트로 변경분을, main에서는 전부를 돌립니다(파이썬은 Windows 러너). 파일을 직접 읽어 검사하는 테스트를 새로 만들면 `scripts/check.py`의 `CROSS_CHECKS`에도 이어 두세요 — 의존 관계로는 찾지 못합니다. 테스트는 실제 개발 폴더의 DB·lock을 건드리지 않게 임시 폴더를 쓰세요.
 
 ## 아직 정해지지 않은 것
 
