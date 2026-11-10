@@ -178,12 +178,67 @@ def test_progress_sums_the_active_time_of_linked_processes(goals_server) -> None
             "active_seconds": 15.0,
             "processes": [{"process": "chrome.exe", "active_seconds": 15.0}],
             "sites": [],
+            "target_minutes": 120,  # 그 시각이 걸친 하루(월~금 중 하루)의 목표량
         }
     ]
     assert payload["summary"] == {
         "active_seconds": 15.0,
+        "target_minutes": 120,
         "top": {"process": "chrome.exe", "active_seconds": 15.0, "site": None},
     }
+
+
+# --- 구간의 목표량(달성률의 분모) ---
+
+
+def _local_midnight(year: int, month: int, day: int) -> datetime:
+    """이 PC의 시간대 자정. 화면이 구간 경계를 이렇게 만들어 보낸다 — 시험도 같은 방식이라 어느 시간대의 PC·CI에서든 같은 날짜로 읽힌다."""
+    return datetime(year, month, day).astimezone()
+
+
+def _target_progress(base, start: datetime, end: datetime) -> dict:
+    query = urllib.parse.urlencode({"start": start.isoformat(), "end": end.isoformat()})
+    status, payload, _ = _call(base, "GET", f"/api/goals/progress?{query}", origin=None)
+    assert status == 200
+    return payload
+
+
+def test_a_target_day_has_the_daily_target_and_a_rest_day_has_none(goals_server) -> None:
+    _call(goals_server, "POST", "/api/goals", GOAL)  # 월~금 하루 120분
+
+    wednesday = _target_progress(goals_server, _local_midnight(2026, 10, 28), _local_midnight(2026, 10, 29))
+    saturday = _target_progress(goals_server, _local_midnight(2026, 10, 31), _local_midnight(2026, 11, 1))
+
+    assert wednesday["goals"][0]["target_minutes"] == 120 and wednesday["summary"]["target_minutes"] == 120
+    assert saturday["goals"][0]["target_minutes"] == 0 and saturday["summary"]["target_minutes"] == 0  # 쉬는 날은 달성률이 없다
+
+
+def test_a_week_adds_up_every_target_day(goals_server) -> None:
+    _call(goals_server, "POST", "/api/goals", GOAL)
+
+    week = _target_progress(goals_server, _local_midnight(2026, 10, 26), _local_midnight(2026, 11, 2))  # 월~일
+
+    assert week["goals"][0]["target_minutes"] == 5 * 120  # 월~금만 더한다(토·일은 쉬는 날)
+
+
+def test_the_summary_target_is_the_sum_over_goals(goals_server) -> None:
+    _call(goals_server, "POST", "/api/goals", GOAL)
+    _call(goals_server, "POST", "/api/goals", {**GOAL, "name": "운동", "daily_target_minutes": 30, "weekdays": [2], "processes": ["Code.exe"]})  # 수요일만
+
+    week = _target_progress(goals_server, _local_midnight(2026, 10, 26), _local_midnight(2026, 11, 2))
+
+    assert [goal["target_minutes"] for goal in week["goals"]] == [600, 30]
+    assert week["summary"]["target_minutes"] == 630
+
+
+def test_a_goal_without_any_recorded_time_still_has_its_target(goals_server) -> None:
+    """수행한 시간이 없어도 목표량은 있다 — 달성률 0%로 보여야 한다."""
+    _call(goals_server, "POST", "/api/goals", {**GOAL, "processes": ["Code.exe"]})
+    day = _local_midnight(2026, 10, 20)  # 기록이 전혀 없는 날(화요일)
+
+    payload = _target_progress(goals_server, day, day + timedelta(days=1))
+
+    assert payload["goals"][0]["active_seconds"] == 0 and payload["goals"][0]["target_minutes"] == 120
 
 
 # --- 브라우저의 사이트(세부 페이지) ---

@@ -5,7 +5,11 @@ import type {
   RangeUsage,
 } from "../../api";
 import { formatDuration } from "../../lib/format";
-import { timePair } from "../../lib/goalSelection";
+import {
+  type Achievement,
+  achievement,
+  timePair,
+} from "../../lib/goalSelection";
 import { chooseTopBlocks, type TopProcess } from "../../lib/goalSummary";
 import { createRouteLink } from "../../router/router";
 import { createProcessIcon, createSiteIcon } from "./ProcessIcon";
@@ -116,6 +120,36 @@ function timeValue(
   return value;
 }
 
+/**
+ * 달성률 블록: 큰 퍼센트, 막대(100%에서 멈춘다 — 넘친 만큼은 글자로 보인다), 목표량 대비 수행 시간. 구간에 목표를 적용하는 날이 없으면 "-"와
+ * 이유만 보인다. 분자가 이 PC만의 값이면(전체를 못 받음) 그렇다고 적는다.
+ */
+function achievementBlock(rate: Achievement | null): HTMLElement {
+  const block = stat(
+    "달성률",
+    text(rate === null ? "-" : `${rate.percent}%`),
+    rate === null
+      ? "이 구간에는 목표를 적용하는 날이 없어요."
+      : `목표 ${formatDuration(rate.targetSeconds)} 중 ${formatDuration(rate.achievedSeconds)}${rate.basis === "device" ? " · 현 기기 기준" : ""}`,
+  );
+  if (rate !== null) {
+    const track = document.createElement("div");
+    track.className = styles.rateTrack;
+    track.setAttribute("role", "progressbar");
+    track.setAttribute("aria-label", "달성률");
+    track.setAttribute("aria-valuemin", "0");
+    track.setAttribute("aria-valuemax", "100");
+    track.setAttribute("aria-valuenow", String(Math.min(100, rate.percent)));
+    track.setAttribute("aria-valuetext", `${rate.percent}%`);
+    const fill = document.createElement("div");
+    fill.className = styles.rateFill;
+    fill.style.width = `${Math.min(100, Math.max(0, rate.percent))}%`;
+    track.append(fill);
+    block.children[1]?.after(track); // 퍼센트 바로 아래, 설명 위
+  }
+  return block;
+}
+
 /** 고른 목표에 연결한 프로세스·사이트와 각각의 수행 시간(긴 것부터). 수행한 것이 없으면 안내만 보인다. */
 function goalBreakdown(goal: GoalProgress): HTMLElement {
   const targets: TopProcess[] = [
@@ -198,11 +232,15 @@ export function createUsageSummary(props: UsageSummaryProps): HTMLElement {
         "목표 수행 시간",
         timeValue(progress.goals, selectedGoal.id, props.totals),
       ),
+      achievementBlock(
+        achievement(progress.goals, selectedGoal.id, props.totals),
+      ),
       goalBreakdown(selectedGoal),
     );
   } else {
     container.append(
       stat("목표 수행 시간", timeValue(progress.goals, null, props.totals)),
+      achievementBlock(achievement(progress.goals, null, props.totals)),
     );
   }
 

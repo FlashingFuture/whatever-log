@@ -115,6 +115,11 @@ export interface GoalProgress {
   id: number;
   name: string;
   active_seconds: number;
+  /**
+   * 이 구간의 목표량(분): 구간의 각 날짜에 그날 적용된 목표의 하루 목표를 더한 것. 달성률(수행 시간 ÷ 이 값)의 분모다. 구간에 목표를
+   * 적용하는 날이 없으면 0(달성률 없음). 정의는 서버(packages/goals의 targets)가 갖고 있다.
+   */
+  target_minutes: number;
   processes: ProcessTime[];
   sites: SiteTime[];
 }
@@ -127,6 +132,8 @@ export interface GoalProgressResponse {
   summary: {
     /** 모든 목표의 수행 시간 합. */
     active_seconds: number;
+    /** 모든 목표의 구간 목표량(분) 합. */
+    target_minutes: number;
     /** 연결된 프로세스·사이트 중 활성 시간이 가장 긴 것(전부 0이면 null). */
     top: TopTarget | null;
   };

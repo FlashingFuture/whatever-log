@@ -43,8 +43,10 @@ from goals import (
     GoalStore,
     GoalValidationError,
     SchemaVersionError,
+    days_between,
     is_valid_domain,
     is_valid_process_name,
+    period_target_minutes,
 )
 from hub.account_service import (
     AccountService,
@@ -871,6 +873,8 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             with GoalStore(self.goals_db_path) as store:
                 goals = store.list_goals()
+                # 달성률의 분모: 구간의 각 날짜(이 PC의 시간대)에 그날 적용된 목표의 하루 목표 분을 더한 것(정의는 goals.targets)
+                targets = period_target_minutes(store, days_between(start, end))
         except (sqlite3.Error, SchemaVersionError) as error:
             self._send_unavailable("목표 DB", error)
             return
@@ -891,7 +895,7 @@ class _Handler(BaseHTTPRequestHandler):
         except sqlite3.Error as error:
             self._send_unavailable("집계 DB", error)
             return
-        self._send_json(200, progress_payload(goals, usage, site_usage))
+        self._send_json(200, progress_payload(goals, usage, site_usage, targets))
 
     def _get_goal_totals(self, raw_query: str) -> None:
         """GET /api/goals/all-devices?from=YYYY-MM-DD&to=YYYY-MM-DD — 목표별 모든 기기의 수행 시간 합계(분, 끝날 포함).

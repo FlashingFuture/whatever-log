@@ -10,6 +10,8 @@ export interface GoalLike {
   id: number;
   name: string;
   active_seconds: number;
+  /** 구간의 목표량(분). 0이면 구간에 목표를 적용하는 날이 없다. */
+  target_minutes?: number;
 }
 
 /** 요약에 보일 "전체 | 현 기기" 시간(초). total이 null이면 전체를 알 수 없다("-"로 보인다). */
@@ -86,4 +88,50 @@ export function timePair(
     0,
   );
   return { total, device };
+}
+
+/**
+ * 달성률의 계산 결과. basis: 분자가 모든 기기의 합(total)인지, 이 PC만(device)인지 — 전체를 알 수 없을 때는 이 PC의 값으로 계산하고
+ * 그렇다고 알린다.
+ */
+export interface Achievement {
+  /** 수행 시간 ÷ 목표량, 정수 %(100을 넘을 수 있다). */
+  percent: number;
+  achievedSeconds: number;
+  targetSeconds: number;
+  basis: "total" | "device";
+}
+
+/**
+ * 달성률 = 수행 시간 ÷ 구간의 목표량. 분모(목표량)는 서버가 정한다(`goals.targets` — 날짜마다 그날 적용된 목표의 하루 목표를 더한 것).
+ * 이 함수는 그 분모에 어느 수행 시간을 나눌지만 정한다.
+ * - selectedId가 null이면 목표 전체: **구간에 목표량이 있는 목표만** 분자·분모에 넣는다. 목표를 적용하는 날이 없는 목표는 이 구간에
+ *   달성할 것이 없으므로, 그 목표에 쌓인 시간이 다른 목표의 부족을 메우지 않는다.
+ * - 분자는 목표마다 전체(모든 기기) 시간이다. 전체를 알 수 없으면(totals가 없거나 unavailable) 현 기기 시간으로 계산한다.
+ * - 구간에 목표량이 하나도 없으면 null(달성률 없음).
+ */
+export function achievement(
+  goals: readonly GoalLike[],
+  selectedId: number | null,
+  totals: GoalTotalsLike | null,
+): Achievement | null {
+  const withTarget = (
+    selectedId === null ? goals : goals.filter((goal) => goal.id === selectedId)
+  ).filter((goal) => (goal.target_minutes ?? 0) > 0);
+  if (withTarget.length === 0) {
+    return null;
+  }
+  const basis =
+    totals === null || totals.state === "unavailable" ? "device" : "total";
+  const pair = timePair(withTarget, null, totals);
+  const achievedSeconds =
+    basis === "total" ? (pair.total ?? pair.device) : pair.device;
+  const targetSeconds =
+    withTarget.reduce((sum, goal) => sum + (goal.target_minutes ?? 0), 0) * 60;
+  return {
+    percent: Math.round((achievedSeconds * 100) / targetSeconds),
+    achievedSeconds,
+    targetSeconds,
+    basis,
+  };
 }

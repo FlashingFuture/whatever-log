@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  achievement,
   dayRange,
   goalTotalSeconds,
   localDay,
@@ -134,4 +135,104 @@ test("없는 목표를 고른 채 부르면 0이다(호출부가 resolveSelectio
     total: 0,
     device: 0,
   });
+});
+
+// --- 달성률 ---
+
+const WITH_TARGETS = [
+  { id: 1, name: "공부", active_seconds: 3600, target_minutes: 120 },
+  { id: 2, name: "운동", active_seconds: 1200, target_minutes: 60 },
+  { id: 3, name: "쉬는 목표", active_seconds: 5000, target_minutes: 0 }, // 이 구간에는 적용하는 날이 없다
+];
+
+test("목표 하나의 달성률은 수행 시간 ÷ 구간의 목표량이다", () => {
+  const rate = achievement(WITH_TARGETS, 1, { state: "local", goals: [] });
+
+  assert.deepEqual(rate, {
+    percent: 50, // 3600초 ÷ (120분 = 7200초)
+    achievedSeconds: 3600,
+    targetSeconds: 7200,
+    basis: "total",
+  });
+});
+
+test("목표 전체의 달성률은 목표량이 있는 목표만 분자·분모에 넣는다", () => {
+  const rate = achievement(WITH_TARGETS, null, { state: "local", goals: [] });
+
+  // (3600 + 1200) ÷ ((120 + 60)분) — 목표량이 0인 목표의 5000초는 다른 목표의 부족을 메우지 않는다
+  assert.equal(rate?.achievedSeconds, 4800);
+  assert.equal(rate?.targetSeconds, 10800);
+  assert.equal(rate?.percent, 44);
+});
+
+test("분자는 모든 기기의 합이다(서버 합계가 이 PC보다 크면 그 값)", () => {
+  const rate = achievement(WITH_TARGETS, 1, {
+    state: "synced",
+    goals: [{ id: 1, minutes: 100 }], // 6000초
+  });
+
+  assert.equal(rate?.achievedSeconds, 6000);
+  assert.equal(rate?.percent, 83);
+  assert.equal(rate?.basis, "total");
+});
+
+test("전체를 알 수 없으면 현 기기 시간으로 계산하고 그렇다고 알린다", () => {
+  for (const totals of [null, { state: "unavailable" as const, goals: [] }]) {
+    const rate = achievement(WITH_TARGETS, 1, totals);
+
+    assert.equal(rate?.basis, "device");
+    assert.equal(rate?.percent, 50);
+  }
+});
+
+test("100%를 넘을 수 있다", () => {
+  const rate = achievement(
+    [{ id: 1, name: "공부", active_seconds: 9000, target_minutes: 60 }],
+    1,
+    { state: "local", goals: [] },
+  );
+
+  assert.equal(rate?.percent, 250);
+});
+
+test("목표를 적용하는 날이 없는 구간이면 달성률이 없다", () => {
+  assert.equal(achievement(WITH_TARGETS, 3, null), null); // 목표량 0인 목표 하나
+  assert.equal(
+    achievement(
+      [{ id: 3, name: "쉼", active_seconds: 5000, target_minutes: 0 }],
+      null,
+      null,
+    ),
+    null,
+  );
+  assert.equal(achievement([], null, null), null);
+});
+
+test("목표량을 모르면(없는 값) 달성률을 만들지 않는다", () => {
+  assert.equal(
+    achievement([{ id: 1, name: "공부", active_seconds: 100 }], null, null),
+    null,
+  );
+});
+
+test("수행이 없으면 0%다(목표량이 있다)", () => {
+  const rate = achievement(
+    [{ id: 1, name: "공부", active_seconds: 0, target_minutes: 60 }],
+    1,
+    { state: "local", goals: [] },
+  );
+
+  assert.equal(rate?.percent, 0);
+});
+
+test("퍼센트는 반올림한다(0.5는 올림)", () => {
+  const rate = (seconds: number) =>
+    achievement(
+      [{ id: 1, name: "공부", active_seconds: seconds, target_minutes: 200 }],
+      1,
+      { state: "local", goals: [] },
+    )?.percent;
+
+  assert.equal(rate(60), 1); // 0.5% → 1
+  assert.equal(rate(59), 0); // 0.49% → 0
 });

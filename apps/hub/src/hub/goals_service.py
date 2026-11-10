@@ -148,11 +148,15 @@ def progress_payload(
     goals: list[Goal],
     usage: RangeUsage,
     site_usage: Mapping[str, list[Any]] | None = None,
+    targets: Mapping[int, int] | None = None,
 ) -> dict[str, Any]:
     """구간의 사용량(usage_by_range 결과)과 목표들로 목표별 수행 시간과 요약을 만든다.
 
     site_usage는 브라우저 이름 → 그 브라우저의 사이트별 집계(site_usage_by_range의 by_site)다. 수행 시간의
     정의(연결한 프로세스·사이트의 활성 시간 합)는 goals.compute_progress가 갖고 있다.
+
+    targets는 목표 id → 구간의 목표량(분)이다(`goals.period_target_minutes`). 달성률(수행 시간 ÷ 목표량)의 분모라서 목표마다 `target_minutes`로
+    싣고, 요약에는 그 합을 싣는다. 목표량을 모르면(주지 않음) 0이고, 0이면 화면은 달성률을 보이지 않는다.
     """
     active = {row["process"]: row["active_seconds"] for row in usage["by_process"]}
     active_sites = {
@@ -173,11 +177,13 @@ def progress_payload(
                 "active_seconds": item.active_seconds,
                 "processes": [_process_time_json(time) for time in item.processes],
                 "sites": [_site_time_json(time) for time in item.sites],
+                "target_minutes": (targets or {}).get(item.goal_id, 0),
             }
             for item in progress
         ],
         "summary": {
             "active_seconds": summary.active_seconds,
+            "target_minutes": sum((targets or {}).get(item.goal_id, 0) for item in progress),
             "top": None if summary.top is None else _top_json(summary.top),
         },
     }
