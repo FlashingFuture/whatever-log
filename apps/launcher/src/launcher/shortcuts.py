@@ -18,11 +18,32 @@ from supervision.autostart import pythonw_path
 from launcher.components import REPO_ROOT
 
 
+def system_directory() -> Path:
+    """윈도우의 시스템 폴더(`…\\Windows\\System32`)를 윈도우 API(GetSystemDirectoryW)로 구한다.
+
+    환경변수 `SystemRoot`나 고정된 `C:\\Windows`에 기대지 않는다 — 환경변수는 지워지거나 바뀔 수 있고, 윈도우가 D:에 설치된 PC도 있다.
+    """
+    buffer = ctypes.create_unicode_buffer(260)
+    length = ctypes.windll.kernel32.GetSystemDirectoryW(buffer, len(buffer))
+    if not length or length >= len(buffer):
+        raise OSError("윈도우 시스템 폴더를 찾지 못했어요.")
+    return Path(buffer.value)
+
+
 def powershell_path() -> str:
     """Windows PowerShell의 전체 경로. 이름만 주면 Windows가 현재 폴더·PATH에서도 찾으므로, 거기 놓인 다른 powershell.exe가
     대신 실행될 수 있다 — 시스템 폴더의 것만 쓴다."""
-    root = os.environ.get("SystemRoot") or r"C:\Windows"
-    return str(Path(root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
+    return str(system_directory() / "WindowsPowerShell" / "v1.0" / "powershell.exe")
+
+
+def powershell_env(**extra: str) -> dict[str, str]:
+    """PowerShell(자식 프로세스)에 넘길 환경. `SystemRoot`가 없으면 시스템 폴더에서 구해 채운다 — 없으면 PowerShell·COM이 시작하지 못한다."""
+    env = {**os.environ, **extra}
+    # 윈도우의 환경변수 이름은 대소문자를 가리지 않는다 — os.environ을 복사한 일반 dict의 키는 대문자(SYSTEMROOT)라서, 그대로 "SystemRoot"를
+    # 찾으면 이미 있어도 없다고 보고 같은 변수를 대소문자만 다르게 한 번 더 넣게 된다
+    if not any(name.upper() == "SYSTEMROOT" and value for name, value in env.items()):
+        env["SystemRoot"] = str(system_directory().parent)
+    return env
 
 
 SHORTCUT_NAME = "whatever.log.lnk"
@@ -74,14 +95,13 @@ def create(directory: Path) -> Path:
     """directory에 whatever.log 바로가기를 만든다(이미 있으면 덮어쓴다). 만든 파일 경로를 돌려준다."""
     directory.mkdir(parents=True, exist_ok=True)
     link = directory / SHORTCUT_NAME
-    env = {
-        **os.environ,
-        "WL_LINK": str(link),
-        "WL_TARGET": str(pythonw_path()),
-        "WL_ARGS": "-m launcher start",
-        "WL_CWD": str(REPO_ROOT),
-        "WL_ICON": f"{ICON_PATH},0",
-    }
+    env = powershell_env(
+        WL_LINK=str(link),
+        WL_TARGET=str(pythonw_path()),
+        WL_ARGS="-m launcher start",
+        WL_CWD=str(REPO_ROOT),
+        WL_ICON=f"{ICON_PATH},0",
+    )
     subprocess.run([powershell_path(), "-NoProfile", "-Command", _SCRIPT], env=env, check=True, capture_output=True)
     return link
 
@@ -97,7 +117,7 @@ def working_directory(link: Path) -> Path | None:
     """바로가기가 가리키는 작업 폴더(어느 설치본의 바로가기인지 알아보는 데 쓴다). 읽지 못하면 None."""
     result = subprocess.run(
         [powershell_path(), "-NoProfile", "-Command", _READ_SCRIPT],
-        env={**os.environ, "WL_LINK": str(link)},
+        env=powershell_env(WL_LINK=str(link)),
         capture_output=True,
         encoding="utf-8",
         errors="replace",

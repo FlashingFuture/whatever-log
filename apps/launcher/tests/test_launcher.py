@@ -154,6 +154,8 @@ def test_each_component_checks_its_own_programs_lock() -> None:
         ('"C:\\Program Files\\old\\.venv\\Scripts\\pythonw.exe" -m recorder.supervisor', Path("C:/Program Files/old/.venv/Scripts")),
         ("C:\\old\\.venv\\Scripts\\pythonw.exe -m recorder.supervisor", Path("C:/old/.venv/Scripts")),
         ("C:\\old\\.venv\\Scripts\\python.exe -m recorder.supervisor", Path("C:/old/.venv/Scripts")),
+        ('"C:\\Program Files\\old\\runtime\\whatever-log.exe" -m recorder.supervisor', Path("C:/Program Files/old/runtime")),  # 파이썬을 담았던 번들
+        ("C:\\old\\runtime\\whatever-log-cli.exe -m launcher install", Path("C:/old/runtime")),
         ('"C:\\Tools\\other.exe" --flag', None),  # 파이썬이 아닌 것은 건드릴 대상이 아니다
         ("", None),
     ],
@@ -659,11 +661,69 @@ def test_install_is_quiet_when_the_registration_is_already_this_folders() -> Non
     assert not any("다른 폴더의 설치" in line for line in lines)
 
 
-def test_powershell_is_run_from_the_system_folder_not_found_by_name(monkeypatch) -> None:
+def test_powershell_is_run_from_the_system_folder_not_found_by_name() -> None:
     """이름만 주면 현재 폴더·PATH의 다른 powershell.exe가 대신 실행될 수 있다."""
-    assert Path(shortcuts.powershell_path()).is_file()
+    path = Path(shortcuts.powershell_path())
 
-    monkeypatch.setenv("SystemRoot", r"D:\Win")
-    assert shortcuts.powershell_path() == r"D:\Win\System32\WindowsPowerShell\v1.0\powershell.exe"
+    assert path.is_absolute() and path.is_file()
+    assert path.parent.parent.parent == shortcuts.system_directory()
+
+
+def test_the_system_folder_comes_from_the_windows_api_not_from_environment_or_a_fixed_drive(monkeypatch) -> None:
+    """SystemRoot 환경변수는 지워지거나 바뀔 수 있고, 윈도우가 D:에 설치된 PC도 있다 — C:\Windows를 가정하지 않는다."""
+    real = shortcuts.system_directory()
+    monkeypatch.delenv("SystemRoot", raising=False)
+    monkeypatch.setenv("windir", r"X:ake")
+
+    assert shortcuts.system_directory() == real  # 환경변수가 없거나 틀려도 같다
+    assert str(real).lower().endswith("system32")
+
+
+def test_powershell_does_not_depend_on_the_environment_or_a_fixed_drive(monkeypatch) -> None:
+    """환경변수가 가리키는 곳(D:\\Win 같은)이 아니라 윈도우가 알려 주는 실제 시스템 폴더의 PowerShell을 쓴다."""
+    real = shortcuts.powershell_path()
+    monkeypatch.setenv("SystemRoot", "D:\\Win")
+    monkeypatch.setenv("windir", "D:\\Win")
+
+    assert shortcuts.powershell_path() == real
     monkeypatch.delenv("SystemRoot")
-    assert shortcuts.powershell_path() == r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+    monkeypatch.delenv("windir")
+    assert shortcuts.powershell_path() == real
+
+
+def test_the_windows_api_failing_is_reported_not_guessed(monkeypatch) -> None:
+    class Kernel32:
+        def GetSystemDirectoryW(self, buffer, size):
+            return 0  # 실패
+
+    monkeypatch.setattr(shortcuts.ctypes, "windll", type("W", (), {"kernel32": Kernel32()})())
+
+    with pytest.raises(OSError, match="시스템 폴더"):
+        shortcuts.system_directory()
+
+
+def test_the_child_environment_gets_system_root_back_when_it_is_missing(monkeypatch) -> None:
+    """PowerShell·COM은 SystemRoot가 없으면 시작하지 못한다 — 지워진 환경에서도 바로가기를 만들 수 있게 채워 준다."""
+    monkeypatch.delenv("SystemRoot", raising=False)
+
+    env = shortcuts.powershell_env(WL_LINK="x.lnk")
+
+    assert env["WL_LINK"] == "x.lnk"
+    assert Path(env["SystemRoot"]) == shortcuts.system_directory().parent
+
+
+def test_an_existing_system_root_is_left_alone(monkeypatch) -> None:
+    monkeypatch.setenv("SystemRoot", r"D:\Windows")
+
+    env = shortcuts.powershell_env()
+
+    assert [value for name, value in env.items() if name.upper() == "SYSTEMROOT"] == [r"D:\Windows"]  # 대소문자만 다른 중복 없이
+
+
+def test_a_shortcut_can_be_made_even_without_system_root_in_the_environment(tmp_path, monkeypatch) -> None:
+    """지워진 환경(작업 스케줄러 등)에서도 실제로 만들어지고 읽혀야 한다."""
+    monkeypatch.delenv("SystemRoot", raising=False)
+
+    link = shortcuts.create(tmp_path)
+
+    assert link.is_file() and shortcuts.is_ours(link)

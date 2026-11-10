@@ -108,6 +108,21 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def check_python(root: Path = ROOT, running: tuple[int, ...] | None = None) -> None:
+    """번들을 만드는 **이 파이썬**이 `.python-version`과 같은 버전인지 확인한다. 다르면 SystemExit.
+
+    사용자 PC의 `install.cmd`가 고르는 파이썬(uv가 `.python-version`을 읽는다)과 릴리스를 시험·빌드한 파이썬이 같아야 한다. 워크플로 파일에
+    "uv python install 3.14"라고 적혀 있는지만으로는 부족하다(주석으로 남아 있거나 다른 파이썬이 골라져도 통과한다) — 실제로 도는 인터프리터를 본다.
+    `.python-version`이 `3.14`이면 3.14.x 모두, `3.14.8`이면 그 버전만 허용한다.
+    """
+    pinned = tuple(int(part) for part in (root / ".python-version").read_text(encoding="utf-8").strip().split("."))
+    actual = running if running is not None else tuple(sys.version_info[:3])
+    if actual[: len(pinned)] != pinned:
+        wanted = ".".join(map(str, pinned))
+        got = ".".join(map(str, actual))
+        raise SystemExit(f"릴리스를 만드는 파이썬이 .python-version({wanted})과 달라요: {got}. uv python install {wanted} 뒤 다시 실행해 주세요.")
+
+
 def main(argv: list[str] | None = None) -> int:
     """번들을 만들고 경로와 해시를 출력한다."""
     parser = argparse.ArgumentParser(description="whatever.log 릴리스 번들을 만든다")
@@ -115,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expect-tag", help="이 태그(예: v1.0.0-beta.1)가 VERSION과 다르면 실패한다")
     args = parser.parse_args(argv)
 
+    check_python()
     version = read_version()
     if args.expect_tag is not None and args.expect_tag != f"v{version}":
         print(f"태그({args.expect_tag})와 VERSION(v{version})이 달라요. VERSION을 고치고 다시 태그를 만들어 주세요.", file=sys.stderr)

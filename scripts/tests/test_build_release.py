@@ -80,6 +80,12 @@ def test_the_shipped_version_file_is_valid() -> None:
     assert build_release.read_version()  # 저장소의 VERSION이 SemVer가 아니면 릴리스를 만들 수 없다
 
 
+def installed_python_versions(workflow_text: str) -> list[str]:
+    """워크플로가 `uv python install`로 설치하는 파이썬 버전들. 주석 줄은 뺀다 — "# uv python install 3.14"가 주석으로만 남아 있어도 통과하면 안 된다."""
+    code = "\n".join(line for line in workflow_text.splitlines() if not line.lstrip().startswith("#"))
+    return re.findall(r"uv python install (\S+)", code)
+
+
 def test_the_pinned_python_matches_what_ci_and_the_release_build_use() -> None:
     """번들 설치(uv sync)가 고르는 파이썬이 CI·릴리스 빌드가 시험한 버전과 같아야 한다."""
     root = Path(__file__).resolve().parents[2]
@@ -88,7 +94,7 @@ def test_the_pinned_python_matches_what_ci_and_the_release_build_use() -> None:
 
     installed = {}
     for workflow in sorted(workflows.glob("*.yml")):
-        versions = re.findall(r"uv python install (\S+)", workflow.read_text(encoding="utf-8"))
+        versions = installed_python_versions(workflow.read_text(encoding="utf-8"))
         if versions:
             installed[workflow.name] = versions
 
@@ -214,3 +220,47 @@ def test_the_workflow_picks_the_zip_line_not_the_first_line() -> None:
     workflow = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
     assert "head -n1" not in workflow and r"grep '\.zip$'" in workflow
+
+
+# --- 릴리스를 만드는 파이썬 ---
+
+
+def test_the_interpreter_running_the_build_must_match_the_pinned_python(tmp_path) -> None:
+    root = tmp_path / "repo"
+    _write(root / ".python-version", "3.14\n")
+
+    build_release.check_python(root, running=(3, 14, 8))  # 패치 버전은 가리지 않는다
+    with pytest.raises(SystemExit, match=r"\.python-version\(3\.14\)과 달라요: 3\.13\.1"):
+        build_release.check_python(root, running=(3, 13, 1))
+
+
+def test_an_exact_pin_allows_only_that_patch_version(tmp_path) -> None:
+    root = tmp_path / "repo"
+    _write(root / ".python-version", "3.14.8\n")
+
+    build_release.check_python(root, running=(3, 14, 8))
+    with pytest.raises(SystemExit):
+        build_release.check_python(root, running=(3, 14, 6))
+
+
+def test_the_pin_is_checked_against_the_real_interpreter_by_default(tmp_path) -> None:
+    """워크플로의 문자열이 아니라 지금 도는 파이썬을 본다."""
+    root = tmp_path / "repo"
+    _write(root / ".python-version", "2.7\n")
+
+    with pytest.raises(SystemExit):
+        build_release.check_python(root)
+
+
+def test_the_build_refuses_to_start_with_a_different_python(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(build_release, "check_python", lambda *a, **k: (_ for _ in ()).throw(SystemExit("다른 파이썬")))
+
+    with pytest.raises(SystemExit, match="다른 파이썬"):
+        build_release.main(["--skip-ui-build"])
+
+
+def test_a_commented_out_python_install_does_not_count() -> None:
+    """주석에 "uv python install 3.14"가 남아 있어도 설치하는 줄로 세지 않는다 — 실제로 설치하는 줄만 본다."""
+    text = "# uv python install 3.13\n      # uv python install 3.14\n      - run: uv python install 3.14.8\n"
+
+    assert installed_python_versions(text) == ["3.14.8"]
