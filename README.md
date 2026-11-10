@@ -11,11 +11,11 @@ PC에서 실행 중인 프로세스와 활성 창을 주기적으로 기록하�
 ## 설치 (Windows)
 
 1. [Releases](https://github.com/FlashingFuture/whatever-log/releases)에서 `whatever-log-<버전>-win64.zip`을 받습니다.
-2. **옮기지 않을 곳**에 압축을 풀고 `install.cmd`를 실행합니다. 파이썬이 폴더에 들어 있어서 따로 설치할 것이 없습니다.
+2. **옮기지 않을 곳**에 압축을 풀고 `install.cmd`를 실행합니다. [uv](https://docs.astral.sh/uv/)가 필요합니다(없으면 설치 명령을 안내합니다).
 3. 시작 메뉴의 **whatever.log**를 엽니다. 기록기는 로그인할 때 자동으로 시작됩니다.
 
 - **업데이트**: 새 zip을 새 폴더에 풀고 `install.cmd`를 실행합니다. 기록과 목표는 `%LOCALAPPDATA%\whatever.log`에 있어서 그대로 이어집니다.
-- **제거**: 설치 폴더에서 `whatever-log.cmd uninstall`. 데이터는 지우지 않습니다(지우려면 위 폴더를 직접 지웁니다).
+- **제거**: 설치 폴더에서 `uv run --frozen --no-dev whatever-log uninstall`. 데이터는 지우지 않습니다(지우려면 위 폴더를 직접 지웁니다).
 
 자세한 동작과 릴리스 절차는 [docs/packaging.md](docs/packaging.md)에 있습니다.
 

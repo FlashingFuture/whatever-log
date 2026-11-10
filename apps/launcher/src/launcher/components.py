@@ -73,13 +73,18 @@ def this_scripts_dir() -> Path:
     return Path(sys.executable).parent.resolve()
 
 
+# 자동 시작 명령의 실행 파일로 알아볼 이름. 마지막 둘은 파이썬을 통째로 담았던 번들(runtime\\whatever-log.exe, 되돌린 #38)의 것이다 —
+# 그 번들을 설치한 PC에서 이 번들로 업데이트할 때도 이전 폴더의 프로그램을 끄고 인계해야 한다(안 그러면 이전 프로세스가 lock을 쥔 채 남는다).
+_PYTHON_EXECUTABLES = ("pythonw.exe", "python.exe", "whatever-log.exe", "whatever-log-cli.exe")
+
+
 def scripts_dir_of(command: str) -> Path | None:
     """자동 시작 명령(`"…\\.venv\\Scripts\\pythonw.exe" -m …`)이 가리키는 설치본의 Scripts 폴더. 파이썬 실행 명령이 아니면 None."""
     if command.startswith('"'):
         executable = command[1:].partition('"')[0]
     else:
         executable = command.partition(" ")[0]
-    if Path(executable).name.lower() not in ("pythonw.exe", "python.exe"):
+    if Path(executable).name.lower() not in _PYTHON_EXECUTABLES:
         return None
     return Path(executable).parent.resolve()
 

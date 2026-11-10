@@ -1,4 +1,3 @@
-import hashlib
 import importlib.util
 import json
 import re
@@ -10,13 +9,6 @@ import pytest
 _SPEC = importlib.util.spec_from_file_location("build_release", Path(__file__).resolve().parents[1] / "build_release.py")
 build_release = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(build_release)
-
-# 아래 autouse 픽스처가 가짜로 바꾸기 전의 진짜 함수들(내려받기·해시 확인은 따로 시험한다)
-_REAL_FETCH = build_release.fetch_embedded_python
-_REAL_EXPORT = build_release.export_requirements
-_REAL_INSTALL = build_release.install_dependencies
-
-WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml"
 
 
 def _write(path: Path, text: str = "x") -> None:
@@ -32,7 +24,6 @@ def repo(tmp_path):
         _write(root / name)
     _write(root / "VERSION", "1.0.0-beta.1\n")
     _write(root / ".python-version", "3.14\n")
-    _write(root / ".mise.toml", '[tools]\nnode = "24.22.1"\npython = "3.14.8"\n')
     for app in build_release.PYTHON_APPS:
         _write(root / "apps" / app / "pyproject.toml")
         _write(root / "apps" / app / "src" / app / "__init__.py")
@@ -52,29 +43,6 @@ def repo(tmp_path):
     _write(root / "docs" / "a.md")
     _write(root / "Dockerfile")
     return root
-
-
-def _fake_embedded_zip(path: Path) -> Path:
-    """임베더블 파이썬 zip을 흉내 낸 작은 zip(진짜는 12MB). 이름과 구조만 같다."""
-    with zipfile.ZipFile(path, "w") as bundle:
-        for name in ("python.exe", "pythonw.exe", "python314.dll", "python3.dll", "python314.zip", "LICENSE.txt"):
-            bundle.writestr(name, f"fake {name}")
-        bundle.writestr("python314._pth", "python314.zip\r\n.\r\n#import site\r\n")
-    return path
-
-
-@pytest.fixture(autouse=True)
-def _no_network_no_uv(monkeypatch, tmp_path):
-    """임베더블 zip 내려받기와 uv 호출은 가짜로 바꾼다(각 단계는 따로 시험한다)."""
-    zip_path = _fake_embedded_zip(tmp_path / "embed.zip")
-    monkeypatch.setattr(build_release, "fetch_embedded_python", lambda version, cache_dir: zip_path)
-    monkeypatch.setattr(build_release, "export_requirements", lambda root, output: output.write_text("psutil==1\n", encoding="utf-8"))
-
-    def fake_install(requirements, target, python):
-        _write(target / "psutil" / "__init__.py")
-        _write(target / "bin" / "keyring.exe")  # 빌드 PC의 경로가 박힌 명령 실행기
-
-    monkeypatch.setattr(build_release, "install_dependencies", fake_install)
 
 
 def _staged(repo, tmp_path):
@@ -112,15 +80,28 @@ def test_the_shipped_version_file_is_valid() -> None:
     assert build_release.read_version()  # 저장소의 VERSION이 SemVer가 아니면 릴리스를 만들 수 없다
 
 
-def test_the_ci_python_matches_the_pin() -> None:
-    """번들을 만드는 uv가 쓰는 파이썬(CI)과 .python-version이 같아야 한다."""
+def installed_python_versions(workflow_text: str) -> list[str]:
+    """워크플로가 `uv python install`로 설치하는 파이썬 버전들. 주석 줄은 뺀다 — "# uv python install 3.14"가 주석으로만 남아 있어도 통과하면 안 된다."""
+    code = "\n".join(line for line in workflow_text.splitlines() if not line.lstrip().startswith("#"))
+    return re.findall(r"uv python install (\S+)", code)
+
+
+def test_the_pinned_python_matches_what_ci_and_the_release_build_use() -> None:
+    """번들 설치(uv sync)가 고르는 파이썬이 CI·릴리스 빌드가 시험한 버전과 같아야 한다."""
     root = Path(__file__).resolve().parents[2]
     pinned = (root / ".python-version").read_text(encoding="utf-8").strip()
+    workflows = root / ".github" / "workflows"
 
-    for workflow in sorted((root / ".github" / "workflows").glob("*.yml")):
-        text = workflow.read_text(encoding="utf-8")
-        if "uv python install" in text:
-            assert f"uv python install {pinned}" in text, workflow.name
+    installed = {}
+    for workflow in sorted(workflows.glob("*.yml")):
+        versions = installed_python_versions(workflow.read_text(encoding="utf-8"))
+        if versions:
+            installed[workflow.name] = versions
+
+    assert installed  # 워크플로가 파이썬을 설치하는 방식이 바뀌면 이 검사도 바꿔야 한다
+    for name, versions in installed.items():
+        assert versions == [pinned] * len(versions), name  # 3.14.1과 3.14.10처럼 앞부분만 같은 것도 다르다고 본다
+
 
 
 # --- 번들 내용 ---
@@ -129,23 +110,11 @@ def test_the_ci_python_matches_the_pin() -> None:
 def test_the_bundle_has_what_a_users_pc_needs(repo, tmp_path) -> None:
     _, files = _staged(repo, tmp_path)
 
-    assert {"VERSION", "README.md", "LICENSE", "install.cmd", "whatever-log.cmd", "release.json"} <= files
-    assert "apps/launcher/src/launcher/__init__.py" in files and "packages/common/src/common/__init__.py" in files
+    assert {"pyproject.toml", "uv.lock", "VERSION", "README.md", "LICENSE", "install.cmd", "release.json"} <= files
+    assert ".python-version" in files  # 없으면 사용자 PC의 uv가 CI와 다른(더 새) 파이썬을 고른다
+    assert "apps/launcher/pyproject.toml" in files and "apps/launcher/src/launcher/__init__.py" in files
+    assert "packages/common/src/common/__init__.py" in files
     assert "apps/ui/dist/index.html" in files
-    assert {"runtime/whatever-log.exe", "runtime/whatever-log-cli.exe", "runtime/python314.dll", "runtime/python314._pth"} <= files
-    assert "runtime/Lib/site-packages/psutil/__init__.py" in files
-
-
-def test_the_bundle_does_not_need_uv_or_a_python_on_the_users_pc(repo, tmp_path) -> None:
-    """설치는 번들 안의 실행 파일로 한다 — uv.lock·pyproject.toml·.python-version은 더 이상 쓰이지 않는다."""
-    target, files = _staged(repo, tmp_path)
-
-    assert not ({"uv.lock", "pyproject.toml", ".python-version"} & files)
-    assert not any(name.endswith("pyproject.toml") for name in files)
-    for script in ("install.cmd", "whatever-log.cmd"):
-        text = (target / script).read_text(encoding="utf-8")
-        assert "runtime\\whatever-log-cli.exe" in text
-        assert "uv " not in text and "uv.exe" not in text and "winget" not in text
 
 
 def test_the_bundle_leaves_out_the_server_the_ui_sources_tests_docs_and_local_data(repo, tmp_path) -> None:
@@ -159,26 +128,23 @@ def test_the_bundle_leaves_out_the_server_the_ui_sources_tests_docs_and_local_da
     assert "packages/notes/README.md" not in files
 
 
-def test_the_install_scripts_ship_with_crlf_line_endings(repo, tmp_path, monkeypatch) -> None:
-    """원본이 LF여도 번들의 .cmd는 CRLF여야 한다 — cmd는 LF 배치 파일을 실행하다 구문 오류로 멈춘다."""
-    scripts = tmp_path / "scripts"
-    scripts.mkdir()
-    (scripts / "install.cmd").write_bytes("@echo off\nif errorlevel 1 (\n  echo 한글\n)\r\n".encode())
-    (scripts / "whatever-log.cmd").write_bytes(b"@echo off\nexit /b 0\n")
-    monkeypatch.setattr(build_release, "RELEASE_DIR", scripts)
+def test_the_install_script_ships_with_crlf_line_endings(repo, tmp_path, monkeypatch) -> None:
+    """원본이 LF여도 번들의 install.cmd는 CRLF여야 한다 — cmd는 LF 배치 파일을 실행하다 구문 오류로 멈춘다."""
+    script = tmp_path / "install.cmd"
+    script.write_bytes("@echo off\nif errorlevel 1 (\n  echo 한글\n)\r\n".encode())
+    monkeypatch.setattr(build_release, "INSTALL_SCRIPT", script)
 
     target, _ = _staged(repo, tmp_path)
+    shipped = (target / "install.cmd").read_bytes()
 
-    assert (target / "install.cmd").read_bytes() == "@echo off\r\nif errorlevel 1 (\r\n  echo 한글\r\n)\r\n".encode()
-    assert (target / "whatever-log.cmd").read_bytes() == b"@echo off\r\nexit /b 0\r\n"
+    assert shipped == "@echo off\r\nif errorlevel 1 (\r\n  echo 한글\r\n)\r\n".encode()
 
 
-def test_the_real_scripts_ship_with_only_crlf(repo, tmp_path) -> None:
+def test_the_real_install_script_ships_with_only_crlf(repo, tmp_path) -> None:
     target, _ = _staged(repo, tmp_path)
+    shipped = (target / "install.cmd").read_bytes()
 
-    for script in ("install.cmd", "whatever-log.cmd"):
-        shipped = (target / script).read_bytes()
-        assert shipped.count(b"\n") == shipped.count(b"\r\n") > 0
+    assert shipped.count(b"\n") == shipped.count(b"\r\n") > 0
 
 
 def test_the_marker_records_the_version_and_channel(repo, tmp_path) -> None:
@@ -192,125 +158,6 @@ def test_staging_without_a_built_ui_fails_with_a_hint(repo, tmp_path) -> None:
 
     with pytest.raises(SystemExit, match="화면"):
         build_release.stage("1.0.0", tmp_path / "stage", repo)
-
-
-# --- 런타임(임베더블 파이썬) ---
-
-
-def test_the_executables_are_renamed_so_the_window_owner_is_the_app_name(repo, tmp_path) -> None:
-    """recorder는 창을 가진 프로세스의 실행 파일 이름을 기록한다 — pythonw.exe면 다른 파이썬 프로그램과 구분되지 않는다."""
-    target, files = _staged(repo, tmp_path)
-
-    assert (target / "runtime" / "whatever-log.exe").read_text() == "fake pythonw.exe"  # 콘솔 없는 쪽
-    assert (target / "runtime" / "whatever-log-cli.exe").read_text() == "fake python.exe"  # 콘솔 있는 쪽
-    assert "runtime/python.exe" not in files and "runtime/pythonw.exe" not in files  # 원래 이름은 남기지 않는다
-
-
-def test_the_path_file_is_named_after_the_versioned_dll_and_lists_relative_source_folders(repo, tmp_path) -> None:
-    target, files = _staged(repo, tmp_path)
-
-    assert "runtime/python314._pth" in files and "runtime/python3._pth" not in files  # python3.dll이 아니라 python314.dll 기준
-    lines = (target / "runtime" / "python314._pth").read_bytes().decode("utf-8").split("\r\n")
-    assert lines[:3] == ["python314.zip", ".", "Lib\\site-packages"]
-    assert lines[-2:] == ["import site", ""]
-    assert "..\\apps\\launcher\\src" in lines and "..\\packages\\common\\src" in lines
-    assert not any(line.startswith("..\\apps\\server") for line in lines)  # 서버는 번들에 없다
-    for line in lines:
-        if line.startswith("..\\"):
-            assert (target / "runtime" / line.replace("\\", "/")).resolve().is_dir(), line  # 가리키는 폴더가 번들에 실제로 있다
-
-
-def test_machine_specific_command_launchers_are_removed(repo, tmp_path) -> None:
-    """의존성 설치가 만든 bin\\keyring.exe 같은 실행기에는 빌드 PC의 파이썬 경로가 박혀 있다."""
-    _, files = _staged(repo, tmp_path)
-
-    assert not any(name.startswith("runtime/Lib/site-packages/bin") for name in files)
-
-
-def test_the_temporary_requirements_file_is_not_shipped(repo, tmp_path) -> None:
-    _, files = _staged(repo, tmp_path)
-
-    assert not any(name.endswith("requirements.txt") for name in files)
-
-
-def test_dependencies_are_installed_for_the_target_platform_not_this_machine(tmp_path, monkeypatch) -> None:
-    """이 PC의 파이썬이 아니라 번들에 넣을 Windows·파이썬 버전용으로 받는다(빌드 PC가 달라도 같은 결과)."""
-    seen = {}
-    monkeypatch.setattr(build_release.subprocess, "run", lambda command, **kwargs: seen.update(command=command, kwargs=kwargs))
-
-    _REAL_INSTALL(tmp_path / "req.txt", tmp_path / "site", "3.14.8")
-
-    command = seen["command"]
-    assert command[:3] == ["uv", "pip", "install"]
-    assert command[command.index("--python-platform") + 1] == "windows"
-    assert command[command.index("--python-version") + 1] == "3.14.8"
-    assert seen["kwargs"]["check"] is True and seen["kwargs"]["stdout"] is build_release.sys.stderr
-
-
-def test_requirements_come_from_the_lock_without_dev_or_workspace_packages(tmp_path, monkeypatch) -> None:
-    seen = {}
-    monkeypatch.setattr(build_release.subprocess, "run", lambda command, **kwargs: seen.update(command=command))
-
-    _REAL_EXPORT(tmp_path, tmp_path / "req.txt")
-
-    command = seen["command"]
-    assert {"--frozen", "--no-dev", "--all-packages", "--no-emit-workspace"} <= set(command)  # uv.lock 그대로, 개발용·우리 패키지 제외
-
-
-# --- 파이썬 버전과 무결성 ---
-
-
-def test_the_python_version_comes_from_mise_toml_and_must_be_exact(repo) -> None:
-    assert build_release.python_version(repo) == "3.14.8"
-    _write(repo / ".mise.toml", '[tools]\npython = "3.14"\n')
-
-    with pytest.raises(ValueError, match="정확한 버전"):
-        build_release.python_version(repo)
-
-
-def test_the_shipped_python_version_has_a_pinned_hash() -> None:
-    """.mise.toml의 python을 올리면서 EMBEDDED_PYTHON_SHA256을 안 바꾸면, 번들을 만들 수 없어야 한다(조용히 다른 파이썬이 들어가지 않게)."""
-    version = build_release.python_version()
-
-    assert version in build_release.EMBEDDED_PYTHON_SHA256
-    assert re.fullmatch(r"[0-9a-f]{64}", build_release.EMBEDDED_PYTHON_SHA256[version])
-
-
-def test_an_unknown_python_version_stops_the_build_with_a_hint(tmp_path) -> None:
-    with pytest.raises(SystemExit, match="EMBEDDED_PYTHON_SHA256"):
-        _REAL_FETCH("3.99.0", tmp_path)
-
-
-def test_a_download_with_the_wrong_hash_is_rejected_and_discarded(tmp_path, monkeypatch) -> None:
-    monkeypatch.setitem(build_release.EMBEDDED_PYTHON_SHA256, "9.9.9", "0" * 64)
-    monkeypatch.setattr(build_release.urllib.request, "urlretrieve", lambda url, path: Path(path).write_bytes(b"tampered"))
-
-    with pytest.raises(SystemExit, match="SHA-256이 달라요"):
-        _REAL_FETCH("9.9.9", tmp_path)
-
-    assert not (tmp_path / "python-9.9.9-embed-amd64.zip").exists()  # 잘못된 파일을 캐시에 남기지 않는다
-
-
-def test_a_cached_download_with_the_right_hash_is_reused_without_downloading(tmp_path, monkeypatch) -> None:
-    content = b"genuine"
-    monkeypatch.setitem(build_release.EMBEDDED_PYTHON_SHA256, "9.9.9", hashlib.sha256(content).hexdigest())
-    (tmp_path / "python-9.9.9-embed-amd64.zip").write_bytes(content)
-
-    def forbidden(url, path):
-        raise AssertionError("이미 받은 파일을 다시 내려받았다")
-
-    monkeypatch.setattr(build_release.urllib.request, "urlretrieve", forbidden)
-
-    assert _REAL_FETCH("9.9.9", tmp_path).read_bytes() == content
-
-
-def test_a_corrupted_cache_is_downloaded_again(tmp_path, monkeypatch) -> None:
-    content = b"genuine"
-    monkeypatch.setitem(build_release.EMBEDDED_PYTHON_SHA256, "9.9.9", hashlib.sha256(content).hexdigest())
-    (tmp_path / "python-9.9.9-embed-amd64.zip").write_bytes(b"half-written")
-    monkeypatch.setattr(build_release.urllib.request, "urlretrieve", lambda url, path: Path(path).write_bytes(content))
-
-    assert _REAL_FETCH("9.9.9", tmp_path).read_bytes() == content
 
 
 # --- zip ---
@@ -351,12 +198,9 @@ def test_ui_build_output_goes_to_stderr_so_stdout_only_carries_the_result(monkey
         assert kwargs["stdout"] is build_release.sys.stderr and kwargs["check"] is True
 
 
-# --- 워크플로 ---
-
-
 def test_the_workflow_installs_the_bundle_before_publishing_it() -> None:
     """만든 zip을 install.cmd로 설치해 본 뒤에만 Release를 올린다 — v1.0.0-beta.1은 설치되지 않는 채로 나갔다."""
-    workflow = WORKFLOW.read_text(encoding="utf-8")
+    workflow = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
     install = workflow.index("call install.cmd")
     publish = workflow.index("gh release create")
@@ -364,18 +208,8 @@ def test_the_workflow_installs_the_bundle_before_publishing_it() -> None:
     assert "shell: cmd" in workflow[:install]  # 사용자가 더블클릭하는 것과 같게 cmd로 실행한다
 
 
-def test_the_workflow_installs_without_uv_or_python_on_the_path() -> None:
-    """번들이 uv·파이썬에 기대지 않는다는 것을 설치 시험이 보장해야 한다 — 러너에는 둘 다 깔려 있어서, PATH를 비워야 의존 여부가 드러난다."""
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-    install_step = workflow[workflow.index("call install.cmd") - 400 : workflow.index("call install.cmd")]
-
-    assert "set PATH=%SystemRoot%\\System32" in install_step
-    after = workflow[workflow.index("call install.cmd") :]
-    assert "uv run" not in after.split("GitHub Release 올리기")[0]  # 설치 시험 구간은 uv를 부르지 않는다
-
-
 def test_a_manual_run_of_the_workflow_does_not_publish() -> None:
-    workflow = WORKFLOW.read_text(encoding="utf-8")
+    workflow = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     publish_step = workflow[workflow.index("- name: GitHub Release 올리기") :]
 
     assert "workflow_dispatch:" in workflow
@@ -383,12 +217,60 @@ def test_a_manual_run_of_the_workflow_does_not_publish() -> None:
 
 
 def test_the_workflow_picks_the_zip_line_not_the_first_line() -> None:
-    workflow = WORKFLOW.read_text(encoding="utf-8")
+    workflow = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
     assert "head -n1" not in workflow and r"grep '\.zip$'" in workflow
 
 
-def test_the_release_notes_do_not_ask_for_uv() -> None:
-    workflow = WORKFLOW.read_text(encoding="utf-8")
+# --- 릴리스를 만드는 파이썬 ---
 
-    assert "uv 필요" not in workflow
+
+def test_the_interpreter_running_the_build_must_match_the_pinned_python(tmp_path) -> None:
+    root = tmp_path / "repo"
+    _write(root / ".python-version", "3.14\n")
+
+    build_release.check_python(root, running=(3, 14, 8))  # 패치 버전은 가리지 않는다
+    with pytest.raises(SystemExit, match=r"\.python-version\(3\.14\)과 달라요: 3\.13\.1"):
+        build_release.check_python(root, running=(3, 13, 1))
+
+
+def test_an_exact_pin_allows_only_that_patch_version(tmp_path) -> None:
+    root = tmp_path / "repo"
+    _write(root / ".python-version", "3.14.8\n")
+
+    build_release.check_python(root, running=(3, 14, 8))
+    with pytest.raises(SystemExit):
+        build_release.check_python(root, running=(3, 14, 6))
+
+
+@pytest.mark.parametrize("pin", ["3.14t", "cpython-3.14", "3.14.*", ">=3.14", "pypy"])
+def test_a_pin_that_is_not_a_plain_number_stops_with_a_hint_not_a_traceback(tmp_path, pin) -> None:
+    """uv는 이런 형식도 읽지만 번들을 만드는 쪽은 숫자만 비교할 수 있다 — ValueError 트레이스백이 아니라 무엇을 고칠지 알려 준다."""
+    root = tmp_path / "repo"
+    _write(root / ".python-version", pin + "\n")
+
+    with pytest.raises(SystemExit, match="숫자 버전이어야 해요"):
+        build_release.check_python(root, running=(3, 14, 8))
+
+
+def test_the_pin_is_checked_against_the_real_interpreter_by_default(tmp_path) -> None:
+    """워크플로의 문자열이 아니라 지금 도는 파이썬을 본다."""
+    root = tmp_path / "repo"
+    _write(root / ".python-version", "2.7\n")
+
+    with pytest.raises(SystemExit):
+        build_release.check_python(root)
+
+
+def test_the_build_refuses_to_start_with_a_different_python(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(build_release, "check_python", lambda *a, **k: (_ for _ in ()).throw(SystemExit("다른 파이썬")))
+
+    with pytest.raises(SystemExit, match="다른 파이썬"):
+        build_release.main(["--skip-ui-build"])
+
+
+def test_a_commented_out_python_install_does_not_count() -> None:
+    """주석에 "uv python install 3.14"가 남아 있어도 설치하는 줄로 세지 않는다 — 실제로 설치하는 줄만 본다."""
+    text = "# uv python install 3.13\n      # uv python install 3.14\n      - run: uv python install 3.14.8\n"
+
+    assert installed_python_versions(text) == ["3.14.8"]
