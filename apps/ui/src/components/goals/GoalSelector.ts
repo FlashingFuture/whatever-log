@@ -14,10 +14,6 @@ export interface GoalSelectorProps {
 
 export interface GoalSelector {
   element: HTMLElement;
-  /** 선택 단추에 포커스가 있는가(요소를 새 내용에 옮겨 끼우면 포커스를 잃으므로, 옮기기 전에 확인해 두었다가 되돌린다). */
-  hasFocus: () => boolean;
-  /** 선택 단추로 포커스를 돌린다. */
-  focus: () => void;
   /** 목록과 고른 것을 갱신한다. 홈이 15초마다 다시 불러올 때마다 부른다 — 선택기 자체는 갈아치워지지 않는다. */
   update: (state: {
     goals: readonly GoalOption[];
@@ -33,7 +29,7 @@ const MAX_NAME_CHARS = 18;
 /**
  * 홈 요약 맨 위의 목표 선택: "목표 전체" 또는 목표 하나를 고른다. 누르면 아래 삼각형(▾)이 가리키는 방향으로 목록 상자가 열린다.
  *
- * 홈은 15초마다 내용을 통째로 다시 그린다. 이 선택기는 그 바깥에서 한 번만 만들고 같은 요소를 새 내용에 끼워 넣는다 — 그래야 열려 있는
+ * 홈은 15초마다 내용을 통째로 다시 그린다. 이 선택기는 그 바깥(페이지 맨 위)에 한 번만 붙여 두고 `update`로 목록만 갱신한다 — 그래야 열려 있는
  * 목록과 포커스가 갱신에 지워지지 않는다. 목록은 열 때마다 그때의 상태로 만든다.
  */
 export function createGoalSelector(props: GoalSelectorProps): GoalSelector {
@@ -112,8 +108,6 @@ export function createGoalSelector(props: GoalSelectorProps): GoalSelector {
 
   return {
     element: trigger,
-    hasFocus: () => document.activeElement === trigger,
-    focus: () => trigger.focus({ preventScroll: true }),
     update(state) {
       goals = state.goals;
       selectedId = state.selectedId;

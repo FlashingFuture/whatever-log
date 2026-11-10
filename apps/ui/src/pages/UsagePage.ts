@@ -10,8 +10,8 @@ import type { AccountStore } from "../state/accountStore";
 import styles from "./UsagePage.module.css";
 
 /**
- * 홈 화면: 왼쪽에 선택한 구간의 요약(목표 선택·목표 수행 시간 `전체 | 현 기기`·가장 길게 수행한 프로세스·목표 관리), 오른쪽에
- * 프로세스별 차트(집중 시간순). 구간 이동은 PeriodView가 맡고, 여기는 "구간 → 요약 + 차트"만
+ * 홈 화면: 맨 위에 목표 선택(목표 전체 / 목표 하나), 그 아래에 일/주/월 선택과 구간 이동, 그 아래에 왼쪽 요약(목표 수행 시간 `전체 | 현 기기`·
+ * 달성률·가장 길게 수행한 프로세스·목표 관리)과 오른쪽 프로세스별 차트(집중 시간순). 구간 이동은 PeriodView가 맡고, 여기는 "구간 → 요약 + 차트"만
  * 정한다. 목표 관리 모달과 목표 선택기는 15초마다 다시 그려지는 내용 밖(페이지)에 두어, 열려 있는 동안 갱신에
  * 지워지지 않게 한다. 고른 목표는 이 페이지가 들고 있다(화면을 떠나면 목표 전체로 돌아간다). 돌려주는 함수로 화면을 정리한다.
  */
@@ -30,8 +30,6 @@ export function mountUsagePage(
 
   // 고른 목표(null = 목표 전체). 목표가 지워지면 다음에 그릴 때 목표 전체로 돌아간다(resolveSelection).
   let selectedGoalId: number | null = null;
-  // 포커스 복원 타이머. 화면을 떠난 뒤에 실행되지 않게 정리 때 취소한다.
-  let focusTimer: ReturnType<typeof setTimeout> | null = null;
   const selector = createGoalSelector({
     onSelect: (id) => {
       selectedGoalId = id;
@@ -54,8 +52,6 @@ export function mountUsagePage(
         goals: progress?.goals ?? [],
         selectedId: selectedGoalId,
       });
-      // 선택기를 새 내용에 옮겨 끼우면 포커스를 잃는다 — 키보드로 단추에 있던 사용자가 갱신마다 쫓겨나지 않게, 새 내용이 붙은 뒤 되돌린다.
-      const selectorHadFocus = selector.hasFocus();
       const side = document.createElement("div");
       side.className = styles.side;
       side.append(
@@ -64,28 +60,22 @@ export function mountUsagePage(
           progress,
           totals,
           selectedGoalId,
-          selector: selector.element,
           onManageGoals: goals.open,
         }),
       );
       const dashboard = document.createElement("div");
       dashboard.className = styles.dashboard;
       dashboard.append(side, createUsageChart(usage));
-      if (selectorHadFocus) {
-        if (focusTimer !== null) {
-          clearTimeout(focusTimer);
-        }
-        focusTimer = setTimeout(selector.focus, 0); // PeriodView가 내용을 붙인 다음(같은 틱의 뒤)
-      }
       return dashboard;
     },
   });
 
-  root.replaceChildren(view.element);
+  // 맨 위에 목표 선택, 그 아래에 일/주/월 선택과 내용. 선택기는 15초마다 다시 그려지는 내용 바깥에 붙어 있어서 열린 목록·포커스가 갱신에 영향받지 않는다.
+  const goalBar = document.createElement("div");
+  goalBar.className = styles.goalBar;
+  goalBar.append(selector.element);
+  root.replaceChildren(goalBar, view.element);
   return () => {
-    if (focusTimer !== null) {
-      clearTimeout(focusTimer);
-    }
     view.destroy();
     selector.destroy();
     goals.destroy();

@@ -1,3 +1,8 @@
+/* 맨 위의 목표 선택: 요약 칸(왼쪽)과 같은 너비로 왼쪽에 놓이고, 그 아래 일/주/월 선택과 간격을 둔다. */
+.goalBar {
+  max-width: 16rem;
+  margin-bottom: var(--space-4);
+}
 /* 왼쪽 요약 + 오른쪽 차트. 좁은 창에서는 요약이 위, 차트가 아래로 쌓인다. */
 .dashboard {
   display: grid;

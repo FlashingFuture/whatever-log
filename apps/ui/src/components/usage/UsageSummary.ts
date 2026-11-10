@@ -23,8 +23,6 @@ export interface UsageSummaryProps {
   totals: GoalTotals | null;
   /** 고른 목표(null = 목표 전체). 지금 목록에 있는 것이어야 한다 — 호출부가 먼저 정리한다. */
   selectedGoalId: number | null;
-  /** 목표를 고르는 단추(요약 맨 위에 놓인다). 페이지가 갱신 바깥에서 만들어 둔 요소다. */
-  selector: HTMLElement;
   /** "목표 프로세스 관리"를 눌렀다. */
   onManageGoals: () => void;
 }
@@ -209,8 +207,8 @@ function goalBreakdown(goal: GoalProgress): HTMLElement {
 }
 
 /**
- * 홈 왼쪽 요약: 맨 위에 목표 선택(목표 전체 / 목표 하나), 목표 수행 시간(`전체 | 현 기기`), 가장 길게 수행한 프로세스(목표 중 / 실제),
- * 그 아래 목표 관리 링크. 목표 하나를 고르면 그 목표의 시간과, 연결한 프로세스·사이트별 수행 시간을 보인다.
+ * 홈 왼쪽 요약: 목표 수행 시간(`전체 | 현 기기`), 달성률, 가장 길게 수행한 프로세스(목표 중 / 실제),
+ * 그 아래 목표 관리 링크(목표를 고르는 단추는 요약 위, 페이지 맨 위에 있다). 목표 하나를 고르면 그 목표의 시간과, 연결한 프로세스·사이트별 수행 시간을 보인다.
  * 값은 모두 서버가 계산한 것(목표 수행은 packages/goals, 실제는 packages/aggregation)을 그대로
  * 보여 주고, 화면은 둘이 같은 프로세스인지만 보아 하나로 합친다.
  */
@@ -220,8 +218,6 @@ export function createUsageSummary(props: UsageSummaryProps): HTMLElement {
   container.setAttribute("aria-label", "요약");
 
   const { progress, usage } = props;
-  container.append(props.selector);
-
   const selectedGoal =
     progress?.goals.find((goal) => goal.id === props.selectedGoalId) ?? null;
   if (progress === null) {
