@@ -132,6 +132,16 @@ export interface GoalProgressResponse {
   };
 }
 
+/**
+ * 목표별 **모든 기기의 합계**(`GET /api/goals/all-devices`). state: local(다른 기기의 기록을 받을 수 없는 상태 — 로그인 전·동기화 꺼짐,
+ * 이 PC의 값이 곧 전체다) / synced(서버 합계) / unavailable(받으려 했지만 실패). goals의 id는 이 PC의 목표 id이고, 서버에 연결된
+ * 목표만 들어 있다(없는 목표는 이 PC의 값이 전체다).
+ */
+export interface GoalTotals {
+  state: "local" | "synced" | "unavailable";
+  goals: { id: number; minutes: number }[];
+}
+
 /** 로그인 방식 하나(화면의 로그인 버튼 하나). id는 요청에 쓰고 label은 버튼에 보인다. */
 export interface LoginProvider {
   id: string;

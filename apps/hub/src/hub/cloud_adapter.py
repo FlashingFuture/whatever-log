@@ -7,11 +7,13 @@ packages/cloud/tests/test_isolation.py가 검사한다.
 
 import hashlib
 import threading
+import time
 import webbrowser
 from collections.abc import Callable, Collection
 from pathlib import Path
 from typing import Any
 
+from goals import META_SYNC_ENABLED
 from goals.errors import StaleSyncError
 from hub.account_service import (
     AccountUnavailable,
@@ -27,6 +29,11 @@ from hub.account_service import (
 # 이 PC에서 계정 삭제를 보냈지만 결과를 알 수 없을 때 goals.db의 sync_meta에 남기는 표시(값은 그때의 세션 키). 그 세션이 나중에 서버에서
 # 거부되면(401) 계정이 지워졌을 수 있으므로 동기화 연결을 정리하고, 화면은 "결과를 확인하지 못했다"를 계속 알린다.
 META_DELETION_UNCERTAIN = "deletion_uncertain"
+
+# 모든 기기 합계(서버에서 받는다)를 기억해 두는 시간. 홈 화면이 15초마다 다시 불러와서, 그때마다 서버를 부르지 않게 한다.
+# 다른 기기의 기록은 에이전트가 5분마다 올리므로 1분 늦는 것은 눈에 띄지 않는다.
+TOTALS_CACHE_SECONDS = 60.0
+_TOTALS_CACHE_MAX = 32
 
 
 def session_key(token: str) -> str:
@@ -59,6 +66,9 @@ class _CloudBackend:
         # 요청 처리 스레드마다 "이 요청이 쓴 토큰"을 기억한다. 401을 받았을 때 그 토큰의 세션만 지우기 위해서다(그 사이 로그아웃하고 다른
         # 계정으로 로그인했다면 새 계정의 자격 증명을 지우지 않는다).
         self._request = threading.local()
+        # (세션 키, 시작일, 끝일) → (받은 시각, {서버 목표 id: 분 합계}). 세션 키가 들어 있어 로그인이 바뀌면 다른 키가 된다.
+        self._totals_cache: dict[tuple[str, str, str], tuple[float, dict[str, int]]] = {}
+        self._totals_lock = threading.Lock()
 
     def providers(self) -> tuple[ProviderInfo, ...]:
         """cloud가 지원하는 로그인 방식들."""
@@ -233,6 +243,57 @@ class _CloudBackend:
             }
 
         return self._guard(run, goals_db)
+
+    def goal_totals(self, goals_db: Path, start_day: str, end_day: str) -> dict[str, Any]:
+        """목표별 **모든 기기의 합계**(분). 날짜는 `YYYY-MM-DD`이고 끝날을 포함한다.
+
+        돌려주는 값: `{"state": "local" | "synced", "goals": [{"id": 이 PC의 목표 id, "minutes": 합계}]}`.
+        - `local`: 다른 기기의 기록을 받을 수 없다(로그인하지 않았거나 동기화를 켜지 않았다). 이때 화면은 이 PC의 값을 전체로 본다 —
+          다른 기기가 올린 것이 없으니 틀리지 않다.
+        - `synced`: 서버에서 받은 합계. 서버에 연결된 목표(서버 id가 있는 것)만 들어 있고, 서버에 기록이 없으면 0분이다.
+        서버·로그인 문제는 SyncProblem. 서버 호출은 1분 동안 기억한다.
+        """
+        session = self._account.session()
+        if session is None:
+            return {"state": "local", "goals": []}
+        with _open_goals(goals_db) as store:
+            if store.get_meta(META_SYNC_ENABLED) != "1":
+                return {"state": "local", "goals": []}
+            # 서버 id가 있는 목표 = 서버와 연결된 목표(연결된 목표의 동기화 상태는 바뀌지 않는다 — goals.GoalStore.set_sync_state)
+            links = {link.remote_id: link.goal_id for link in store.sync_links() if link.remote_id is not None}
+        key = (session_key(session.token), start_day, end_day)
+        totals = self._cached_totals(key)
+        if totals is None:
+
+            def run():
+                api, _, _ = self._server()
+                summed: dict[str, int] = {}
+                for day in api.get_progress(start_day, end_day):
+                    summed[day.goal_id] = summed.get(day.goal_id, 0) + day.minutes
+                return summed
+
+            totals = self._guard(run, goals_db)
+            self._remember_totals(key, totals)
+        return {
+            "state": "synced",
+            "goals": [{"id": goal_id, "minutes": totals.get(remote_id, 0)} for remote_id, goal_id in sorted(links.items(), key=lambda item: item[1])],
+        }
+
+    def _cached_totals(self, key: tuple[str, str, str]) -> dict[str, int] | None:
+        """기억해 둔 합계(1분 안의 것). 없거나 오래됐으면 None."""
+        with self._totals_lock:
+            entry = self._totals_cache.get(key)
+            if entry is not None and time.monotonic() - entry[0] < TOTALS_CACHE_SECONDS:
+                return entry[1]
+            return None
+
+    def _remember_totals(self, key: tuple[str, str, str], totals: dict[str, int]) -> None:
+        """받은 합계를 기억한다. 오래 쓰면 키가 쌓이므로 상한을 넘으면 오래된 것부터 버린다."""
+        with self._totals_lock:
+            self._totals_cache[key] = (time.monotonic(), totals)
+            while len(self._totals_cache) > _TOTALS_CACHE_MAX:
+                oldest = min(self._totals_cache, key=lambda item: self._totals_cache[item][0])
+                del self._totals_cache[oldest]
 
     # --- 기기 목록과 계정 삭제 ---
 

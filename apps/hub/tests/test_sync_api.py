@@ -94,6 +94,16 @@ class FakeApi:
     def put_progress(self, device_id, entries):
         return ProgressResult(0, ())
 
+    days: list = []  # cloud.DayProgress들(서버가 합산한 (목표, 날짜))
+    progress_requests: list[tuple[str, str]] = []
+
+    def get_progress(self, start, end):
+        FakeApi.calls.append("get_progress")
+        FakeApi.progress_requests.append((start, end))
+        if FakeApi.fail:
+            raise FakeApi.fail
+        return list(FakeApi.days)
+
 
 @pytest.fixture
 def sync_server(tmp_path, monkeypatch):
@@ -104,6 +114,7 @@ def sync_server(tmp_path, monkeypatch):
     backend.set_password("whatever.log", "session", json.dumps({"token": "secret-token", "expires_at": None, "email": "a@example.com"}))
     FakeApi.goals, FakeApi.fail, FakeApi.created, FakeApi.tokens, FakeApi.calls = {}, None, [], [], []
     FakeApi.devices, FakeApi.deleted_devices, FakeApi.account_deleted = [], [], False
+    FakeApi.days, FakeApi.progress_requests = [], []
     monkeypatch.setattr(cloud, "ServerApi", FakeApi)
 
     goals_db = tmp_path / "goals.db"
@@ -1235,3 +1246,168 @@ def test_the_sync_reset_for_a_rejected_session_happens_before_the_session_is_cle
         GoalStore.reset_sync = original_reset
 
     assert order == ["reset", "sign_out"]
+
+
+# --- 목표별 모든 기기 합계(홈의 "전체 xx분 | 현 기기 xx분") ---
+
+
+def _day(goal_id: str, day: str, minutes: int):
+    return cloud.DayProgress(goal_id=goal_id, day=day, minutes=minutes, target_minutes=60, percent=100, devices=2)
+
+
+def _synced_goal(goals_db, name="공부", remote_id="r-1"):
+    """서버에 연결된 목표 하나와, 켜 둔 동기화(목표마다 다른 프로세스를 연결한다 — 같은 프로세스는 한 목표에만 연결할 수 있다)."""
+    goal = _local_goal(goals_db, name, processes=(f"{name}.exe",))
+    with GoalStore(goals_db) as store:
+        store.link_remote(goal.id, remote_id, 1)
+        store.set_sync_state(goal.id, "sync")
+        store.set_meta(META_SYNC_ENABLED, "1")
+    return goal
+
+
+TOTALS = "/api/goals/all-devices?from=2026-11-09&to=2026-11-15"
+
+
+def test_the_total_sums_every_day_of_every_device_for_each_linked_goal(sync_server) -> None:
+    port, goals_db, _ = sync_server
+    first = _synced_goal(goals_db, "공부", "r-1")
+    second = _synced_goal(goals_db, "운동", "r-2")
+    FakeApi.days = [_day("r-1", "2026-11-09", 30), _day("r-1", "2026-11-10", 45), _day("r-2", "2026-11-10", 20)]
+
+    status, body = call(port, "GET", TOTALS)
+
+    assert status == 200 and body["state"] == "synced"
+    assert body["goals"] == [{"id": first.id, "minutes": 75}, {"id": second.id, "minutes": 20}]
+    assert FakeApi.progress_requests == [("2026-11-09", "2026-11-15")]
+
+
+def test_a_linked_goal_without_server_records_counts_as_zero_minutes(sync_server) -> None:
+    port, goals_db, _ = sync_server
+    goal = _synced_goal(goals_db)
+
+    assert call(port, "GET", TOTALS)[1]["goals"] == [{"id": goal.id, "minutes": 0}]
+
+
+def test_goals_that_are_not_synced_are_left_out_so_the_screen_uses_this_pcs_value(sync_server) -> None:
+    port, goals_db, _ = sync_server
+    synced = _synced_goal(goals_db, "공부", "r-1")
+    local_only = _local_goal(goals_db, "운동", processes=("chrome.exe",))
+    with GoalStore(goals_db) as store:
+        store.set_sync_state(local_only.id, "local_only")
+    FakeApi.days = [_day("r-1", "2026-11-09", 10), _day("r-other", "2026-11-09", 99)]  # 모르는 서버 목표는 어느 목표에도 더하지 않는다
+
+    body = call(port, "GET", TOTALS)[1]
+
+    assert [item["id"] for item in body["goals"]] == [synced.id] and body["goals"][0]["minutes"] == 10
+
+
+def test_without_sync_turned_on_no_server_call_is_made(sync_server) -> None:
+    port, goals_db, _ = sync_server
+    _local_goal(goals_db)  # 로그인은 했지만 동기화를 켜지 않았다
+
+    status, body = call(port, "GET", TOTALS)
+
+    assert (status, body) == (200, {"state": "local", "goals": []})
+    assert "get_progress" not in FakeApi.calls
+
+
+def test_when_signed_out_the_answer_is_local_and_not_an_error(sync_server) -> None:
+    port, goals_db, backend = sync_server
+    _synced_goal(goals_db)
+    backend.items.clear()
+
+    assert call(port, "GET", TOTALS) == (200, {"state": "local", "goals": []})
+    assert FakeApi.calls == []
+
+
+@pytest.mark.parametrize("failure", [ServerUnreachable(), cloud.ServerError(500, "internal_error", "서버 오류")])
+def test_a_server_failure_is_reported_as_unavailable_with_status_200(sync_server, failure) -> None:
+    """합계를 못 받아도 홈은 이 PC의 값을 그대로 보여 준다 — 오류 응답이 아니라 state로 알린다."""
+    port, goals_db, _ = sync_server
+    _synced_goal(goals_db)
+    FakeApi.fail = failure
+
+    assert call(port, "GET", TOTALS) == (200, {"state": "unavailable", "goals": []})
+
+
+def test_the_server_is_asked_once_a_minute_not_on_every_refresh(sync_server, monkeypatch) -> None:
+    """홈은 15초마다 다시 불러온다 — 그때마다 서버를 부르면 사용자 한 명이 하루에 수천 번 요청한다."""
+    port, goals_db, _ = sync_server
+    _synced_goal(goals_db)
+    FakeApi.days = [_day("r-1", "2026-11-09", 5)]
+
+    for _ in range(4):
+        call(port, "GET", TOTALS)
+    assert FakeApi.calls.count("get_progress") == 1
+
+    call(port, "GET", "/api/goals/all-devices?from=2026-11-01&to=2026-11-30")  # 다른 구간은 따로 받는다
+    assert FakeApi.calls.count("get_progress") == 2
+
+
+def test_the_cache_expires_and_never_crosses_logins(sync_server, monkeypatch) -> None:
+    port, goals_db, backend = sync_server
+    _synced_goal(goals_db)
+    FakeApi.days = [_day("r-1", "2026-11-09", 5)]
+    call(port, "GET", TOTALS)
+
+    import hub.cloud_adapter as adapter
+
+    clock = {"now": adapter.time.monotonic() + adapter.TOTALS_CACHE_SECONDS + 1}
+    monkeypatch.setattr(adapter.time, "monotonic", lambda: clock["now"])
+    call(port, "GET", TOTALS)
+    assert FakeApi.calls.count("get_progress") == 2  # 1분이 지나면 다시 받는다
+
+    _login_as(backend, "b@example.com", "token-of-another-login")  # 다른 로그인은 같은 구간이어도 다른 키다
+    call(port, "GET", TOTALS)
+    assert FakeApi.calls.count("get_progress") == 3
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "",
+        "?from=2026-11-09",
+        "?to=2026-11-09",
+        "?from=2026-11-09&from=2026-11-10&to=2026-11-11",
+        "?from=2026-11-09&to=2026-11-15&x=1",
+        "?from=2026-11-9&to=2026-11-15",  # 형식이 다르다
+        "?from=2026-02-30&to=2026-03-01",  # 없는 날짜
+        "?from=2026-11-15&to=2026-11-09",  # 끝이 시작보다 앞
+        "?from=2025-01-01&to=2026-11-09",  # 400일 초과
+        "?from=%0A2026-11-09&to=2026-11-15",
+    ],
+)
+def test_invalid_ranges_are_400_and_never_reach_the_server(sync_server, query) -> None:
+    port, goals_db, _ = sync_server
+    _synced_goal(goals_db)
+
+    status, body = call(port, "GET", "/api/goals/all-devices" + query)
+
+    assert status == 400 and body["error"]["code"] == "invalid_request"
+    assert "get_progress" not in FakeApi.calls
+
+
+def test_a_range_of_exactly_400_days_is_accepted(sync_server) -> None:
+    port, goals_db, _ = sync_server
+    _synced_goal(goals_db)
+
+    assert call(port, "GET", "/api/goals/all-devices?from=2025-10-06&to=2026-11-09")[0] == 200  # 400일(양 끝 포함)
+    assert call(port, "GET", "/api/goals/all-devices?from=2025-10-05&to=2026-11-09")[0] == 400  # 401일
+
+
+def test_the_totals_never_contain_tokens_or_process_names(sync_server) -> None:
+    port, goals_db, _ = sync_server
+    _synced_goal(goals_db)
+    FakeApi.days = [_day("r-1", "2026-11-09", 5)]
+
+    text = json.dumps(call(port, "GET", TOTALS)[1])
+
+    assert "secret-token" not in text and ".exe" not in text and "r-1" not in text  # 서버 목표 id도 밖에 내지 않는다
+
+
+def test_the_cloud_missing_means_local_not_an_error(sync_server, monkeypatch) -> None:
+    """cloud를 불러오지 못하는 설치에서도 홈은 이 PC의 값을 보여 줘야 한다."""
+    port, _, _ = sync_server
+    monkeypatch.setattr(_Handler.account, "_get_port", lambda: (_ for _ in ()).throw(AccountUnavailable()))
+
+    assert call(port, "GET", TOTALS) == (200, {"state": "local", "goals": []})

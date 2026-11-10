@@ -21,7 +21,7 @@ import re
 import sqlite3
 import sys
 from collections.abc import Collection
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse, urlsplit
@@ -237,6 +237,32 @@ def loggable_path(path: str) -> str:
     return path if path.startswith("/api/") and path.count("/") <= 3 else "/other"
 
 
+# 서버 GET /progress가 받는 구간의 최대 일수(apps/server의 parseRange와 같다)
+MAX_TOTALS_DAYS = 400
+_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _day_bounds(query: dict[str, list[str]]) -> tuple[str, str]:
+    """`from`·`to`(YYYY-MM-DD, 끝날 포함)를 읽고 검사한다. 틀리면 ValueError(사용자용 문장)."""
+    values = {name: query.get(name, []) for name in ("from", "to")}
+    if set(query) - {"from", "to"} or any(len(found) != 1 for found in values.values()):
+        raise ValueError("from·to(날짜) 하나씩만 보내야 합니다.")
+    days = []
+    for name, (text,) in values.items():
+        if not _DAY.fullmatch(text):
+            raise ValueError(f"{name}은 YYYY-MM-DD 형식이어야 합니다.")
+        try:
+            days.append(date.fromisoformat(text))
+        except ValueError:
+            raise ValueError(f"{name}이 없는 날짜입니다.") from None
+    start, end = days
+    if end < start:
+        raise ValueError("to는 from보다 앞설 수 없습니다.")
+    if (end - start).days + 1 > MAX_TOTALS_DAYS:
+        raise ValueError(f"구간은 {MAX_TOTALS_DAYS}일까지입니다.")
+    return start.isoformat(), end.isoformat()
+
+
 def _optional_text(value: object, limit: int) -> bool:
     """None이거나 limit 이하의 문자열인지(확인한 이메일·세션 키 칸 검사)."""
     return value is None or (isinstance(value, str) and len(value) <= limit)
@@ -414,6 +440,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._get_devices()
         elif parsed.path == "/api/goals/progress":
             self._get_goal_progress(parsed.query)
+        elif parsed.path == "/api/goals/all-devices":
+            self._get_goal_totals(parsed.query)
         elif parsed.path == "/api/processes":
             self._get_tracked_processes()
         elif parsed.path == "/api/tracked-sites":
@@ -864,6 +892,31 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_unavailable("집계 DB", error)
             return
         self._send_json(200, progress_payload(goals, usage, site_usage))
+
+    def _get_goal_totals(self, raw_query: str) -> None:
+        """GET /api/goals/all-devices?from=YYYY-MM-DD&to=YYYY-MM-DD — 목표별 모든 기기의 수행 시간 합계(분, 끝날 포함).
+
+        홈 요약의 "전체 xx분 | 현 기기 xx분"에서 **전체**를 채운다(현 기기는 `/api/goals/progress`). 이 요청은 **항상 200**이다 —
+        다른 기기의 기록을 받을 수 없어도(로그인 전, 동기화 꺼짐, 서버에 닿지 못함) 화면은 이 PC의 값을 그대로 보여 주고, 합계 칸만 달라지면 된다.
+        `state`: `local`(받을 수 없는 상태 — 이 PC의 값이 전체다) / `synced`(서버 합계) / `unavailable`(받으려 했지만 실패 — 합계 칸을 "-"로 둔다).
+        입력(날짜 형식, 끝날이 시작일보다 앞, 400일 초과)이 틀린 경우만 400이다.
+        """
+        try:
+            start_day, end_day = _day_bounds(parse_qs(raw_query))
+        except ValueError as exc:
+            self._send_json(400, api_error.error_body(api_error.INVALID_REQUEST, str(exc)))
+            return
+        try:
+            result = self.account.goal_totals(self.goals_db_path, start_day, end_day)
+        except AccountUnavailable:
+            result = {"state": "local", "goals": []}
+        except SyncProblem as problem:
+            logger.info("모든 기기 합계를 받지 못했습니다: %s", "로그인 필요" if problem.signed_out else "서버 문제")
+            result = {"state": "unavailable", "goals": []}
+        except (sqlite3.Error, SchemaVersionError) as error:
+            self._send_unavailable("목표 DB", error)
+            return
+        self._send_json(200, result)
 
     def _write_goal(self, goal_id: int | None) -> None:
         """목표 생성(goal_id가 None)·교체. 출처·본문 형식을 먼저 검사하고, 입력은 goals가 엄격하게 검증한다.

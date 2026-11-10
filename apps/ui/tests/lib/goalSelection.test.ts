@@ -1,0 +1,137 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+import {
+  dayRange,
+  goalTotalSeconds,
+  localDay,
+  resolveSelection,
+  timePair,
+} from "../../src/lib/goalSelection.ts";
+
+const GOALS = [
+  { id: 1, name: "공부", active_seconds: 3600 },
+  { id: 2, name: "운동", active_seconds: 1200 },
+];
+
+// --- 날짜 범위 ---
+
+test("로컬 날짜는 UTC로 바꾸지 않고 달력 날짜 그대로 쓴다", () => {
+  assert.equal(localDay(new Date(2026, 10, 9, 0, 30)), "2026-11-09"); // 자정 직후 — UTC로 바꾸면 전날이 될 수 있다
+  assert.equal(localDay(new Date(2026, 0, 5, 23, 59)), "2026-01-05");
+});
+
+test("구간의 끝(미포함)은 하루 전이 마지막 날이다", () => {
+  assert.deepEqual(dayRange(new Date(2026, 10, 9), new Date(2026, 10, 10)), {
+    from: "2026-11-09",
+    to: "2026-11-09",
+  }); // 일
+  assert.deepEqual(dayRange(new Date(2026, 10, 9), new Date(2026, 10, 16)), {
+    from: "2026-11-09",
+    to: "2026-11-15",
+  }); // 주
+  assert.deepEqual(dayRange(new Date(2026, 10, 1), new Date(2026, 11, 1)), {
+    from: "2026-11-01",
+    to: "2026-11-30",
+  }); // 월
+});
+
+test("월·연이 바뀌는 구간의 마지막 날을 바르게 구한다", () => {
+  assert.deepEqual(dayRange(new Date(2026, 11, 1), new Date(2027, 0, 1)), {
+    from: "2026-12-01",
+    to: "2026-12-31",
+  });
+  assert.deepEqual(dayRange(new Date(2026, 1, 1), new Date(2026, 2, 1)), {
+    from: "2026-02-01",
+    to: "2026-02-28",
+  });
+});
+
+test("끝이 시작보다 앞서면 시작 하루로 본다", () => {
+  assert.deepEqual(dayRange(new Date(2026, 10, 9), new Date(2026, 10, 9)), {
+    from: "2026-11-09",
+    to: "2026-11-09",
+  });
+});
+
+// --- 선택 ---
+
+test("고른 목표가 목록에 없으면(지웠다) 목표 전체로 돌아간다", () => {
+  assert.equal(resolveSelection(2, GOALS), 2);
+  assert.equal(resolveSelection(9, GOALS), null);
+  assert.equal(resolveSelection(null, GOALS), null);
+  assert.equal(resolveSelection(1, []), null);
+});
+
+// --- 전체 시간 ---
+
+test("서버 합계가 이 PC의 실시간 값보다 늦으면 전체가 현 기기보다 작아 보이지 않게 큰 쪽을 쓴다", () => {
+  assert.equal(goalTotalSeconds(4530, 75), 4530); // 서버는 75분, 이 PC는 75분 30초
+  assert.equal(goalTotalSeconds(600, 75), 4500); // 다른 기기가 더 했다
+  assert.equal(goalTotalSeconds(600, undefined), 600); // 서버에 연결되지 않은 목표
+  assert.equal(goalTotalSeconds(0, 0), 0);
+});
+
+test("목표 전체: 모든 목표를 목표별로 따져 더한다", () => {
+  const pair = timePair(GOALS, null, {
+    state: "synced",
+    goals: [
+      { id: 1, minutes: 100 }, // 6000초 > 이 PC 3600초
+      { id: 2, minutes: 5 }, // 300초 < 이 PC 1200초
+    ],
+  });
+
+  assert.deepEqual(pair, { total: 6000 + 1200, device: 4800 });
+});
+
+test("목표 하나를 고르면 그 목표만 센다", () => {
+  const totals = {
+    state: "synced" as const,
+    goals: [
+      { id: 1, minutes: 100 },
+      { id: 2, minutes: 30 },
+    ],
+  };
+
+  assert.deepEqual(timePair(GOALS, 2, totals), { total: 1800, device: 1200 });
+  assert.deepEqual(timePair(GOALS, 1, totals), { total: 6000, device: 3600 });
+});
+
+test("서버에 연결되지 않은 목표는 합계 목록에 없어도 이 PC의 값을 전체에 더한다", () => {
+  const pair = timePair(GOALS, null, {
+    state: "synced",
+    goals: [{ id: 1, minutes: 100 }], // 2번 목표는 로컬에만 있다
+  });
+
+  assert.deepEqual(pair, { total: 6000 + 1200, device: 4800 });
+});
+
+test("다른 기기의 기록을 받을 수 없는 상태(local)면 이 PC의 값이 전체다", () => {
+  assert.deepEqual(timePair(GOALS, null, { state: "local", goals: [] }), {
+    total: 4800,
+    device: 4800,
+  });
+});
+
+test("합계를 받지 못했으면(unavailable·요청 실패) 전체는 모르고 현 기기만 보인다", () => {
+  assert.deepEqual(timePair(GOALS, null, { state: "unavailable", goals: [] }), {
+    total: null,
+    device: 4800,
+  });
+  assert.deepEqual(timePair(GOALS, 1, null), { total: null, device: 3600 });
+});
+
+test("목표가 없으면 0이다", () => {
+  assert.deepEqual(timePair([], null, { state: "local", goals: [] }), {
+    total: 0,
+    device: 0,
+  });
+  assert.deepEqual(timePair([], null, null), { total: null, device: 0 });
+});
+
+test("없는 목표를 고른 채 부르면 0이다(호출부가 resolveSelection으로 먼저 정리한다)", () => {
+  assert.deepEqual(timePair(GOALS, 9, { state: "local", goals: [] }), {
+    total: 0,
+    device: 0,
+  });
+});

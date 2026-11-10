@@ -15,7 +15,7 @@ export interface NavBar {
 export interface NavBarOptions {
   /** 계정 메뉴의 "목표 동기화"를 눌렀다. */
   onOpenSync?: () => void;
-  /** 계정 메뉴의 "기기 관리"를 눌렀다. */
+  /** 계정 메뉴의 "기기 관리"를 눌렀다(주지 않으면 그 항목이 메뉴에 없다). */
   onOpenDevices?: () => void;
   /** 계정 메뉴의 "계정 삭제"를 눌렀다(지울 계정의 이메일, 모르면 null). */
   onDeleteAccount?: (email: string | null, session: string | null) => void;

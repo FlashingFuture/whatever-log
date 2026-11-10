@@ -4,7 +4,13 @@ import {
   SHORT_REQUEST_TIMEOUT_MS,
   sendJson,
 } from "./client.ts";
-import type { Goal, GoalInput, GoalProgressResponse, SiteLink } from "./types";
+import type {
+  Goal,
+  GoalInput,
+  GoalProgressResponse,
+  GoalTotals,
+  SiteLink,
+} from "./types";
 
 /** 저장된 목표 목록(만든 순서). */
 export async function fetchGoals(): Promise<Goal[]> {
@@ -50,6 +56,17 @@ export function fetchGoalProgress(
   return getJson(
     `/api/goals/progress?${query}`,
     requestTimeoutMs(end.getTime() - start.getTime()),
+  );
+}
+
+/**
+ * 목표별 모든 기기의 합계(분). from·to는 `YYYY-MM-DD`(끝날 포함)다. 다른 기기의 기록을 받을 수 없어도 오류가 아니라 state로 알려 준다
+ * (그래서 이 요청이 실패한다면 hub에 닿지 못한 것이다) — 호출부는 실패하면 "전체"만 모르는 것으로 두고 나머지를 그대로 보여 준다.
+ */
+export function fetchGoalTotals(from: string, to: string): Promise<GoalTotals> {
+  return getJson(
+    `/api/goals/all-devices?${new URLSearchParams({ from, to })}`,
+    SHORT_REQUEST_TIMEOUT_MS,
   );
 }
 

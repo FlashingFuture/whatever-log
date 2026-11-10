@@ -37,7 +37,11 @@ export interface AccountMenu {
 export interface AccountMenuOptions {
   /** "목표 동기화"를 눌렀다 — 어떤 목표를 서버에 넘길지 고르는 창을 연다. */
   onOpenSync?: () => void;
-  /** "기기 관리"를 눌렀다 — 서버에 기록을 보낸 기기 목록 창을 연다. */
+  /**
+   * "기기 관리"를 눌렀다 — 서버에 기록을 보낸 기기 목록 창을 연다. **주면 메뉴에 "기기 관리"가 생기고, 안 주면 메뉴에 없다.**
+   * 지금은 이 기능을 쓰지 않아 main.ts가 주지 않는다(서버에 기기 목록 주소가 아직 배포되지 않았고, 쓸 곳도 애매하다). 창
+   * (`DevicesDialog`)과 hub API는 나중에 쓸 수 있게 남겨 두었다.
+   */
   onOpenDevices?: () => void;
   /** "계정 삭제"를 눌렀다(지울 로그인의 이메일과 세션 키) — 확인 창을 연다. */
   onDeleteAccount?: (email: string | null, session: string | null) => void;
@@ -194,9 +198,10 @@ export function createAccountMenu(
   let currentSession: string | null = null;
   // 계정 메뉴를 연 채 상태를 다시 읽었을 때, 로그인이 그대로인지 가리려고 마지막으로 본 세션을 기억한다.
   let shownSession: string | null = null;
+  const openDevices = options.onOpenDevices;
   menuPanel.append(
     menuItem("목표 동기화", () => options.onOpenSync?.()),
-    menuItem("기기 관리", () => options.onOpenDevices?.()),
+    ...(openDevices ? [menuItem("기기 관리", openDevices)] : []),
     menuItem(
       "계정 삭제",
       () => options.onDeleteAccount?.(currentEmail, currentSession),
