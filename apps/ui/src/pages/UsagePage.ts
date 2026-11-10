@@ -30,6 +30,8 @@ export function mountUsagePage(
 
   // 고른 목표(null = 목표 전체). 목표가 지워지면 다음에 그릴 때 목표 전체로 돌아간다(resolveSelection).
   let selectedGoalId: number | null = null;
+  // 포커스 복원 타이머. 화면을 떠난 뒤에 실행되지 않게 정리 때 취소한다.
+  let focusTimer: ReturnType<typeof setTimeout> | null = null;
   const selector = createGoalSelector({
     onSelect: (id) => {
       selectedGoalId = id;
@@ -70,7 +72,10 @@ export function mountUsagePage(
       dashboard.className = styles.dashboard;
       dashboard.append(side, createUsageChart(usage));
       if (selectorHadFocus) {
-        setTimeout(selector.focus, 0); // PeriodView가 내용을 붙인 다음(같은 틱의 뒤)
+        if (focusTimer !== null) {
+          clearTimeout(focusTimer);
+        }
+        focusTimer = setTimeout(selector.focus, 0); // PeriodView가 내용을 붙인 다음(같은 틱의 뒤)
       }
       return dashboard;
     },
@@ -78,6 +83,9 @@ export function mountUsagePage(
 
   root.replaceChildren(view.element);
   return () => {
+    if (focusTimer !== null) {
+      clearTimeout(focusTimer);
+    }
     view.destroy();
     selector.destroy();
     goals.destroy();

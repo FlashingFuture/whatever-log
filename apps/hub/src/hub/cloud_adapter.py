@@ -36,6 +36,11 @@ TOTALS_CACHE_SECONDS = 60.0
 _TOTALS_CACHE_MAX = 32
 
 
+def _now() -> float:
+    """합계 캐시가 쓰는 시계(단조 시계). 시험이 이것만 바꿀 수 있게 따로 둔다 — 표준 `time` 모듈을 바꾸면 같은 프로세스의 서버·소켓 코드까지 영향을 받는다."""
+    return time.monotonic()
+
+
 def session_key(token: str) -> str:
     """로그인(토큰)을 가리키는 불투명한 키. 토큰에 서비스 고유 문자열을 섞어 SHA-256으로 해시한 앞부분이라 토큰을 알아낼 수 없고(서버에 저장된 토큰
     해시와도 다르다), 같은 이메일로 다시 로그인하거나 이메일을 알 수 없는 다른 계정으로 바뀌어도 값이 달라진다."""
@@ -69,6 +74,8 @@ class _CloudBackend:
         # (세션 키, 시작일, 끝일) → (받은 시각, {서버 목표 id: 분 합계}). 세션 키가 들어 있어 로그인이 바뀌면 다른 키가 된다.
         self._totals_cache: dict[tuple[str, str, str], tuple[float, dict[str, int]]] = {}
         self._totals_lock = threading.Lock()
+        # 같은 키의 합계를 동시에 받으려는 요청이 서버를 여러 번 부르지 않게 하는 키별 잠금(다른 키는 서로 기다리지 않는다)
+        self._totals_fetch_locks: dict[tuple[str, str, str], threading.Lock] = {}
 
     def providers(self) -> tuple[ProviderInfo, ...]:
         """cloud가 지원하는 로그인 방식들."""
@@ -264,33 +271,44 @@ class _CloudBackend:
         key = (session_key(session.token), start_day, end_day)
         totals = self._cached_totals(key)
         if totals is None:
+            with self._fetch_lock_for(key):
+                # 잠금을 기다리는 사이 앞선 요청이 이미 받아 두었을 수 있다 — 다시 확인해서 서버를 한 번만 부른다
+                totals = self._cached_totals(key)
+                if totals is None:
 
-            def run():
-                api, _, _ = self._server()
-                summed: dict[str, int] = {}
-                for day in api.get_progress(start_day, end_day):
-                    summed[day.goal_id] = summed.get(day.goal_id, 0) + day.minutes
-                return summed
+                    def run():
+                        api, _, _ = self._server()
+                        summed: dict[str, int] = {}
+                        for day in api.get_progress(start_day, end_day):
+                            summed[day.goal_id] = summed.get(day.goal_id, 0) + day.minutes
+                        return summed
 
-            totals = self._guard(run, goals_db)
-            self._remember_totals(key, totals)
+                    totals = self._guard(run, goals_db)
+                    self._remember_totals(key, totals)
         return {
             "state": "synced",
             "goals": [{"id": goal_id, "minutes": totals.get(remote_id, 0)} for remote_id, goal_id in sorted(links.items(), key=lambda item: item[1])],
         }
 
+    def _fetch_lock_for(self, key: tuple[str, str, str]) -> threading.Lock:
+        """이 키의 합계를 받는 동안 잡는 잠금. 키가 쌓이지 않게, 많아지면 아무도 쓰지 않는 잠금부터 버린다."""
+        with self._totals_lock:
+            if len(self._totals_fetch_locks) > 4 * _TOTALS_CACHE_MAX:
+                self._totals_fetch_locks = {k: lock for k, lock in self._totals_fetch_locks.items() if lock.locked()}
+            return self._totals_fetch_locks.setdefault(key, threading.Lock())
+
     def _cached_totals(self, key: tuple[str, str, str]) -> dict[str, int] | None:
         """기억해 둔 합계(1분 안의 것). 없거나 오래됐으면 None."""
         with self._totals_lock:
             entry = self._totals_cache.get(key)
-            if entry is not None and time.monotonic() - entry[0] < TOTALS_CACHE_SECONDS:
+            if entry is not None and _now() - entry[0] < TOTALS_CACHE_SECONDS:
                 return entry[1]
             return None
 
     def _remember_totals(self, key: tuple[str, str, str], totals: dict[str, int]) -> None:
         """받은 합계를 기억한다. 오래 쓰면 키가 쌓이므로 상한을 넘으면 오래된 것부터 버린다."""
         with self._totals_lock:
-            self._totals_cache[key] = (time.monotonic(), totals)
+            self._totals_cache[key] = (_now(), totals)
             while len(self._totals_cache) > _TOTALS_CACHE_MAX:
                 oldest = min(self._totals_cache, key=lambda item: self._totals_cache[item][0])
                 del self._totals_cache[oldest]

@@ -43,7 +43,8 @@ export function createGoalSelector(props: GoalSelectorProps): GoalSelector {
   const trigger = document.createElement("button");
   trigger.type = "button";
   trigger.className = styles.trigger;
-  trigger.setAttribute("aria-haspopup", "listbox");
+  // 열리는 상자는 Popover가 role="dialog"로 만든다(그 안의 목록이 listbox) — 단추가 알리는 종류를 실제와 맞춘다
+  trigger.setAttribute("aria-haspopup", "dialog");
   trigger.setAttribute("aria-expanded", "false");
 
   const name = document.createElement("span");
@@ -54,10 +55,12 @@ export function createGoalSelector(props: GoalSelectorProps): GoalSelector {
   caret.textContent = "▾";
   trigger.append(name, caret);
 
+  /** 지금 고른 목표(목록에 없으면 undefined — 목표 전체로 본다). */
   function selectedGoal(): GoalOption | undefined {
     return goals.find((goal) => goal.id === selectedId);
   }
 
+  /** 단추의 글자·툴팁·스크린 리더 이름을 지금 고른 것에 맞춘다(긴 이름은 줄여 보이고 전체는 title에 둔다). */
   function renderTrigger(): void {
     const goal = selectedGoal();
     const full = goal ? goal.name : ALL_LABEL;
@@ -66,6 +69,7 @@ export function createGoalSelector(props: GoalSelectorProps): GoalSelector {
     trigger.setAttribute("aria-label", `목표 선택: ${full}`);
   }
 
+  /** 목록의 항목 하나. 누르면 상자를 닫고 단추로 포커스를 돌린 뒤 고른 것을 알린다. */
   function option(label: string, id: number | null): HTMLButtonElement {
     const button = document.createElement("button");
     button.type = "button";
@@ -88,6 +92,7 @@ export function createGoalSelector(props: GoalSelectorProps): GoalSelector {
     return button;
   }
 
+  /** 열 때마다 그때의 목록으로 만든다(목표가 바뀌었을 수 있다). */
   function buildList(): HTMLElement {
     const list = document.createElement("div");
     list.className = styles.list;

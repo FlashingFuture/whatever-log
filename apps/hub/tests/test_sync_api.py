@@ -1352,8 +1352,8 @@ def test_the_cache_expires_and_never_crosses_logins(sync_server, monkeypatch) ->
 
     import hub.cloud_adapter as adapter
 
-    clock = {"now": adapter.time.monotonic() + adapter.TOTALS_CACHE_SECONDS + 1}
-    monkeypatch.setattr(adapter.time, "monotonic", lambda: clock["now"])
+    clock = {"now": adapter._now() + adapter.TOTALS_CACHE_SECONDS + 1}
+    monkeypatch.setattr(adapter, "_now", lambda: clock["now"])  # 모듈 전용 시계만 바꾼다(표준 time은 그대로)
     call(port, "GET", TOTALS)
     assert FakeApi.calls.count("get_progress") == 2  # 1분이 지나면 다시 받는다
 
@@ -1411,3 +1411,53 @@ def test_the_cloud_missing_means_local_not_an_error(sync_server, monkeypatch) ->
     monkeypatch.setattr(_Handler.account, "_get_port", lambda: (_ for _ in ()).throw(AccountUnavailable()))
 
     assert call(port, "GET", TOTALS) == (200, {"state": "local", "goals": []})
+
+
+def test_concurrent_requests_for_the_same_range_call_the_server_once(sync_server, monkeypatch) -> None:
+    """캐시가 비어 있을 때 같은 구간을 동시에 요청해도 서버는 한 번만 부른다(나머지는 앞선 요청의 결과를 쓴다)."""
+    import time as _time
+
+    port, goals_db, _ = sync_server
+    _synced_goal(goals_db)
+    FakeApi.days = [_day("r-1", "2026-11-09", 5)]
+    original = FakeApi.get_progress
+
+    def slow(self, start, end):
+        _time.sleep(0.3)  # 첫 요청이 서버를 기다리는 동안 다른 요청들이 도착한다
+        return original(self, start, end)
+
+    monkeypatch.setattr(FakeApi, "get_progress", slow)
+    results: list[int] = []
+    threads = [threading.Thread(target=lambda: results.append(call(port, "GET", TOTALS)[1]["goals"][0]["minutes"])) for _ in range(5)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert results == [5] * 5
+    assert FakeApi.calls.count("get_progress") == 1
+
+
+def test_different_ranges_do_not_wait_for_each_other(sync_server, monkeypatch) -> None:
+    """키별 잠금이라 느린 구간 하나가 다른 구간의 요청을 막지 않는다."""
+    import time as _time
+
+    port, goals_db, _ = sync_server
+    _synced_goal(goals_db)
+    original = FakeApi.get_progress
+
+    def slow_for_first(self, start, end):
+        if start == "2026-11-09":
+            _time.sleep(1.0)
+        return original(self, start, end)
+
+    monkeypatch.setattr(FakeApi, "get_progress", slow_for_first)
+    slow = threading.Thread(target=lambda: call(port, "GET", TOTALS))
+    slow.start()
+    _time.sleep(0.2)
+    began = _time.monotonic()
+    call(port, "GET", "/api/goals/all-devices?from=2026-10-01&to=2026-10-31")
+    waited = _time.monotonic() - began
+    slow.join()
+
+    assert waited < 0.8
