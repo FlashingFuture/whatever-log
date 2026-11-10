@@ -243,6 +243,16 @@ def test_an_exact_pin_allows_only_that_patch_version(tmp_path) -> None:
         build_release.check_python(root, running=(3, 14, 6))
 
 
+@pytest.mark.parametrize("pin", ["3.14t", "cpython-3.14", "3.14.*", ">=3.14", "pypy"])
+def test_a_pin_that_is_not_a_plain_number_stops_with_a_hint_not_a_traceback(tmp_path, pin) -> None:
+    """uv는 이런 형식도 읽지만 번들을 만드는 쪽은 숫자만 비교할 수 있다 — ValueError 트레이스백이 아니라 무엇을 고칠지 알려 준다."""
+    root = tmp_path / "repo"
+    _write(root / ".python-version", pin + "\n")
+
+    with pytest.raises(SystemExit, match="숫자 버전이어야 해요"):
+        build_release.check_python(root, running=(3, 14, 8))
+
+
 def test_the_pin_is_checked_against_the_real_interpreter_by_default(tmp_path) -> None:
     """워크플로의 문자열이 아니라 지금 도는 파이썬을 본다."""
     root = tmp_path / "repo"

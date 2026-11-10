@@ -115,7 +115,12 @@ def check_python(root: Path = ROOT, running: tuple[int, ...] | None = None) -> N
     "uv python install 3.14"라고 적혀 있는지만으로는 부족하다(주석으로 남아 있거나 다른 파이썬이 골라져도 통과한다) — 실제로 도는 인터프리터를 본다.
     `.python-version`이 `3.14`이면 3.14.x 모두, `3.14.8`이면 그 버전만 허용한다.
     """
-    pinned = tuple(int(part) for part in (root / ".python-version").read_text(encoding="utf-8").strip().split("."))
+    pinned_text = (root / ".python-version").read_text(encoding="utf-8").strip()
+    try:
+        pinned = tuple(int(part) for part in pinned_text.split("."))
+    except ValueError:
+        # uv는 `3.14t`·`cpython-3.14`·`>=3.14` 같은 형식도 읽지만, 번들을 만드는 쪽은 숫자 버전만 비교할 수 있다 — 트레이스백 대신 무엇을 고칠지 알려 준다
+        raise SystemExit(f".python-version은 `3.14`나 `3.14.8` 같은 숫자 버전이어야 해요: {pinned_text!r}") from None
     actual = running if running is not None else tuple(sys.version_info[:3])
     if actual[: len(pinned)] != pinned:
         wanted = ".".join(map(str, pinned))

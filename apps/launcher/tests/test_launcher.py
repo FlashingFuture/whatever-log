@@ -670,10 +670,10 @@ def test_powershell_is_run_from_the_system_folder_not_found_by_name() -> None:
 
 
 def test_the_system_folder_comes_from_the_windows_api_not_from_environment_or_a_fixed_drive(monkeypatch) -> None:
-    """SystemRoot 환경변수는 지워지거나 바뀔 수 있고, 윈도우가 D:에 설치된 PC도 있다 — C:\Windows를 가정하지 않는다."""
+    """SystemRoot 환경변수는 지워지거나 바뀔 수 있고, 윈도우가 D:에 설치된 PC도 있다 — C:\\Windows를 가정하지 않는다."""
     real = shortcuts.system_directory()
     monkeypatch.delenv("SystemRoot", raising=False)
-    monkeypatch.setenv("windir", r"X:ake")
+    monkeypatch.setenv("windir", r"X:\fake")
 
     assert shortcuts.system_directory() == real  # 환경변수가 없거나 틀려도 같다
     assert str(real).lower().endswith("system32")
