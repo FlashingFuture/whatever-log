@@ -7,6 +7,7 @@ import {
   goalTotalSeconds,
   localDay,
   resolveSelection,
+  settleSelection,
   timePair,
 } from "../../src/lib/goalSelection.ts";
 
@@ -235,4 +236,25 @@ test("퍼센트는 반올림한다(0.5는 올림)", () => {
 
   assert.equal(rate(60), 1); // 0.5% → 1
   assert.equal(rate(59), 0); // 0.49% → 0
+});
+
+// --- 목표 진행 조회가 실패한 갱신 ---
+
+test("목표 진행 조회가 실패한 갱신(null)은 고른 목표를 그대로 둔다", () => {
+  assert.equal(settleSelection(2, null), 2);
+  assert.equal(settleSelection(null, null), null);
+});
+
+test("목록을 받았다면 지운 목표만 목표 전체로 돌아간다", () => {
+  assert.equal(settleSelection(2, GOALS), 2);
+  assert.equal(settleSelection(9, GOALS), null);
+  assert.equal(settleSelection(2, []), null); // 성공했는데 목표가 하나도 없다 — 지운 것이다
+});
+
+test("실패한 갱신 뒤 성공한 갱신에서 고른 목표가 살아 있다", () => {
+  let selected: number | null = 2;
+  selected = settleSelection(selected, null); // 15초 갱신 한 번 실패
+  selected = settleSelection(selected, GOALS); // 다음 갱신 성공
+
+  assert.equal(selected, 2);
 });

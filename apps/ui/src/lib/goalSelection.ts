@@ -47,6 +47,17 @@ export function resolveSelection(
 }
 
 /**
+ * 목표 목록을 새로 받은 뒤의 선택. goals가 null이면(목표 진행 조회가 일시적으로 실패했다) **선택을 그대로 둔다** — 실패를 "목표가 없다"로 읽어
+ * 15초 갱신 한 번의 실패로 고른 목표가 목표 전체로 초기화되면, 다음 갱신이 성공해도 돌아오지 않는다.
+ */
+export function settleSelection(
+  selectedId: number | null,
+  goals: readonly { id: number }[] | null,
+): number | null {
+  return goals === null ? selectedId : resolveSelection(selectedId, goals);
+}
+
+/**
  * 한 목표의 전체 시간(초). 서버 합계(분)는 이 PC가 마지막으로 올린 값을 포함하는데 에이전트가 5분마다 올리므로 이 PC의 실시간 값보다
  * 늦을 수 있다 — 그래서 둘 중 큰 값을 쓴다(전체가 현 기기보다 작게 보이지 않게). 서버에 연결되지 않은 목표(합계 없음)는 이 PC의 값이 전체다.
  */

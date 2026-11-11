@@ -231,6 +231,30 @@ def test_the_summary_target_is_the_sum_over_goals(goals_server) -> None:
     assert week["summary"]["target_minutes"] == 630
 
 
+def test_dates_that_cannot_be_converted_to_local_time_are_400_not_a_dropped_connection(goals_server, monkeypatch) -> None:
+    """Windows는 1970년 이전 같은 먼 날짜를 로컬 시간대로 바꾸다 OSError를 낸다 — 응답 없이 연결이 끊기지 않고 400이어야 한다."""
+    import hub.__main__ as hub_main
+
+    def broken(start, end):
+        raise OSError(22, "Invalid argument")
+
+    monkeypatch.setattr(hub_main, "days_between", broken)
+    query = urllib.parse.urlencode({"start": "1969-12-30T00:00:00+00:00", "end": "1969-12-31T00:00:00+00:00"})
+
+    status, payload, _ = _call(goals_server, "GET", f"/api/goals/progress?{query}", origin=None)
+
+    assert status == 400 and payload["error"]["code"] == "invalid_request"
+
+
+def test_a_pre_1970_range_does_not_drop_the_connection_on_this_platform(goals_server) -> None:
+    """실제 `days_between`로도: 이 플랫폼이 그 날짜를 못 바꾸면 400, 바꿀 수 있으면 200 — 어느 쪽이든 응답은 온다."""
+    query = urllib.parse.urlencode({"start": "1969-12-30T00:00:00+00:00", "end": "1969-12-31T00:00:00+00:00"})
+
+    status, _, _ = _call(goals_server, "GET", f"/api/goals/progress?{query}", origin=None)
+
+    assert status in (200, 400)
+
+
 def test_a_goal_without_any_recorded_time_still_has_its_target(goals_server) -> None:
     """수행한 시간이 없어도 목표량은 있다 — 달성률 0%로 보여야 한다."""
     _call(goals_server, "POST", "/api/goals", {**GOAL, "processes": ["Code.exe"]})

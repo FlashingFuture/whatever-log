@@ -871,10 +871,19 @@ class _Handler(BaseHTTPRequestHandler):
             )
             return
         try:
+            days = days_between(start, end)
+        except (OverflowError, OSError, ValueError):
+            # 이 PC의 시간대로 바꿀 수 없는 먼 날짜(Windows는 1970년 이전도 OSError)다. 처리하지 않으면 응답 없이 연결이 끊긴다.
+            self._send_json(
+                400,
+                api_error.error_body(api_error.INVALID_REQUEST, "start/end가 이 PC의 시간대로 바꿀 수 있는 날짜 범위를 벗어났습니다."),
+            )
+            return
+        try:
             with GoalStore(self.goals_db_path) as store:
                 goals = store.list_goals()
                 # 달성률의 분모: 구간의 각 날짜(이 PC의 시간대)에 그날 적용된 목표의 하루 목표 분을 더한 것(정의는 goals.targets)
-                targets = period_target_minutes(store, days_between(start, end))
+                targets = period_target_minutes(store, days)
         except (sqlite3.Error, SchemaVersionError) as error:
             self._send_unavailable("목표 DB", error)
             return

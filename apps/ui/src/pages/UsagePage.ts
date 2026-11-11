@@ -4,7 +4,7 @@ import { createGoalSelector } from "../components/goals/GoalSelector";
 import { createPeriodView } from "../components/period/PeriodView";
 import { createUsageChart } from "../components/usage/UsageChart";
 import { createUsageSummary } from "../components/usage/UsageSummary";
-import { dayRange, resolveSelection } from "../lib/goalSelection";
+import { dayRange, settleSelection } from "../lib/goalSelection";
 import { syncNotice } from "../lib/syncNotice";
 import type { AccountStore } from "../state/accountStore";
 import styles from "./UsagePage.module.css";
@@ -28,7 +28,7 @@ export function mountUsagePage(
       root.querySelector<HTMLElement>("[data-goal-manage]")?.focus(),
   });
 
-  // 고른 목표(null = 목표 전체). 목표가 지워지면 다음에 그릴 때 목표 전체로 돌아간다(resolveSelection).
+  // 고른 목표(null = 목표 전체). 목표가 지워지면 다음에 그릴 때 목표 전체로 돌아간다(settleSelection). 조회가 실패한 갱신은 선택을 바꾸지 않는다.
   let selectedGoalId: number | null = null;
   const selector = createGoalSelector({
     onSelect: (id) => {
@@ -47,11 +47,14 @@ export function mountUsagePage(
         // 다른 기기의 합계를 못 받아도(서버·네트워크) 이 PC의 값은 그대로 보여 준다 — "전체"만 "-"가 된다.
         fetchGoalTotals(from, to).catch(() => null),
       ]);
-      selectedGoalId = resolveSelection(selectedGoalId, progress?.goals ?? []);
-      selector.update({
-        goals: progress?.goals ?? [],
-        selectedId: selectedGoalId,
-      });
+      // 목표 진행을 받았을 때만 선택과 목록을 정리한다. 조회가 실패했으면 이전 선택과 이전 목록을 그대로 둔다(settleSelection).
+      selectedGoalId = settleSelection(selectedGoalId, progress?.goals ?? null);
+      if (progress !== null) {
+        selector.update({
+          goals: progress.goals,
+          selectedId: selectedGoalId,
+        });
+      }
       const side = document.createElement("div");
       side.className = styles.side;
       side.append(
