@@ -30,6 +30,9 @@ export function mountUsagePage(
 
   // 고른 목표(null = 목표 전체). 목표가 지워지면 다음에 그릴 때 목표 전체로 돌아간다(settleSelection). 조회가 실패한 갱신은 선택을 바꾸지 않는다.
   let selectedGoalId: number | null = null;
+  // 가장 최근에 시작한 조회의 번호. 구간을 빠르게 넘기면 조회가 겹치는데, PeriodView는 늦게 온 낡은 응답의 **화면**만 버린다 — 선택과 선택기의 목록은
+  // 여기서 따로 지켜야 한다(안 그러면 낡은 조회의 목록이 현재 선택을 지우고, 선택기와 화면이 서로 다른 목록을 보여 준다).
+  let latestLoad = 0;
   const selector = createGoalSelector({
     onSelect: (id) => {
       selectedGoalId = id;
@@ -39,6 +42,7 @@ export function mountUsagePage(
 
   const view = createPeriodView({
     loadContent: async (period) => {
+      const loadId = ++latestLoad;
       const { from, to } = dayRange(period.start, period.end);
       const [usage, progress, totals] = await Promise.all([
         fetchUsage(period.start, period.end),
@@ -47,13 +51,14 @@ export function mountUsagePage(
         // 다른 기기의 합계를 못 받아도(서버·네트워크) 이 PC의 값은 그대로 보여 준다 — "전체"만 "-"가 된다.
         fetchGoalTotals(from, to).catch(() => null),
       ]);
-      // 목표 진행을 받았을 때만 선택과 목록을 정리한다. 조회가 실패했으면 이전 선택과 이전 목록을 그대로 둔다(settleSelection).
-      selectedGoalId = settleSelection(selectedGoalId, progress?.goals ?? null);
-      if (progress !== null) {
-        selector.update({
-          goals: progress.goals,
-          selectedId: selectedGoalId,
-        });
+      // 목표 진행을 받았을 때만 선택을 정리한다. 조회가 실패했으면 이전 선택을 그대로 둔다(settleSelection).
+      const settled = settleSelection(selectedGoalId, progress?.goals ?? null);
+      // 선택과 선택기의 목록은 **가장 최근에 시작한 조회**만 바꾼다. 낡은 조회는 이 화면을 만들지만 어차피 PeriodView가 버린다.
+      if (loadId === latestLoad) {
+        selectedGoalId = settled;
+        if (progress !== null) {
+          selector.update({ goals: progress.goals, selectedId: settled });
+        }
       }
       const side = document.createElement("div");
       side.className = styles.side;
@@ -62,7 +67,7 @@ export function mountUsagePage(
           usage,
           progress,
           totals,
-          selectedGoalId,
+          selectedGoalId: settled,
           onManageGoals: goals.open,
         }),
       );
