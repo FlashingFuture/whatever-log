@@ -120,6 +120,10 @@ class CloudPort(Protocol):
         않고 SyncProblem을 올린다. 서버·로그인 문제도 SyncProblem."""
         ...
 
+    def goal_totals(self, goals_db: Path, start_day: str, end_day: str) -> dict[str, Any]:
+        """목표별 모든 기기의 합계(분). 다른 기기의 기록을 받을 수 없는 상태(로그인 전·동기화 꺼짐)면 `state: "local"`. 서버·로그인 문제는 SyncProblem."""
+        ...
+
     def list_devices(self, goals_db: Path, sync_db: Path) -> dict[str, Any]:
         """달성도를 보낸 기기들과, 목록을 본 계정(`email`). 각 기기에 이 PC의 기기인지(`is_this_device`)를 표시한다. 서버·로그인 문제는 SyncProblem."""
         ...
@@ -275,6 +279,10 @@ class AccountService:
             return port.sync_apply(goals_db, accepted, email, session)
         finally:
             self._sync_lock.release()
+
+    def goal_totals(self, goals_db: Path, start_day: str, end_day: str) -> dict[str, Any]:
+        """목표별 모든 기기의 합계. 계정 기능이 없으면 AccountUnavailable(호출부가 "이 PC의 값만"으로 처리한다)."""
+        return self._get_port().goal_totals(goals_db, start_day, end_day)
 
     def list_devices(self, goals_db: Path, sync_db: Path) -> dict[str, Any]:
         """기기 목록(서버). 계정 기능이 없으면 AccountUnavailable."""

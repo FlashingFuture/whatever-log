@@ -88,7 +88,7 @@
 ## hub API와 보호
 
 - `GET /api/goals`, `POST /api/goals`(201), `PUT /api/goals/<id>`, `DELETE /api/goals/<id>`(204),
-  `GET /api/goals/progress?start&end`, `GET /api/processes`(추적된 프로세스, 유효한 이름만), `GET /api/tracked-sites`(추적된 브라우저 사이트
+  `GET /api/goals/progress?start&end`(목표마다 `target_minutes` — 구간의 목표량, 달성률의 분모. `docs/sync-client.md`), `GET /api/goals/all-devices?from&to`(모든 기기의 합계 — `docs/sync-client.md`), `GET /api/processes`(추적된 프로세스, 유효한 이름만), `GET /api/tracked-sites`(추적된 브라우저 사이트
   `{browser, domain}`, 지원하는 브라우저·유효한 도메인만). 목표 본문은 `name`, `daily_target_minutes`, `weekdays`,
   `processes`, `sites` 다섯 칸이 모두 필요하다.
 - 오류는 `{"error":{"code","message","fields?"}}` — 입력 오류는 칸별(`fields`)로 돌려준다.

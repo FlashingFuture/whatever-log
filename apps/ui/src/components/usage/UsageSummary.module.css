@@ -55,3 +55,60 @@
   outline: var(--focus-ring);
   outline-offset: 2px;
 }
+/* "전체 xx분 | 현 기기 xx분": 좁으면 두 칸이 줄바꿈되고, 각각은 한 덩어리로 유지된다. */
+.timePair {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-2);
+  font-size: 1.1rem;
+  line-height: 1.5;
+}
+.timePart {
+  white-space: nowrap;
+}
+.timeLabel {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  font-weight: 400;
+}
+.timeValue {
+  font-weight: 600;
+}
+.timeSeparator {
+  color: var(--color-border);
+}
+/* 고른 목표에 연결한 프로세스·사이트 목록 */
+.targets {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.target {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.targetTime {
+  flex: none;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+/* 달성률 막대: 칸은 흐린 회색, 채움은 포인트색. 100%에서 멈춘다. */
+.rateTrack {
+  height: 0.5rem;
+  margin: var(--space-2) 0;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--color-track);
+}
+.rateFill {
+  height: 100%;
+  border-radius: var(--radius-sm);
+  background: var(--color-active);
+}

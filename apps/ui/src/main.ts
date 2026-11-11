@@ -1,6 +1,5 @@
 import { cancelLogin, fetchAccount, logout, startLogin } from "./api";
 import { createDeleteAccountDialog } from "./components/account/DeleteAccountDialog";
-import { createDevicesDialog } from "./components/account/DevicesDialog";
 import { createSyncDialog } from "./components/sync/SyncDialog";
 import { mountLayout } from "./layouts/Layouts";
 import { createNavBar } from "./layouts/NavBar";
@@ -52,9 +51,6 @@ if (app) {
       void navBar.refreshSyncStatus();
     },
   });
-  const devicesDialog = createDevicesDialog({
-    onSignedOut: () => void account.refresh(),
-  });
   const deleteAccountDialog = createDeleteAccountDialog({
     // 서버에서 계정을 지웠다 — 로그인 상태가 바뀌었을 테니 다시 묻고, 상태 칩도 정리한다.
     onDeleted: () => {
@@ -73,7 +69,6 @@ if (app) {
   });
   const navBar = createNavBar(account, {
     onOpenSync: () => void syncDialog.open({ afterLogin: false }),
-    onOpenDevices: () => void devicesDialog.open(),
     onDeleteAccount: (email, session) =>
       deleteAccountDialog.open(email, session),
   });

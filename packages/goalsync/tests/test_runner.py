@@ -498,3 +498,11 @@ def test_a_cycle_cut_off_by_an_account_reset_still_reports_the_generation_it_sta
 
     assert report.skipped == "account_changed"
     assert report.generation == started != store.generation()  # 호출부가 이 세대로 상태 기록을 거절시킬 수 있다
+
+
+def test_the_daily_sync_and_the_achievement_denominator_share_one_day_rule() -> None:
+    """서버로 올라가는 날짜별 목표 분(goalsync.daily)과 화면 달성률의 분모(goals.targets)가 같은 함수를 쓴다 — 두 숫자가 갈라지지 않게."""
+    import goals
+    import goalsync.daily as daily
+
+    assert daily.goals_for_day is goals.goals_for_day

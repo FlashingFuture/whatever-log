@@ -14,7 +14,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 
 from aggregation.range import site_usage_by_range, usage_by_range
-from goals import Goal, GoalStore, compute_progress
+from goals import GoalStore, compute_progress, goals_for_day
 
 MINUTES_PER_DAY = 24 * 60
 
@@ -34,26 +34,6 @@ def local_day_bounds(day: date) -> tuple[datetime, datetime]:
     start = datetime.combine(day, time.min).astimezone()
     end = datetime.combine(day + timedelta(days=1), time.min).astimezone()
     return start.astimezone(UTC), end.astimezone(UTC)
-
-
-def _goals_for_day(store: GoalStore, day: date, current: list[Goal]) -> list[Goal]:
-    """그날 적용된 목표 설정. 스냅샷이 있으면 스냅샷, 없으면 지금 목표 중 그 요일에 적용되는 것."""
-    snapshots = store.snapshots(day)
-    if snapshots:
-        return [
-            Goal(
-                id=snap.goal_id,
-                name=snap.name,
-                daily_target_minutes=snap.daily_target_minutes,
-                weekdays=frozenset(range(7)),
-                processes=snap.processes,
-                created_at="",
-                updated_at="",
-                sites=snap.sites,
-            )
-            for snap in snapshots
-        ]
-    return [goal for goal in current if day.weekday() in goal.weekdays]
 
 
 def _open_recorder(path: Path) -> sqlite3.Connection:
@@ -84,7 +64,7 @@ def day_entries(
     try:
         for day in days:
             start, end = local_day_bounds(day)
-            applicable = _goals_for_day(store, day, current)
+            applicable = goals_for_day(store, day, current)
             # 그날 적용되지 않는 목표도 시간이 있으면 보내려고, 계산 대상은 "지금 목표 전부 + 그날 적용 목표"의 합집합이다.
             by_id = {goal.id: goal for goal in applicable}
             for goal in current:
