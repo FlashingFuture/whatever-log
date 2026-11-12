@@ -292,7 +292,9 @@ def test_main_configures_webview2_before_any_window_exists(tmp_path, monkeypatch
     server.listen(1)
     _threading.Thread(target=server.accept, daemon=True).start()
     monkeypatch.delenv(main_module.WEBVIEW2_ARGUMENTS_ENV, raising=False)
-    monkeypatch.setattr(sys, "argv", ["desktop"])
+    # --dev로 연다: 빌드된 화면(apps/ui/dist)이 없는 환경(CI의 파이썬 작업)에서도 돌아야 한다. Vite dev server 대신 위에서 연 소켓을 가리킨다.
+    monkeypatch.setattr(sys, "argv", ["desktop", "--dev"])
+    monkeypatch.setattr(main_module, "DEV_SERVER_URL", f"http://127.0.0.1:{server.getsockname()[1]}")
     monkeypatch.setattr(main_module, "HUB_PORT", 65535)
     monkeypatch.setattr(main_module, "_HUB_READY_TIMEOUT_SECONDS", 0.05)
     monkeypatch.setattr(main_module, "DEFAULT_HUB_SUPERVISOR_LOG_PATH", tmp_path / "hub-supervisor.log")
