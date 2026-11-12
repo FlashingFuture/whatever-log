@@ -35,7 +35,9 @@ from common import api_error
 from chromium.browsers import BROWSERS
 from chromium.snapshot import remove_stale_work_dirs
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
+from common.memory import keep_trimmed
 from common.paths import data_path
+from common.ports import HUB_PORT
 from goals import sync_status
 from goals import (
     META_SYNC_ENABLED,
@@ -77,7 +79,7 @@ from recorder.__main__ import DEFAULT_DB_PATH
 from supervision.lock import AlreadyRunningError, acquire_lock
 from supervision.log_setup import configure_logging
 
-DEFAULT_PORT = 8787
+DEFAULT_PORT = HUB_PORT
 
 _APP_DIR = Path(__file__).resolve().parent.parent.parent
 DEFAULT_LOG_PATH = data_path(_APP_DIR, "hub.log", subdir="logs")
@@ -1271,6 +1273,7 @@ def main() -> None:
     args = parser.parse_args()
 
     configure_logging(logger, DEFAULT_LOG_PATH)
+    keep_trimmed()  # 쉬는 시간이 긴 백그라운드 프로세스 — 안 쓰는 물리 메모리를 돌려준다(common.memory)
 
     try:
         lock = acquire_lock(_lock_path_for_port(args.port))

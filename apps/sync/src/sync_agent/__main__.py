@@ -34,6 +34,7 @@ from cloud import (
     load_config,
 )
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
+from common.memory import keep_trimmed
 from common.paths import data_path
 from goals import META_DEVICE_ID, GoalStore, SchemaVersionError, StaleSyncError
 from goals import sync_status as status
@@ -194,6 +195,7 @@ def main(argv: list[str] | None = None, *, sleep: Callable[[float], None] = time
         return EXIT_ARGUMENT_ERROR if exit_.code else 0
 
     configure_logging(logger, args.log_path)
+    keep_trimmed()  # 쉬는 시간이 긴 백그라운드 프로세스 — 안 쓰는 물리 메모리를 돌려준다(common.memory)
     try:
         config = load_config()
     except ValueError as error:
