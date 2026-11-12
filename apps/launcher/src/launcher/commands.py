@@ -202,6 +202,16 @@ def _show_message(text: str) -> None:
     ctypes.windll.user32.MessageBoxW(None, text, "whatever.log", 0x10)  # MB_ICONERROR
 
 
+def _install_command() -> str:
+    """사용자에게 보여 줄 설치 명령. 번들에서는 `whatever-log.cmd`, 개발용 저장소에서는 `uv run whatever-log`."""
+    return "whatever-log.cmd install" if paths.bundle_info() is not None else "uv run whatever-log install"
+
+
+def _desktop_log() -> Path:
+    """창(desktop)의 로그 파일 위치. 번들에서는 사용자 데이터 폴더의 logs/, 개발용 저장소에서는 apps/desktop/ 안이다(common.paths와 같은 규칙)."""
+    return paths.data_path(components.REPO_ROOT / "apps" / "desktop", "hub-supervisor.log", subdir="logs")
+
+
 def start(say: Say, *, open_window: bool = True) -> bool:
     """꺼져 있는 백그라운드 구성 요소를 띄우고, 창을 연다(창이 닫힐 때까지 기다린다). 잘 됐으면 True.
 
@@ -212,11 +222,15 @@ def start(say: Say, *, open_window: bool = True) -> bool:
         _report_start(component, say, problems)
     if open_window:
         if not ui_build.is_built():
-            problems.append("화면이 아직 빌드되지 않았어요. `uv run whatever-log install`을 실행해 주세요.")
+            if paths.bundle_info() is not None:
+                # 번들에는 화면을 빌드할 입력(Node·화면 소스)이 없다 — install이 고칠 수 없으니 정상 zip을 다시 푼다.
+                problems.append("화면 파일(apps/ui/dist)이 없어요. 번들이 손상됐으니 릴리스 zip을 새 폴더에 다시 풀고 install.cmd를 실행해 주세요.")
+            else:
+                problems.append(f"화면이 아직 빌드되지 않았어요. `{_install_command()}`을 실행해 주세요.")
         else:
             completed = subprocess.run([str(pythonw_path()), "-m", "desktop"], cwd=components.REPO_ROOT, check=False)
             if completed.returncode != 0:
-                problems.append(f"창이 오류로 끝났어요(종료 코드 {completed.returncode}). apps/desktop/hub-supervisor.log를 확인해 주세요.")
+                problems.append(f"창이 오류로 끝났어요(종료 코드 {completed.returncode}). {_desktop_log()}를 확인해 주세요.")
     for problem in problems:
         say(f"문제: {problem}")
     if problems and sys.stdout is None:
