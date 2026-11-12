@@ -222,7 +222,11 @@ def start(say: Say, *, open_window: bool = True) -> bool:
         _report_start(component, say, problems)
     if open_window:
         if not ui_build.is_built():
-            problems.append(f"화면이 아직 빌드되지 않았어요. `{_install_command()}`을 실행해 주세요.")
+            if paths.bundle_info() is not None:
+                # 번들에는 화면을 빌드할 입력(Node·화면 소스)이 없다 — install이 고칠 수 없으니 정상 zip을 다시 푼다.
+                problems.append("화면 파일(apps/ui/dist)이 없어요. 번들이 손상됐으니 릴리스 zip을 새 폴더에 다시 풀고 install.cmd를 실행해 주세요.")
+            else:
+                problems.append(f"화면이 아직 빌드되지 않았어요. `{_install_command()}`을 실행해 주세요.")
         else:
             completed = subprocess.run([str(pythonw_path()), "-m", "desktop"], cwd=components.REPO_ROOT, check=False)
             if completed.returncode != 0:

@@ -28,7 +28,7 @@ def repo(tmp_path: Path) -> Path:
 @pytest.fixture
 def data(tmp_path: Path):
     folder = tmp_path / "data"
-    with patch("launcher.data_import.paths.data_dir", return_value=folder), patch("launcher.data_import.components.state", return_value=components.STOPPED):
+    with patch("launcher.data_import.paths.data_dir", return_value=folder), patch("launcher.data_import.components.state", return_value=components.STOPPED), patch("launcher.data_import.components.find_processes", return_value=[]):
         yield folder
 
 
@@ -96,6 +96,60 @@ def test_it_refuses_while_a_component_is_running(repo: Path, data: Path) -> None
     assert not ok
     assert not data.exists()
     assert any("stop" in line for line in said)
+
+
+@pytest.mark.parametrize("module", ["hub", "desktop"])
+def test_it_refuses_while_the_window_or_hub_is_running(repo: Path, data: Path, module: str) -> None:
+    with patch("launcher.data_import.components.find_processes", side_effect=lambda name: ["process"] if name == module else []):
+        ok, said = _run(repo, replace=True)
+    assert not ok
+    assert not data.exists()
+    assert any("창" in line for line in said)
+
+
+def _crashed_db(data: Path) -> None:
+    """비정상 종료 뒤의 모습: 커밋된 행(2개)이 합쳐지지 않은 -wal에만 있는 recorder.db."""
+    import shutil
+
+    live = _make_db(data / "recorder.db", "ticks", 1, wal=True)
+    live.execute("INSERT INTO ticks VALUES (7)")
+    live.commit()
+    snapshot = data.parent / "crashed"
+    snapshot.mkdir()
+    for suffix in ("", "-wal", "-shm"):
+        shutil.copy(data / f"recorder.db{suffix}", snapshot / f"recorder.db{suffix}")
+    live.close()
+    for item in data.glob("recorder.db*"):
+        item.unlink()
+    for item in snapshot.iterdir():
+        shutil.copy(item, data / item.name)
+    assert (data / "recorder.db-wal").exists()
+
+
+def test_replace_preserves_committed_changes_that_exist_only_in_the_old_wal(repo: Path, data: Path) -> None:
+    _crashed_db(data)
+    ok, _ = _run(repo, replace=True)
+    assert ok
+    assert _rows(data / "recorder.db", "ticks") == 5
+    assert _rows(data / "recorder.db.before-import", "ticks") == 2  # WAL에만 있던 행까지
+
+
+def test_a_failed_replace_keeps_the_existing_data_in_place(repo: Path, data: Path) -> None:
+    _make_db(data / "recorder.db", "ticks", 1).close()
+    (repo / "apps/recorder/recorder.db").write_bytes(b"not a database" * 100)
+    ok, _ = _run(repo, replace=True)
+    assert not ok
+    assert _rows(data / "recorder.db", "ticks") == 1  # 새 복사본 검사가 먼저라 기존 것은 손대지 않았다
+    assert not (data / "recorder.db.before-import").exists()
+
+
+def test_a_failure_while_swapping_restores_the_previous_data(repo: Path, data: Path) -> None:
+    _crashed_db(data)
+    with patch("launcher.data_import.os.replace", side_effect=OSError("locked")):
+        ok, _ = _run(repo, replace=True)
+    assert not ok
+    assert _rows(data / "recorder.db", "ticks") == 2  # WAL에만 있던 행도 잃지 않는다
+    assert not list(data.glob("*.importing"))
 
 
 def test_dry_run_changes_nothing(repo: Path, data: Path) -> None:

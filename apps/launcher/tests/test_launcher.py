@@ -741,7 +741,8 @@ def test_the_recovery_hint_names_the_command_the_user_actually_has(tmp_path) -> 
         patch("launcher.commands._show_message"),
     ):
         commands.start(lines.append)
-    assert any("whatever-log.cmd install" in line for line in lines)  # 번들에는 uv가 없다
+    assert any("다시 풀" in line for line in lines)  # 번들에는 화면을 빌드할 입력이 없어 install로 못 고친다
+    assert not any("install" in line and "uv" in line for line in lines)
 
     lines.clear()
     with (

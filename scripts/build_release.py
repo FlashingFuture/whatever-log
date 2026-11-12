@@ -140,7 +140,7 @@ def write_path_file(runtime: Path, source_dirs: list[str]) -> None:
 def export_requirements(root: Path, output: Path) -> None:
     """`uv.lock` 그대로의 의존성 목록(워크스페이스 패키지 제외, 개발용 제외)을 파일로 뽑는다."""
     subprocess.run(
-        ["uv", "export", "--frozen", "--no-dev", "--all-packages", "--no-emit-workspace", "--no-hashes", "-o", str(output)],
+        ["uv", "export", "--frozen", "--no-dev", "--all-packages", "--no-emit-workspace", "-o", str(output)],
         cwd=root,
         check=True,
         stdout=sys.stderr,
@@ -151,7 +151,7 @@ def install_dependencies(requirements: Path, target: Path, python: str) -> None:
     """의존성을 target(site-packages)에 설치한다. 이 PC의 파이썬이 아니라 대상(Windows, python 버전)에 맞는 것을 받는다."""
     subprocess.run(
         [
-            "uv", "pip", "install", "--target", str(target), "-r", str(requirements),
+            "uv", "pip", "install", "--target", str(target), "-r", str(requirements), "--require-hashes",
             "--python-platform", "windows", "--python-version", python,
         ],
         check=True,
