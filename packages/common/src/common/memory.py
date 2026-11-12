@@ -43,13 +43,20 @@ def keep_trimmed(interval_seconds: float = DEFAULT_INTERVAL_SECONDS, first_delay
     """이 프로세스의 작업 집합을 first_delay_seconds 뒤에 한 번, 그 뒤 interval_seconds마다 줄이는 백그라운드 스레드를 시작한다.
 
     프로세스당 한 번만 시작한다(이미 시작했으면 아무것도 하지 않고 False). 스레드는 데몬이라 프로세스가 끝나는 것을 막지 않는다.
+    메모리 정리는 부가 기능이라, 스레드를 만들지 못해도(운영체제의 스레드 한도 등 — `Thread.start()`가 RuntimeError를 낸다) 예외를 내지 않고 False를 돌려준다:
+    그 실패가 기록기·hub·동기화 에이전트의 시작까지 막으면 안 된다. 이때는 다시 시도할 수 있게 "시작함" 표시를 되돌린다.
     """
     global _started
     with _started_lock:
         if _started or sys.platform != "win32":
             return False
         _started = True
-    threading.Thread(target=_loop, args=(interval_seconds, first_delay_seconds), name="trim-working-set", daemon=True).start()
+        try:
+            threading.Thread(target=_loop, args=(interval_seconds, first_delay_seconds), name="trim-working-set", daemon=True).start()
+        except RuntimeError:
+            _started = False
+            logger.debug("메모리 정리 스레드를 시작하지 못했습니다.", exc_info=True)
+            return False
     return True
 
 

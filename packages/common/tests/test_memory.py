@@ -62,6 +62,32 @@ def test_the_background_thread_starts_once_and_is_a_daemon(monkeypatch) -> None:
     assert started == [("trim-working-set", True)]  # 데몬이라 프로세스가 끝나는 것을 막지 않는다
 
 
+def test_a_thread_that_cannot_be_started_does_not_stop_the_app_and_can_be_retried(monkeypatch) -> None:
+    """메모리 정리는 부가 기능이다 — 스레드를 못 만들어(RuntimeError) 기록기·hub·동기화 시작까지 막히면 안 된다."""
+    real_thread = threading.Thread
+    attempts = []
+
+    class Failing(real_thread):
+        def start(self):
+            attempts.append("start")
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(memory.threading, "Thread", Failing)
+
+    assert memory.keep_trimmed(60) is False  # 예외가 밖으로 나오지 않는다
+    assert memory._started is False  # "시작함" 표시를 되돌려, 나중에 다시 시도할 수 있다
+
+    started = []
+
+    class Working(real_thread):
+        def start(self):
+            started.append(self.name)
+
+    monkeypatch.setattr(memory.threading, "Thread", Working)
+    assert memory.keep_trimmed(60) is True and started == ["trim-working-set"]
+    assert attempts == ["start"]
+
+
 def test_the_first_trim_waits_until_startup_has_settled(monkeypatch) -> None:
     """시작 직후에 줄이면 모듈을 불러오고 DB를 여는 동안 곧바로 다시 차오른다 — 첫 정리는 시작이 끝난 뒤여야 한다."""
     order: list = []

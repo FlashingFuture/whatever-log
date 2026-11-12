@@ -180,6 +180,8 @@ def main() -> None:
         help=f"빌드된 파일 대신 Vite dev server({DEV_SERVER_URL})를 연다",
     )
     args = parser.parse_args()
+    # 창을 만들기 전에 — Vite dev server 오류 안내 창도 WebView2로 뜨므로, 이 분기보다 앞에서 한다.
+    configure_webview2()
 
     if args.dev and not _dev_server_is_up(timeout=1.0):
         message = (
@@ -195,7 +197,6 @@ def main() -> None:
         sys.exit(1)
 
     configure_logging(hub_supervisor_logger, DEFAULT_HUB_SUPERVISOR_LOG_PATH)
-    configure_webview2()
     if not set_app_user_model_id():  # 작업표시줄에서 python.exe의 창과 묶이지 않게(창을 만들기 전에)
         hub_supervisor_logger.warning("AppUserModelID를 설정하지 못했습니다. 작업표시줄이 이 창을 python.exe와 묶어 보일 수 있습니다.")
 

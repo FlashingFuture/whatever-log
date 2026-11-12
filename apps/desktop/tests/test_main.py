@@ -279,6 +279,27 @@ def test_webview2_gets_the_gpu_free_arguments_unless_the_user_already_chose(monk
     assert main_module.os.environ[main_module.WEBVIEW2_ARGUMENTS_ENV] == "--user-choice"  # 사용자가 정한 값은 덮어쓰지 않는다
 
 
+def test_the_dev_server_error_window_also_gets_the_webview2_arguments(monkeypatch) -> None:
+    """Vite dev server가 꺼져 있으면 안내 창을 띄우고 끝난다 — 그 창도 WebView2라서, 이 경로에서도 인자가 먼저 들어가 있어야 한다."""
+    import desktop.__main__ as main_module
+
+    seen = {}
+    monkeypatch.delenv(main_module.WEBVIEW2_ARGUMENTS_ENV, raising=False)
+    monkeypatch.setattr(sys, "argv", ["desktop", "--dev"])
+    monkeypatch.setattr(main_module, "_dev_server_is_up", lambda timeout: False)
+
+    def create_window(*args, **kwargs):
+        seen["env"] = main_module.os.environ.get(main_module.WEBVIEW2_ARGUMENTS_ENV)
+        return MagicMock()
+
+    with patch("desktop.__main__.webview") as mock_webview:
+        mock_webview.create_window.side_effect = create_window
+        with pytest.raises(SystemExit) as stopped:
+            main_module.main()
+
+    assert stopped.value.code == 1 and seen["env"] == "--disable-gpu"
+
+
 def test_main_configures_webview2_before_any_window_exists(tmp_path, monkeypatch) -> None:
     """WebView2 환경은 첫 창을 만들 때 정해진다 — 그 전에 인자가 들어가 있어야 효과가 있다."""
     import socket
