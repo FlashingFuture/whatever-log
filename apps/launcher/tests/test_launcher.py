@@ -727,3 +727,42 @@ def test_a_shortcut_can_be_made_even_without_system_root_in_the_environment(tmp_
     link = shortcuts.create(tmp_path)
 
     assert link.is_file() and shortcuts.is_ours(link)
+
+
+# --- 안내 문구: 번들과 개발용 저장소가 서로 다른 명령·로그 위치를 말한다 ---
+
+
+def test_the_recovery_hint_names_the_command_the_user_actually_has(tmp_path) -> None:
+    lines: list[str] = []
+    with (
+        patch("launcher.commands.components.start", return_value=components.SUPERVISED),
+        patch("launcher.commands.ui_build.is_built", return_value=False),
+        patch("launcher.commands.paths.bundle_info", return_value={"version": "1"}),
+        patch("launcher.commands._show_message"),
+    ):
+        commands.start(lines.append)
+    assert any("whatever-log.cmd install" in line for line in lines)  # 번들에는 uv가 없다
+
+    lines.clear()
+    with (
+        patch("launcher.commands.components.start", return_value=components.SUPERVISED),
+        patch("launcher.commands.ui_build.is_built", return_value=False),
+        patch("launcher.commands.paths.bundle_info", return_value=None),
+        patch("launcher.commands._show_message"),
+    ):
+        commands.start(lines.append)
+    assert any("uv run whatever-log install" in line for line in lines)
+
+
+def test_the_window_error_points_at_the_log_in_the_data_folder_for_a_bundle(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("WHATEVER_LOG_DATA_DIR", str(tmp_path))
+    lines: list[str] = []
+    with (
+        patch("launcher.commands.components.start", return_value=components.SUPERVISED),
+        patch("launcher.commands.ui_build.is_built", return_value=True),
+        patch("launcher.commands.subprocess.run", return_value=MagicMock(returncode=3)),
+        patch("launcher.commands._show_message"),
+    ):
+        commands.start(lines.append)
+
+    assert any(str(tmp_path / "logs" / "hub-supervisor.log") in line for line in lines)  # 데이터 폴더의 logs/ (개발용 저장소의 apps/desktop/가 아니다)
