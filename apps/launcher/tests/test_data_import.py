@@ -94,7 +94,7 @@ def test_it_refuses_while_a_component_is_running(repo: Path, data: Path) -> None
     with patch("launcher.data_import.components.state", return_value=components.SUPERVISED):
         ok, said = _run(repo)
     assert not ok
-    assert not data.exists()
+    assert not (data / "recorder.db").exists()
     assert any("stop" in line for line in said)
 
 
@@ -103,7 +103,7 @@ def test_it_refuses_while_the_window_or_hub_is_running(repo: Path, data: Path, m
     with patch("launcher.data_import.components.find_processes", side_effect=lambda name: ["process"] if name == module else []):
         ok, said = _run(repo, replace=True)
     assert not ok
-    assert not data.exists()
+    assert not (data / "recorder.db").exists()
     assert any("창" in line for line in said)
 
 
@@ -150,6 +150,21 @@ def test_a_failure_while_swapping_restores_the_previous_data(repo: Path, data: P
     assert not ok
     assert _rows(data / "recorder.db", "ticks") == 2  # WAL에만 있던 행도 잃지 않는다
     assert not list(data.glob("*.importing"))
+
+
+def test_a_second_import_is_refused_while_one_is_running(repo: Path, data: Path) -> None:
+    from supervision.lock import acquire_lock
+
+    held = acquire_lock(data / "import.lock")
+    try:
+        ok, said = _run(repo)
+    finally:
+        held.release()
+    assert not ok
+    assert not (data / "recorder.db").exists()
+    assert any("다른 가져오기" in line for line in said)
+    ok, _ = _run(repo)  # 잠금을 놓으면 다시 할 수 있다
+    assert ok
 
 
 def test_dry_run_changes_nothing(repo: Path, data: Path) -> None:

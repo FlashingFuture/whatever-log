@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from common import paths
+from supervision.lock import AlreadyRunningError, acquire_lock
 
 from launcher import components
 
@@ -140,6 +141,20 @@ def run(repo_root: Path, say, *, dry_run: bool = False, replace: bool = False) -
     if folder is None:
         say("문제: 이 폴더는 개발용 저장소라 데이터가 이미 앱 폴더 안에 있어요. 설치한 번들 폴더에서 실행해 주세요.")
         return False
+    if dry_run:  # 아무것도 바꾸지 않으므로 잠금(과 폴더 만들기)이 필요 없다
+        return _run_locked(repo_root, folder, say, dry_run=True, replace=replace)
+    try:
+        lock = acquire_lock(folder / "import.lock")
+    except AlreadyRunningError:
+        say("문제: 다른 가져오기가 실행 중이에요. 끝난 뒤 다시 실행해 주세요.")
+        return False
+    try:  # 검사(check_ready)부터 복사가 끝날 때까지 잠금을 쥐어, 두 실행이 서로의 검사와 교체 사이에 끼어들지 못하게 한다
+        return _run_locked(repo_root, folder, say, dry_run=False, replace=replace)
+    finally:
+        lock.release()
+
+
+def _run_locked(repo_root: Path, folder: Path, say, *, dry_run: bool, replace: bool) -> bool:
     prefix = "[미리보기] " if dry_run else ""
     try:
         items = plan(repo_root, folder)
