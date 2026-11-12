@@ -76,6 +76,8 @@ recorder·aggregation·goals·chromium·supervision·desktop은 `cloud`를 impor
 
 설치와 전체 실행(자동 시작 등록·바로가기·화면 빌드·구성 요소 시작/종료)은 `apps/launcher`의 `whatever-log` 명령이 맡습니다(`docs/packaging.md`). 로그인 시 자동으로 띄우는 대상은 recorder와 동기화 에이전트의 **supervisor**이고, Registry Run 키 등록은 `packages/supervision/autostart.py` 한 곳에 있습니다. 사용자 배포는 릴리스 번들(`scripts/build_release.py`, 태그 `v<VERSION>`을 푸시하면 `.github/workflows/release.yml`이 GitHub Release로 올린다)이고 버전은 루트 `VERSION` 한 곳(SemVer)입니다. **DB·로그·lock의 경로는 앱마다 정하지 말고 `common.paths.data_path`로 정하세요** — 번들에서는 `%LOCALAPPDATA%\whatever.log`로 가고, hub·recorder·sync가 같은 DB를 열기 때문에 한 곳에서 정해야 어긋나지 않습니다. 앱 아이콘 원본은 `apps/desktop/src/desktop/assets/`(`icon.svg`, `icon-mark.svg`)이고 `icon.ico`는 `apps/desktop/tools/build_icon.py`로 만듭니다.
 
+메모리: 쉬는 시간이 긴 **백그라운드 프로세스**(recorder·sync·hub·supervisor)는 시작할 때 `common.memory.keep_trimmed()`를 불러 안 쓰는 물리 메모리를 돌려줍니다(작업 관리자의 숫자가 크게 내려갑니다). 사용자가 보는 창 프로세스(desktop)에는 쓰지 않습니다. 앱끼리 쓰는 포트는 무거운 앱을 불러오지 않게 `common.ports`에 둡니다(desktop이 hub 모듈을 불러오지 않는다). WebView2는 `--disable-gpu`로 띄웁니다. 숫자와 작업 관리자에 이름이 `pythonw`로 보이는 이유는 `docs/memory.md`.
+
 프로세스 종료 코드와 HTTP API 에러 응답 형식처럼 앱들이 같은 뜻으로 공유해야 하는 범용
 계약은 `packages/common`에만 둡니다. 특정 앱에서만 쓰는 것은 그 앱 디렉터리에서
 관리합니다(`docs/2026-10-error-handling.md` 참고).

@@ -34,6 +34,7 @@ stop_event로 신호를 보낸다.
 import argparse
 import html
 import logging
+import os
 import socket
 import sys
 import threading
@@ -44,15 +45,25 @@ from pathlib import Path
 from urllib.parse import urlparse, urlsplit
 
 import webview
-from hub.__main__ import DEFAULT_PORT as HUB_PORT
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
 from common.paths import data_path
+from common.ports import HUB_PORT
 from supervision.log_setup import configure_logging
 from supervision.supervisor import supervise
 
 from desktop.window_icon import apply_window_icon, set_app_user_model_id
 
 DEV_SERVER_URL = "http://localhost:5173"
+
+#: WebView2(Chromium)에 넘길 실행 인자. `--disable-gpu`는 GPU 프로세스를 따로 띄우지 않게 한다 — 이 화면은 글자·막대 몇 개라 GPU 가속이 필요 없고,
+#: 이 PC에서 잰 값으로 WebView2 전체가 약 110MB → 63MB로 줄었다(CPU 사용은 같다). 사용자가 같은 환경변수를 이미 정해 두었으면 그것을 따른다.
+WEBVIEW2_ARGUMENTS_ENV = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"
+WEBVIEW2_ARGUMENTS = "--disable-gpu"
+
+
+def configure_webview2() -> None:
+    """WebView2가 만들어지기 **전에** 불러야 한다(첫 창을 만들 때 환경이 정해진다). 사용자가 이미 값을 주었으면 덮어쓰지 않는다."""
+    os.environ.setdefault(WEBVIEW2_ARGUMENTS_ENV, WEBVIEW2_ARGUMENTS)
 WINDOW_TITLE = "whatever.log"
 
 _APP_DIR = Path(__file__).resolve().parents[2]
@@ -184,6 +195,7 @@ def main() -> None:
         sys.exit(1)
 
     configure_logging(hub_supervisor_logger, DEFAULT_HUB_SUPERVISOR_LOG_PATH)
+    configure_webview2()
     if not set_app_user_model_id():  # 작업표시줄에서 python.exe의 창과 묶이지 않게(창을 만들기 전에)
         hub_supervisor_logger.warning("AppUserModelID를 설정하지 못했습니다. 작업표시줄이 이 창을 python.exe와 묶어 보일 수 있습니다.")
 

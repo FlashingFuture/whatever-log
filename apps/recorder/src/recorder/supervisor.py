@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
+from common.memory import keep_trimmed
 from common.paths import data_path
 from supervision.log_setup import configure_logging
 from supervision.supervisor import supervise
@@ -56,6 +57,7 @@ def _classify_exit(exit_code: int) -> str | None:
 def main() -> None:
     """recorder를 실행하고, 비정상 종료면 잠깐 쉬었다가 재시작한다(supervise() 위임)."""
     configure_logging(logger, DEFAULT_LOG_PATH)
+    keep_trimmed()  # 쉬는 시간이 긴 백그라운드 프로세스 — 안 쓰는 물리 메모리를 돌려준다(common.memory)
     args = sys.argv[1:]
 
     supervise(

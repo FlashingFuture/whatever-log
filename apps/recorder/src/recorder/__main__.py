@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
+from common.memory import keep_trimmed
 from common.paths import data_path
 from supervision.log_setup import configure_logging
 from recorder.browser_site import SiteTracker
@@ -179,6 +180,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     configure_logging(logger, args.log_path)
+    keep_trimmed()  # 쉬는 시간이 긴 백그라운드 프로세스 — 안 쓰는 물리 메모리를 돌려준다(common.memory)
     try:
         run(args.interval, args.db_path)
     except AlreadyRunningError:
