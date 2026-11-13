@@ -26,7 +26,9 @@ import {
 import { dayRange } from "../lib/goalSelection";
 import { formatTarget, formatWeekdays } from "../lib/goalText";
 import { maxOf } from "../lib/stats";
+import { syncNotice } from "../lib/syncNotice";
 import { createRouteLink, HOME } from "../router/router";
+import type { AccountStore } from "../state/accountStore";
 import styles from "./GoalPage.module.css";
 
 function paragraph(text: string, className: string): HTMLParagraphElement {
@@ -119,9 +121,17 @@ async function loadSites(
  * 새 집계는 없다 — `/api/usage`·`/api/sites`·`/api/goals/progress`의 응답에서 연결한 것만 골라 보여 준다(docs/goal-management.md).
  * 돌려주는 함수로 화면을 정리한다.
  */
-export function mountGoalPage(root: HTMLElement, goalId: number): () => void {
+export function mountGoalPage(
+  root: HTMLElement,
+  goalId: number,
+  options: { account: AccountStore },
+): () => void {
+  // 가장 최근에 시작한 조회의 번호. 구간을 빠르게 넘기면 조회가 겹치는데, 낡은 조회가 헤더(이름·설명)를 덮어쓰지 않게 하고 화면을 떠난 뒤에는 아무것도 바꾸지 않게 한다.
+  let latestLoad = 0;
   // 모달에서 연결을 바꾸면 이 화면을 다시 불러온다.
   const manager = createGoalManager({
+    // 로그인한 상태에서 만드는 목표는 이름·목표 시간·요일이 서버에도 저장되므로, 목표를 만드는 화면에서 알린다.
+    notice: () => syncNotice(options.account.getState()),
     onChange: () => view.refresh(),
     // 15초마다 요약이 다시 그려져 열었던 링크가 사라졌을 수 있다 — 지금 있는 링크로 포커스를 돌려준다.
     onClose: () =>
@@ -138,6 +148,7 @@ export function mountGoalPage(root: HTMLElement, goalId: number): () => void {
 
   const view = createPeriodView({
     loadContent: async (period) => {
+      const loadId = ++latestLoad;
       const { from, to } = dayRange(period.start, period.end);
       const [goals, usage, progress, totals] = await Promise.all([
         fetchGoals(),
@@ -147,8 +158,11 @@ export function mountGoalPage(root: HTMLElement, goalId: number): () => void {
         fetchGoalTotals(from, to).catch(() => null),
       ]);
       const goal = goals.find((candidate) => candidate.id === goalId);
+      const isLatest = loadId === latestLoad;
       if (goal === undefined) {
-        header.hidden = true;
+        if (isLatest) {
+          header.hidden = true;
+        }
         const missing = document.createElement("div");
         const home = createRouteLink(HOME);
         home.textContent = "홈으로";
@@ -161,9 +175,11 @@ export function mountGoalPage(root: HTMLElement, goalId: number): () => void {
         );
         return missing;
       }
-      title.textContent = goal.name; // 사용자가 쓴 글이라 textContent로만 넣는다
-      meta.textContent = describe(goal);
-      header.hidden = false;
+      if (isLatest) {
+        title.textContent = goal.name; // 사용자가 쓴 글이라 textContent로만 넣는다
+        meta.textContent = describe(goal);
+        header.hidden = false;
+      }
 
       const sites =
         goal.sites.length > 0
@@ -213,6 +229,7 @@ export function mountGoalPage(root: HTMLElement, goalId: number): () => void {
 
   root.replaceChildren(header, view.element);
   return () => {
+    latestLoad++;
     view.destroy();
     manager.destroy();
   };

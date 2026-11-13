@@ -34,7 +34,7 @@ function mountPage(
     case "process":
       return mountProcessPage(content, route.process);
     case "goal":
-      return mountGoalPage(content, route.goalId);
+      return mountGoalPage(content, route.goalId, { account });
     default:
       return mountUsagePage(content, { account });
   }

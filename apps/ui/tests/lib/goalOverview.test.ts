@@ -133,3 +133,31 @@ test("사이트 칸은 백그라운드 시간 0으로 채우고 전체 시간은
     background_seconds: 0,
   });
 });
+
+test("대소문자만 다른 프로세스 이름은 같은 프로세스로 보고 합친다(0 행을 따로 만들지 않는다)", () => {
+  const rows = goalProcessRows(
+    ["Anki.exe"],
+    [usage("anki.exe", 30), usage("ANKI.EXE", 10), usage("other.exe", 99)],
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].process, "anki.exe");
+  assert.equal(rows[0].active_seconds, 40);
+  assert.equal(rows[0].total_seconds, 40);
+});
+
+test("대소문자만 다른 도메인도 같은 사이트로 보고 합친다", () => {
+  const rows = goalSiteRows(
+    ["Claude.AI"],
+    [site("claude.ai", 20), site("CLAUDE.ai", 5)],
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].active_seconds, 25);
+});
+
+test("연결한 사이트의 대소문자만 다른 중복은 한 번만 담는다", () => {
+  const grouped = domainsByBrowser([
+    { browser: "chrome.exe", domain: "A.com" },
+    { browser: "chrome.exe", domain: "a.com" },
+  ]);
+  assert.deepEqual([...grouped], [["chrome.exe", ["A.com"]]]);
+});
