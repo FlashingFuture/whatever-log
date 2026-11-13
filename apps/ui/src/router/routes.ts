@@ -14,6 +14,7 @@ export type LayoutName = "plain" | "back";
 const LAYOUT_OF: Record<Route["name"], LayoutName> = {
   home: "plain",
   process: "back",
+  goal: "back",
 };
 
 export function layoutOf(route: Route): LayoutName {

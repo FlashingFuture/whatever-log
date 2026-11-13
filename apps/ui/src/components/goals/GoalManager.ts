@@ -34,6 +34,8 @@ import {
 export interface GoalManager {
   /** "목표 프로세스 관리" 모달을 목록 화면으로 연다. */
   open: () => void;
+  /** 모달을 열어 한 목표의 연결 프로세스 관리 화면으로 바로 간다(목표 개요 화면의 "프로세스 연결 관리"). */
+  openDetail: (goalId: number) => void;
   destroy: () => void;
 }
 
@@ -42,6 +44,10 @@ export interface GoalManagerProps {
   notice?: () => string | null;
   /** 목표나 연결 프로세스가 바뀌었다 — 홈의 수행 시간을 다시 불러오게 한다. */
   onChange: () => void;
+  /**
+   * 목록에서 목표를 눌렀다. 주면 모달을 닫고 이 함수에 맡긴다(홈: 목표 개요 화면으로 이동). 없으면 모달 안에서 연결 프로세스 관리 화면을 연다.
+   */
+  onOpenGoal?: (goal: Goal) => void;
   /** 모달이 닫혔다(어떤 방식으로든). 열었던 버튼으로 포커스를 돌려주는 데 쓴다. */
   onClose?: () => void;
 }
@@ -127,7 +133,14 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
       actions: [addButton()],
       content: createGoalList({
         goals,
-        onOpen: (goal) => void showDetail(goal.id),
+        onOpen: (goal) => {
+          if (props.onOpenGoal) {
+            modal.close();
+            props.onOpenGoal(goal);
+          } else {
+            void showDetail(goal.id);
+          }
+        },
         onEdit: (goal) => showForm(goal, showList),
         onDelete: (goal) => showDelete(goal),
       }),
@@ -352,6 +365,10 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
     open() {
       modal.open();
       void showList();
+    },
+    openDetail(goalId) {
+      modal.open();
+      void showDetail(goalId);
     },
     destroy() {
       destroyed = true;

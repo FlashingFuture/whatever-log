@@ -11,11 +11,17 @@
 
 import { isRestoringScroll } from "./scroll.ts";
 
-export type Route = { name: "home" } | { name: "process"; process: string };
+export type Route =
+  | { name: "home" }
+  | { name: "process"; process: string }
+  | { name: "goal"; goalId: number };
 
 export const HOME: Route = { name: "home" };
 
 const PROCESS_PREFIX = "#/process/";
+const GOAL_PREFIX = "#/goal/";
+// 목표 id는 양의 정수(서버가 SQLite 정수로 준다). 문자열이 `12abc`나 `0012` 같은 모양이면 같은 목표의 다른 주소가 생기므로 정규형만 받는다.
+const GOAL_ID = /^[1-9]\d{0,8}$/;
 
 export function parseRoute(hash: string): Route {
   if (hash.startsWith(PROCESS_PREFIX)) {
@@ -28,13 +34,24 @@ export function parseRoute(hash: string): Route {
       }
     }
   }
+  if (hash.startsWith(GOAL_PREFIX)) {
+    const raw = hash.slice(GOAL_PREFIX.length);
+    if (GOAL_ID.test(raw)) {
+      return { name: "goal", goalId: Number(raw) };
+    }
+  }
   return HOME;
 }
 
 export function routeHref(route: Route): string {
-  return route.name === "process"
-    ? `${PROCESS_PREFIX}${encodeURIComponent(route.process)}`
-    : "#/";
+  switch (route.name) {
+    case "process":
+      return `${PROCESS_PREFIX}${encodeURIComponent(route.process)}`;
+    case "goal":
+      return `${GOAL_PREFIX}${route.goalId}`;
+    default:
+      return "#/";
+  }
 }
 
 export function isSameRoute(a: Route, b: Route): boolean {

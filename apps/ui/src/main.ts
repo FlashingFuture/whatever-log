@@ -3,6 +3,7 @@ import { createDeleteAccountDialog } from "./components/account/DeleteAccountDia
 import { createSyncDialog } from "./components/sync/SyncDialog";
 import { mountLayout } from "./layouts/Layouts";
 import { createNavBar } from "./layouts/NavBar";
+import { mountGoalPage } from "./pages/GoalPage";
 import { mountProcessPage } from "./pages/ProcessPage";
 import { mountUsagePage } from "./pages/UsagePage";
 import {
@@ -29,9 +30,14 @@ function mountPage(
   route: Route,
   account: AccountStore,
 ): () => void {
-  return route.name === "process"
-    ? mountProcessPage(content, route.process)
-    : mountUsagePage(content, { account });
+  switch (route.name) {
+    case "process":
+      return mountProcessPage(content, route.process);
+    case "goal":
+      return mountGoalPage(content, route.goalId, { account });
+    default:
+      return mountUsagePage(content, { account });
+  }
 }
 
 const app = document.querySelector("#app");

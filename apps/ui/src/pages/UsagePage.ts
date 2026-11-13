@@ -6,6 +6,7 @@ import { createUsageChart } from "../components/usage/UsageChart";
 import { createUsageSummary } from "../components/usage/UsageSummary";
 import { dayRange, settleSelection } from "../lib/goalSelection";
 import { syncNotice } from "../lib/syncNotice";
+import { navigate } from "../router/router";
 import type { AccountStore } from "../state/accountStore";
 import styles from "./UsagePage.module.css";
 
@@ -23,6 +24,8 @@ export function mountUsagePage(
     // 로그인한 상태에서 만드는 목표는 이름·목표 시간·요일이 서버에도 저장되므로, 목표를 만드는 화면에서 알린다.
     notice: () => syncNotice(options.account.getState()),
     onChange: () => view.refresh(),
+    // 목록에서 목표를 누르면 그 목표의 개요 화면으로 간다(연결 프로세스 관리는 그 화면의 단추로).
+    onOpenGoal: (goal) => navigate({ name: "goal", goalId: goal.id }),
     // 15초마다 요약이 다시 그려져 열었던 버튼이 사라졌을 수 있다 — 지금 있는 버튼으로 포커스를 돌려준다.
     onClose: () =>
       root.querySelector<HTMLElement>("[data-goal-manage]")?.focus(),

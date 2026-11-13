@@ -66,3 +66,21 @@
   font-size: var(--text-xs);
   white-space: nowrap;
 }
+/* 아이콘과, 그 오른쪽 아래에 겹쳐 붙는 작은 표시(사이트 칸의 브라우저 아이콘). */
+.iconWrap {
+  position: relative;
+  display: inline-flex;
+}
+.badge {
+  position: absolute;
+  right: -0.35rem;
+  bottom: -0.35rem;
+  display: inline-flex;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  box-shadow: 0 0 0 1px var(--color-bg);
+}
+.iconWrap .badge > * {
+  width: 0.85rem;
+  height: 0.85rem;
+}

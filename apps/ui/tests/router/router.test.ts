@@ -97,3 +97,20 @@ test("복원 중에는 이동해도 기록의 스크롤 위치를 덮어쓰지 �
     delete globals.ResizeObserver;
   }
 });
+
+test("목표 주소는 정수 id를 왕복하고 정규형이 아니면 홈으로", () => {
+  const route = { name: "goal", goalId: 12 } as const;
+  assert.equal(routeHref(route), "#/goal/12");
+  assert.deepEqual(parseRoute("#/goal/12"), route);
+  for (const hash of [
+    "#/goal/",
+    "#/goal/0",
+    "#/goal/012",
+    "#/goal/1a",
+    "#/goal/-1",
+    "#/goal/1.5",
+    "#/goal/1234567890",
+  ]) {
+    assert.deepEqual(parseRoute(hash), HOME, hash);
+  }
+});
