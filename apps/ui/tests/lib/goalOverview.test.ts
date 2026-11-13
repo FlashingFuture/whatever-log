@@ -5,6 +5,7 @@ import {
   domainsByBrowser,
   goalProcessRows,
   goalSiteRows,
+  goalTargets,
 } from "../../src/lib/goalOverview.ts";
 
 const usage = (process: string, active: number) => ({
@@ -92,4 +93,43 @@ test("연결한 사이트를 브라우저별로 묶고 같은 도메인은 한 �
       ["msedge.exe", ["b.com"]],
     ],
   );
+});
+
+test("프로세스와 사이트를 한 목록으로 합쳐 활성 시간순으로 놓고 동률은 프로세스·받은 순서를 지킨다", () => {
+  const targets = goalTargets(
+    [usage("a.exe", 10), usage("z.exe", 0)],
+    [
+      { browser: "chrome.exe", ...site("x.com", 30) },
+      { browser: "chrome.exe", ...site("none.com", 0) },
+      { browser: "msedge.exe", ...site("y.com", 10) },
+    ],
+  );
+  assert.deepEqual(
+    targets.map((target) =>
+      target.kind === "process"
+        ? target.process
+        : `${target.browser}/${target.domain}`,
+    ),
+    [
+      "chrome.exe/x.com",
+      "a.exe",
+      "msedge.exe/y.com",
+      "z.exe",
+      "chrome.exe/none.com",
+    ],
+  );
+});
+
+test("사이트 칸은 백그라운드 시간 0으로 채우고 전체 시간은 그대로 둔다", () => {
+  const [target] = goalTargets(
+    [],
+    [{ browser: "chrome.exe", ...site("x.com", 30) }],
+  );
+  assert.equal(target.kind, "site");
+  assert.deepEqual(target.usage, {
+    active_seconds: 30,
+    idle_seconds: 0,
+    total_seconds: 30,
+    background_seconds: 0,
+  });
 });

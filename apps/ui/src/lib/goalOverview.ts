@@ -87,3 +87,55 @@ export function domainsByBrowser(
   }
   return grouped;
 }
+
+interface Numbers {
+  active_seconds: number;
+  idle_seconds: number;
+  background_seconds: number;
+  total_seconds: number;
+}
+
+/** 목표 개요 차트의 칸 하나: 프로세스, 또는 브라우저 안의 사이트(어느 브라우저인지 함께). */
+export type GoalTarget =
+  | { kind: "process"; process: string; usage: Numbers }
+  | { kind: "site"; browser: string; domain: string; usage: Numbers };
+
+/**
+ * 연결한 프로세스와 사이트를 한 목록으로 합쳐 활성 시간이 긴 순서로 놓는다(홈 차트와 같은 기준). 동률이면(기록 없는 0끼리 포함) 프로세스가 먼저고 받은 순서를 지킨다.
+ * 사이트는 foreground일 때만 알 수 있어 백그라운드 시간이 없다(0).
+ */
+export function goalTargets(
+  processes: readonly ProcessRowLike[],
+  sites: readonly (SiteRowLike & { browser: string })[],
+): GoalTarget[] {
+  const targets: GoalTarget[] = [
+    ...processes.map(
+      (row): GoalTarget => ({
+        kind: "process",
+        process: row.process,
+        usage: row,
+      }),
+    ),
+    ...sites.map(
+      (row): GoalTarget => ({
+        kind: "site",
+        browser: row.browser,
+        domain: row.domain,
+        usage: {
+          active_seconds: row.active_seconds,
+          idle_seconds: row.idle_seconds,
+          background_seconds: 0,
+          total_seconds: row.total_seconds,
+        },
+      }),
+    ),
+  ];
+  return targets
+    .map((target, index) => ({ target, index }))
+    .sort(
+      (a, b) =>
+        b.target.usage.active_seconds - a.target.usage.active_seconds ||
+        a.index - b.index,
+    )
+    .map(({ target }) => target);
+}

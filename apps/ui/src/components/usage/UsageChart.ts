@@ -31,3 +31,23 @@ export function createUsageChart(usage: RangeUsage): HTMLElement {
   container.append(createUsageLegend(), chart);
   return container;
 }
+
+/** 이미 만든 칸들을 범례와 함께 한 줄로 늘어놓는다(목표 개요처럼 칸을 직접 만드는 화면용). 칸이 없으면 emptyText를 보인다. */
+export function createColumnChart(
+  columns: readonly HTMLElement[],
+  emptyText: string,
+): HTMLElement {
+  const container = document.createElement("div");
+  if (columns.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = styles.empty;
+    empty.textContent = emptyText;
+    container.append(empty);
+    return container;
+  }
+  const chart = document.createElement("div");
+  chart.className = styles.chart;
+  chart.append(...columns);
+  container.append(createUsageLegend(), chart);
+  return container;
+}

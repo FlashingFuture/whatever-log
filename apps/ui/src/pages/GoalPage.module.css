@@ -4,29 +4,35 @@
   overflow-wrap: anywhere;
 }
 .meta {
-  margin: 0 0 var(--space-3);
-  color: var(--color-text-muted);
-}
-.manage {
   margin: 0 0 var(--space-5);
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--color-link);
-  font: inherit;
-  cursor: pointer;
-}
-.manage:hover {
-  text-decoration: underline;
-}
-.manage:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 2px;
+  color: var(--color-text-muted);
 }
 .notice {
   margin: var(--space-5) 0;
   color: var(--color-text-muted);
 }
-.sites {
-  margin-top: var(--space-6);
+.warning {
+  margin: var(--space-3) 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+/* 홈과 같은 구조: 왼쪽 요약 + 오른쪽 차트. 좁은 창에서는 요약이 위, 차트가 아래로 쌓인다. */
+.dashboard {
+  display: grid;
+  grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr);
+  gap: var(--space-8);
+  align-items: start;
+}
+.side {
+  position: sticky;
+  top: var(--space-4);
+}
+@media (max-width: 640px) {
+  .dashboard {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-6);
+  }
+  .side {
+    position: static;
+  }
 }

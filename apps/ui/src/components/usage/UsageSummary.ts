@@ -23,8 +23,10 @@ export interface UsageSummaryProps {
   totals: GoalTotals | null;
   /** 고른 목표(null = 목표 전체). 지금 목록에 있는 것이어야 한다 — 호출부가 먼저 정리한다. */
   selectedGoalId: number | null;
-  /** "목표 프로세스 관리"를 눌렀다. */
+  /** 관리 링크("목표 프로세스 관리")를 눌렀다. */
   onManageGoals: () => void;
+  /** 관리 링크의 글자. 홈은 "목표 프로세스 관리", 목표 개요는 "프로세스 연결 관리". */
+  manageLabel?: string;
 }
 
 function stat(label: string, value: Node, detail?: string): HTMLElement {
@@ -263,7 +265,7 @@ export function createUsageSummary(props: UsageSummaryProps): HTMLElement {
   manage.type = "button";
   manage.className = styles.manage;
   manage.dataset.goalManage = "";
-  manage.textContent = "목표 프로세스 관리";
+  manage.textContent = props.manageLabel ?? "목표 프로세스 관리";
   manage.addEventListener("click", props.onManageGoals);
   container.append(manage);
   return container;
