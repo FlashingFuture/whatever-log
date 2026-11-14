@@ -29,6 +29,7 @@ from common.memory import keep_trimmed
 from common.paths import data_path
 from goals import DueAlert, GoalStore, SchemaVersionError, compute_progress, due_alerts
 from recorder.__main__ import DEFAULT_DB_PATH as DEFAULT_RECORDER_DB
+from supervision.heartbeat import beat
 from supervision.lock import AlreadyRunningError, acquire_lock
 from supervision.log_setup import configure_logging
 
@@ -173,6 +174,7 @@ def main(
 
     try:
         while True:
+            beat()  # supervisor에게 "살아서 돌고 있다"를 알린다(멈추면 supervisor가 다시 띄운다). 확인이 실패해도 돌고 있으니 결과와 무관하게 낸다
             try:
                 check_once(args.goals_db, args.db_path, now=clock(), notify=notify)
             except SchemaVersionError as error:
@@ -180,6 +182,7 @@ def main(
                 return 1  # 더 새 프로그램이 만든 DB — 다시 시도해도 같다
             except Exception:  # 한 번의 예상 못 한 오류가 에이전트를 죽이지 않게(다음 주기에 다시)
                 logger.exception("알림을 확인하는 중 예상하지 못한 오류가 났습니다.")
+            beat()
             if args.once:
                 return 0
             sleep(args.interval)

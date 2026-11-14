@@ -39,6 +39,9 @@ flowchart TD
 ```
 
 - 알림 에이전트(`notifier`, supervisor는 `notifier.supervisor`, 값 이름 `WhateverLogNotifier`)는 목표의 알림 규칙을 1분마다 확인해 Windows 알림을 띄운다. 규칙이 없으면 기록 DB를 열지 않아 가볍다. `uv run python -m notifier --test`로 시험 알림 하나를 띄워 알림이 보이는지 확인할 수 있다.
+  - **멈춤 감지(박동):** supervisor는 원래 프로세스가 **끝났을 때**만 반응한다. 알림 에이전트는 떠 있지만 멈춘 경우도 잡도록 박동을 쓴다 — 에이전트는 주기마다 `supervision.heartbeat.beat()`만 부르고(`notifier.heartbeat` 파일의 수정 시각 갱신),
+    supervisor가 `Heartbeat`(허용 시간)를 받아 지켜본다. 첫 박동은 시작 뒤 120초 안에, 이후에는 주기의 5배(기본 300초) 안에 와야 하고, 넘으면 자식을 종료해 **크래시와 같은 규칙**으로 다시 띄운다(뜨자마자 계속 멈추면 포기하는 것도 같다).
+    PC가 절전에서 깨어난 직후는 감시 루프가 멈췄다 돌아온 것으로 보고 허용 시간을 다시 센다. `whatever-log status`는 같은 파일로 "마지막 확인 N초 전"을 보여 준다(떠 있는데 오래됐으면 멈췄을 수 있다는 단서).
 - 동기화 에이전트의 supervisor(`sync_agent.supervisor`)는 recorder.supervisor와 같은 모양이다. 로그인하지 않았거나 동기화를 켜지 않았어도 에이전트는 서버를 부르지 않고 건너뛰며 돌기 때문에 항상 떠 있어도 부담이 없다.
 - **감독 없이 혼자 떠 있는 프로그램**(수동으로 띄웠거나 supervisor만 죽음)은 죽어도 다시 뜨지 않는다. `start`·`install`은 이를 알아보고 `whatever-log stop` 뒤에 다시 시작하라고 안내한다(supervisor를 새로 띄워도 프로그램의 중복 실행 lock 때문에 곧 멈추므로 억지로 띄우지 않는다). `status`에도 표시된다.
 - launcher는 프로세스를 "**이 가상환경의 파이썬**이 **파이썬 자신의 옵션으로** `-m <모듈>`을 실행 중인 것"으로만 알아본다(`python -c '…' -m recorder`처럼 코드의 인자로 들어간 `-m`은 세지 않는다). 다른 폴더의 설치본이나 이름이 비슷한 프로그램은 건드리지 않는다.

@@ -34,6 +34,7 @@ recorder.lock
 hub-*.lock
 sync.lock
 notifier.lock
+*.heartbeat
 import.lock
 
 # 로그(recorder·supervisor·hub·hub-supervisor·sync·sync-supervisor·notifier·notifier-supervisor)와 설치 도구가 남기는 임시 파일

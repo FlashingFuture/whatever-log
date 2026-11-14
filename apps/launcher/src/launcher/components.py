@@ -125,6 +125,15 @@ def lock_path(component: Component) -> Path:
     return DEFAULT_LOCK_PATH
 
 
+def heartbeat_path(component: Component) -> Path | None:
+    """구성 요소의 박동 파일(supervisor가 감시하는 것). 박동을 쓰지 않는 구성 요소는 None. supervisor 모듈은 가벼워서 바로 불러온다."""
+    if component is NOTIFIER:
+        from notifier.supervisor import HEARTBEAT_PATH
+
+        return HEARTBEAT_PATH
+    return None
+
+
 def _lock_is_free(path: Path) -> bool:
     """지금 아무도 이 lock을 잡고 있지 않은지(잡아 보고 바로 놓는다)."""
     try:
