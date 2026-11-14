@@ -1,5 +1,7 @@
 import type { Db } from "../db.ts";
 import { errorResponse, jsonResponse, readJson } from "../http.ts";
+import { MailConfigError } from "../mail/config.ts";
+import { type MailDeps, sendTestMail } from "../mail/testMail.ts";
 import { deleteAccount, revokeToken } from "./account.ts";
 import { authenticate } from "./authenticate.ts";
 import { isUuid, parseGoalInput } from "./goalInput.ts";
@@ -15,6 +17,11 @@ import { parsePutProgress, parseRange } from "./progressInput.ts";
 export interface ApiDeps {
   db: Db;
   now: () => Date;
+  /**
+   * 메일 발송 준비(어댑터와 발신자). 설정이 없거나 틀리면 MailConfigError를 던지고, 주지 않으면(메일을 쓰지 않는 호출) 메일 주소는 "설정되지 않음"으로 답한다.
+   * 요청마다 부르므로 가벼워야 한다 — 어댑터는 호출 사이에 상태를 갖지 않는다.
+   */
+  mail?: () => MailDeps;
 }
 
 const GOAL_BODY_BYTES = 1024;
@@ -165,6 +172,39 @@ const ROUTES: { pattern: RegExp; route: Route }[] = [
         await deleteDevice(deps.db, caller.userId, id);
         return noContent();
       }),
+    },
+  },
+  {
+    pattern: /^\/mail\/test$/,
+    route: {
+      methods: ["POST"],
+      async handle(_request, _url, _params, caller, deps) {
+        let mail: MailDeps;
+        try {
+          if (!deps.mail) {
+            throw new MailConfigError("메일이 설정되지 않았습니다.");
+          }
+          mail = deps.mail();
+        } catch (error) {
+          if (!(error instanceof MailConfigError)) throw error;
+          // 사용자에게는 "설정되지 않음"만 알리고, 무엇이 빠졌는지는 서버 로그에 남긴다(메시지에는 값이 아니라 이름만 있다 — 비밀이 섞이지 않는다).
+          console.warn(`mail config: ${error.message}`);
+          return errorResponse(
+            503,
+            "mail_not_configured",
+            "메일 발송이 아직 설정되지 않았어요.",
+          );
+        }
+        const result = await sendTestMail(
+          deps.db,
+          caller.userId,
+          mail,
+          deps.now(),
+        );
+        return result.ok
+          ? jsonResponse({ sent: true, to: result.to, mode: result.mode })
+          : errorResponse(result.status, result.code, result.message);
+      },
     },
   },
   {

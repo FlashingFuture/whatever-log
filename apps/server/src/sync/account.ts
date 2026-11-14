@@ -16,6 +16,7 @@ export async function deleteAccount(db: Db, userId: number): Promise<void> {
   await db.batch([
     db.prepare("DELETE FROM progress WHERE user_id = ?").bind(userId),
     db.prepare("DELETE FROM goals WHERE user_id = ?").bind(userId),
+    db.prepare("DELETE FROM mail_sends WHERE user_id = ?").bind(userId),
     db.prepare("DELETE FROM tokens WHERE user_id = ?").bind(userId),
     db.prepare("DELETE FROM users WHERE id = ?").bind(userId),
   ]);
