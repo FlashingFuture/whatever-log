@@ -187,6 +187,8 @@ const ROUTES: { pattern: RegExp; route: Route }[] = [
           mail = deps.mail();
         } catch (error) {
           if (!(error instanceof MailConfigError)) throw error;
+          // 사용자에게는 "설정되지 않음"만 알리고, 무엇이 빠졌는지는 서버 로그에 남긴다(메시지에는 값이 아니라 이름만 있다 — 비밀이 섞이지 않는다).
+          console.warn(`mail config: ${error.message}`);
           return errorResponse(
             503,
             "mail_not_configured",
