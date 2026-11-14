@@ -43,15 +43,22 @@ PC(앱) ──▶ 서버(Workers) ──▶ 메일 서비스(Resend) ──▶ �
 
 1. [Resend](https://resend.com)에 가입하고 API 키를 만든다(발송 권한만 있는 키).
 2. `apps/server/.dev.vars`에 `RESEND_API_KEY=<키>`를 한 줄 추가한다(이 파일은 커밋되지 않는다).
-3. 로컬 DB 준비와 서버 실행:
+3. 로컬 DB를 준비한다(한 번만. 이미 적용돼 있으면 "No migrations to apply"가 나오는 것이 정상이다):
    ```
    cd apps/server
    pnpm exec wrangler d1 migrations apply DB --local
-   TOKEN=$(node scripts/dev-token.mjs <Resend에 가입한 이메일>)   # 시험용 사용자와 토큰을 로컬 DB에 만든다
-   pnpm exec wrangler dev
    ```
-4. 다른 터미널에서: `curl -X POST http://127.0.0.1:8787/mail/test -H "Authorization: Bearer $TOKEN"`
-5. 도메인이 없는 동안은 샌드박스 발신(`onboarding@resend.dev`)이라 **Resend에 가입한 계정의 이메일로만** 갈 수 있다. 3번의 이메일을 그 주소로 해야 한다 — 다른 주소면 `mail_rejected`(도메인 설정 필요)가 온다.
+4. **터미널 두 개**를 쓴다 — `wrangler dev`가 터미널 하나를 계속 차지하기 때문이다. 포트는 hub(8787)와 겹치지 않게 지정한다.
+   - 터미널 1(서버): `pnpm exec wrangler dev --port 8798` — `Ready on http://127.0.0.1:8798`이 보일 때까지 둔다.
+   - 터미널 2(요청):
+     ```
+     cd apps/server
+     TOKEN=$(node scripts/dev-token.mjs <Resend에 가입한 이메일>)   # 닫는 괄호까지 한 줄로. 시험용 사용자와 토큰을 로컬 DB에 만든다
+     curl -X POST http://127.0.0.1:8798/mail/test -H "Authorization: Bearer $TOKEN"
+     ```
+     성공하면 `{"sent":true,"to":"x***@...","mode":"sandbox"}`가 오고, 잠시 뒤 그 주소의 받은편지함(또는 스팸함)에 "[whatever.log] 시험 메일"이 온다.
+5. 도메인이 없는 동안은 샌드박스 발신(`onboarding@resend.dev`)이라 **Resend에 가입한 계정의 이메일로만** 갈 수 있다. 4번의 이메일을 그 주소로 해야 한다 — 다른 주소면 `mail_rejected`(도메인 설정 필요)가 온다.
+6. 응답이 이상하면: `mail_not_configured`(503) = `.dev.vars`에 키가 없다/서버를 키를 넣기 전에 띄웠다(`.dev.vars`를 고치면 서버를 다시 띄운다), `mail_not_configured`(502) = 키가 틀렸다, `mail_rejected` = 위 5번.
 
 ## 도메인을 산 뒤
 
