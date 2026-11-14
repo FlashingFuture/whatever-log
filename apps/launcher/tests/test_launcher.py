@@ -776,3 +776,38 @@ def test_the_window_error_points_at_the_log_in_the_data_folder_for_a_bundle(tmp_
         commands.start(lines.append)
 
     assert any(str(tmp_path / "logs" / "hub-supervisor.log") in line for line in lines)  # 데이터 폴더의 logs/ (개발용 저장소의 apps/desktop/가 아니다)
+
+
+# --- 상태 표시: 마지막 확인(박동) ---
+
+
+def _status_with(heartbeat_age, *, running=True):
+    state = components.SUPERVISED if running else components.STOPPED
+    with (
+        patch("launcher.commands.components.running_pids", return_value=[7] if running else []),
+        patch("launcher.commands.components.state", return_value=state),
+        patch("launcher.commands.run_key.is_enabled", return_value=True),
+        patch("launcher.commands.heartbeat.age_seconds", return_value=heartbeat_age),
+    ):
+        return commands._status_line(NOTIFIER), commands._status_line(RECORDER)
+
+
+def test_a_running_component_with_a_heartbeat_shows_its_last_check() -> None:
+    notifier_line, recorder_line = _status_with(12.4)
+    assert notifier_line.endswith("· 마지막 확인 12초 전")
+    assert "마지막 확인" not in recorder_line  # 박동을 쓰지 않는 구성 요소는 달라지지 않는다
+
+
+@pytest.mark.parametrize(("age", "text"), [(59.9, "59초 전"), (60.0, "1분 전"), (3599.0, "59분 전"), (7300.0, "2시간 전")])
+def test_the_last_check_is_shown_in_the_largest_fitting_unit(age, text) -> None:
+    assert commands._ago(age) == text
+
+
+def test_a_running_component_without_a_heartbeat_file_says_so() -> None:
+    notifier_line, _ = _status_with(None)
+    assert notifier_line.endswith("· 아직 확인 기록 없음")
+
+
+def test_a_stopped_component_does_not_show_a_last_check() -> None:
+    notifier_line, _ = _status_with(5.0, running=False)
+    assert "마지막 확인" not in notifier_line and "확인 기록" not in notifier_line

@@ -65,6 +65,9 @@ API로 서빙만 합니다 — `apps/desktop`이 창을 열 때 hub를 자식 �
 `packages/supervision`에 있습니다. 원래 `apps/recorder`에만 있던 걸 `apps/hub`도 똑같이
 필요해져서 공통 모듈로 뺐습니다 — recorder/hub 둘 다 이 모듈을 씁니다
 (`docs/2026-10-hub-architecture.md` 참고).
+**감시·종료·재시작·포기는 supervisor(`supervise()`) 한 곳의 책임**입니다. 떠 있지만 멈춘 자식까지 잡는 박동(`supervision.heartbeat`)도 같은 방식입니다 —
+자식은 주기마다 `beat()`만 부르고, 에이전트마다 다른 주기는 supervisor가 `Heartbeat`(허용 시간)로 받아 처리합니다(알림 에이전트가 처음 쓰고, 다른 에이전트는 필요할 때 같은 방식으로
+붙입니다). 감시 로직을 에이전트 쪽에 두지 마세요.
 
 로그인(Google)과 서버 통신은 `packages/cloud`에만 있고, 서버는 `apps/server`(Cloudflare Workers + D1)입니다
 (`docs/auth-design.md`, `docs/sync-design.md`). **기록·집계·목표는 로그인 없이 항상 동작해야 합니다** —

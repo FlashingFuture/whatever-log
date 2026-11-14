@@ -9,10 +9,13 @@ EXIT_ALREADY_RUNNING, hub는 EXIT_ALREADY_RUNNING만) classify_exit 콜백으로
 """
 
 import logging
+import os
 import subprocess
 import time
 from collections.abc import Callable
 from threading import Event
+
+from supervision.heartbeat import ENV_VAR, Heartbeat, HeartbeatWatch
 
 RESTART_DELAY_SECONDS = 5.0
 
@@ -34,6 +37,7 @@ def supervise(
     max_consecutive_failures: int = MAX_CONSECUTIVE_FAILURES,
     min_stable_run_seconds: float = MIN_STABLE_RUN_SECONDS,
     stop_event: Event | None = None,
+    heartbeat: Heartbeat | None = None,
 ) -> None:
     """command를 자식 프로세스로 띄우고, 비정상 종료하면 재시작한다.
 
@@ -47,6 +51,10 @@ def supervise(
     떠 있는 자식 프로세스를 종료시키고 더 재시작하지 않고 바로 리턴한다.
     stop_event를 안 주면 내부적으로 아무도 안 건드리는 Event를 만들어 쓴다
     (recorder처럼 "이 프로세스가 끝날 때까지" 영원히 감시하는 경우).
+
+    heartbeat를 주면 "떠 있지만 멈춘" 자식도 잡는다(supervision.heartbeat). 자식이 박동(`beat()`)을 허용 시간 넘게 내지 않으면 종료시키고 크래시와 같은
+    규칙으로 다시 띄운다 — 뜨자마자 계속 멈추면(연속 실패) 포기하는 것도 같다. 에이전트마다 다른 것은 주기뿐이라 허용 시간만 받고, 감시·종료·재시작·포기는
+    여기서 한다. 주지 않으면 이전과 똑같이 "프로세스가 끝났을 때"만 반응한다.
     """
     stop_event = stop_event if stop_event is not None else Event()
     consecutive_failures = 0
@@ -54,27 +62,32 @@ def supervise(
     while not stop_event.is_set():
         logger.info("%s를 시작합니다", command)
         started_at = time.monotonic()
-        process = subprocess.Popen(command)
+        if heartbeat is None:
+            process = subprocess.Popen(command)
+            watch = None
+        else:
+            watch = HeartbeatWatch(heartbeat, started_at=started_at)  # 이전 실행의 박동 파일을 지운 뒤 자식을 띄운다
+            process = subprocess.Popen(command, env={**os.environ, ENV_VAR: str(heartbeat.path)})
+        hung = False
 
         while process.poll() is None:
             if stop_event.wait(timeout=0.2):
                 logger.info("중지 요청을 받아 %s를 종료합니다", command)
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    # terminate()에 5초 안에 안 죽으면(멈춰 있는 등), 그냥
-                    # 두고 리턴해버리면 포트/lock을 쥔 채로 좀비가 남는다 —
-                    # 다음 실행이 "이미 실행 중"으로 막혀버린다.
-                    logger.warning("%s가 5초 안에 종료되지 않아 강제 종료합니다", command)
-                    process.kill()
-                    process.wait()
+                _terminate(process, command, logger)
                 return
+            if watch is not None and watch.is_hung(time.monotonic()):
+                logger.warning(
+                    "%s가 %.0f초 넘게 박동이 없어 멈춘 것으로 보고 종료합니다.", command, watch.silent_seconds_limit
+                )
+                _terminate(process, command, logger)
+                hung = True
+                break
 
         exit_code = process.returncode
         ran_for_seconds = time.monotonic() - started_at
 
-        stop_reason = classify_exit(exit_code)
+        # 우리가 종료시킨 것은 크래시로 본다 — 종료 코드가 무엇이든(우리가 죽인 값이 "정상 종료"와 겹칠 수 있다) 재시작 대상이다.
+        stop_reason = None if hung else classify_exit(exit_code)
         if stop_reason is not None:
             logger.info("%s (exit code %d). 재시작하지 않고 멈춥니다.", stop_reason, exit_code)
             return
@@ -106,3 +119,17 @@ def supervise(
         if stop_event.wait(timeout=restart_delay_seconds):
             logger.info("중지 요청을 받아 재시작을 멈춥니다.")
             return
+
+
+def _terminate(process: subprocess.Popen, command: list[str], logger: logging.Logger) -> None:
+    """자식을 종료시킨다. terminate()에 5초 안에 안 죽으면 kill()한다.
+
+    멈춰 있는 프로세스를 그냥 두고 리턴하면 포트/lock을 쥔 채로 좀비가 남는다 — 다음 실행이 "이미 실행 중"으로 막혀 버린다.
+    """
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        logger.warning("%s가 5초 안에 종료되지 않아 강제 종료합니다", command)
+        process.kill()
+        process.wait()

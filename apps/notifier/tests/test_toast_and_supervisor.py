@@ -73,3 +73,63 @@ def test_main_passes_the_arguments_to_the_agent(monkeypatch) -> None:
         supervisor.main()
     assert supervise.call_args.args[0] == [sys.executable, "-m", "notifier", "--interval", "60"]
     assert supervise.call_args.kwargs["classify_exit"] is supervisor._classify_exit
+
+
+# --- 박동 감시(supervisor가 받아서 처리한다) ---
+
+
+def test_the_supervisor_watches_the_heartbeat_with_a_window_scaled_to_the_interval(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["supervisor"])
+    with patch("notifier.supervisor.supervise") as supervise:
+        supervisor.main()
+    heartbeat = supervise.call_args.kwargs["heartbeat"]
+    assert heartbeat.path == supervisor.HEARTBEAT_PATH
+    assert heartbeat.stale_after_seconds == 5 * supervisor.AGENT_DEFAULT_INTERVAL_SECONDS == 300.0  # 기본 주기 60초의 5배
+    assert heartbeat.startup_grace_seconds == supervisor.STARTUP_GRACE_SECONDS
+
+
+@pytest.mark.parametrize(
+    ("argv", "interval"),
+    [
+        ([], 60.0),
+        (["--interval", "120"], 120.0),
+        (["--interval=300"], 300.0),
+        (["--once", "--interval", "30"], 30.0),
+        (["--interval"], 60.0),  # 값이 없다 — 에이전트가 인자 오류로 끝난다
+        (["--interval", "abc"], 60.0),
+        (["--interval", "0"], 60.0),
+        (["--interval", "-5"], 60.0),
+        (["--interval", "inf"], 60.0),
+    ],
+)
+def test_the_interval_is_read_from_the_agent_arguments(argv, interval) -> None:
+    assert supervisor._interval_from(argv) == interval
+
+
+def test_a_longer_interval_widens_the_allowed_silence() -> None:
+    assert supervisor.heartbeat_for(["--interval", "600"]).stale_after_seconds == 3000.0
+    assert supervisor.heartbeat_for(["--interval", "5"]).stale_after_seconds == supervisor.MIN_STALE_SECONDS
+
+
+def test_the_supervisor_default_interval_matches_the_agent() -> None:
+    from notifier import __main__ as agent
+
+    assert supervisor.AGENT_DEFAULT_INTERVAL_SECONDS == agent.DEFAULT_INTERVAL_SECONDS
+
+
+def test_the_agent_beats_every_cycle_even_when_the_check_fails(tmp_path, monkeypatch) -> None:
+    from notifier import __main__ as agent
+
+    beats: list[str] = []
+    monkeypatch.setattr(agent, "beat", lambda: beats.append("beat"))
+    monkeypatch.setattr(agent, "check_once", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom")))
+    calls: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        calls.append(seconds)
+        if len(calls) >= 2:
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        agent.main(["--lock-path", str(tmp_path / "n.lock"), "--log-path", str(tmp_path / "n.log")], sleep=sleep)
+    assert len(beats) == 4  # 주기마다 확인 전 한 번, 확인 뒤 한 번 — 확인이 실패해도 돌고 있다는 신호는 낸다
