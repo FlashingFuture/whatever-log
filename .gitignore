@@ -28,13 +28,16 @@ htmlcov/
 *.sqlite
 *.sqlite-*
 
-# 중복 실행 방지 lock(recorder.db.lock, recorder.lock, hub-<포트>.lock, sync.lock). uv.lock·pnpm-lock.yaml은 추적한다.
+# 중복 실행 방지 lock(recorder.db.lock, recorder.lock, hub-<포트>.lock, sync.lock, notifier.lock, import.lock). uv.lock·pnpm-lock.yaml은 추적한다.
 *.db.lock
 recorder.lock
 hub-*.lock
 sync.lock
+notifier.lock
+*.heartbeat
+import.lock
 
-# 로그(recorder·supervisor·hub·hub-supervisor·sync·sync-supervisor)와 설치 도구가 남기는 임시 파일
+# 로그(recorder·supervisor·hub·hub-supervisor·sync·sync-supervisor·notifier·notifier-supervisor)와 설치 도구가 남기는 임시 파일
 *.log
 *.log.*
 *.tmp

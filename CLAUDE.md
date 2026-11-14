@@ -65,6 +65,9 @@ API로 서빙만 합니다 — `apps/desktop`이 창을 열 때 hub를 자식 �
 `packages/supervision`에 있습니다. 원래 `apps/recorder`에만 있던 걸 `apps/hub`도 똑같이
 필요해져서 공통 모듈로 뺐습니다 — recorder/hub 둘 다 이 모듈을 씁니다
 (`docs/2026-10-hub-architecture.md` 참고).
+**감시·종료·재시작·포기는 supervisor(`supervise()`) 한 곳의 책임**입니다. 떠 있지만 멈춘 자식까지 잡는 박동(`supervision.heartbeat`)도 같은 방식입니다 —
+자식은 주기마다 `beat()`만 부르고, 에이전트마다 다른 주기는 supervisor가 `Heartbeat`(허용 시간)로 받아 처리합니다(알림 에이전트가 처음 쓰고, 다른 에이전트는 필요할 때 같은 방식으로
+붙입니다). 감시 로직을 에이전트 쪽에 두지 마세요.
 
 로그인(Google)과 서버 통신은 `packages/cloud`에만 있고, 서버는 `apps/server`(Cloudflare Workers + D1)입니다
 (`docs/auth-design.md`, `docs/sync-design.md`). **기록·집계·목표는 로그인 없이 항상 동작해야 합니다** —
@@ -72,11 +75,12 @@ recorder·aggregation·goals·chromium·supervision·desktop은 `cloud`를 impor
 예외는 hub 하나이고, hub가 `cloud`를 아는 곳은 `apps/hub/src/hub/cloud_adapter.py` 한 파일(import는 함수 안)뿐입니다.
 목표 동기화는 `packages/goalsync`(계획·적용·주기 동기화)와 별개 프로세스인 `apps/sync`(에이전트)에 있고, 둘 다 서버를 부르는 쪽이라 `cloud`처럼 로컬 기능이 import·의존하지 못합니다(`goalsync`도 같은 격리 테스트 대상). 목표와 서버의 연결 칸은 `goals.db` 스키마 3입니다(`docs/sync-client.md`).
 서버로 나가는 값은 `docs/data-handling.md`가 기준이고, 프로세스·사이트 이름과 기록은 서버로 보내지 않습니다.
+목표의 알림 규칙·보고서 메일 일정(`docs/goal-management.md`)도 규칙의 원본은 `packages/goals`(`alerts.py`)이고 이 PC의 `goals.db`에만 저장됩니다. **알림은 `apps/notifier`가 이 PC 안에서 판단하고 띄웁니다 — 서버를 부르지 않으며 `cloud`를 import하지 않습니다**(로컬 기능이라 격리 테스트 대상). 보고서 메일은 지금 설정(일정)만 저장하고 실제 발송은 서버 연결이 붙을 때 합니다.
 화면(`apps/ui`)의 상태는 `docs/ui-state.md`의 전략을 따릅니다(진실은 hub, 브라우저 저장소 미사용, 앱 전체 상태는 `state/`).
 
-설치와 전체 실행(자동 시작 등록·바로가기·화면 빌드·구성 요소 시작/종료)은 `apps/launcher`의 `whatever-log` 명령이 맡습니다(`docs/packaging.md`). 로그인 시 자동으로 띄우는 대상은 recorder와 동기화 에이전트의 **supervisor**이고, Registry Run 키 등록은 `packages/supervision/autostart.py` 한 곳에 있습니다. 사용자 배포는 릴리스 번들(`scripts/build_release.py`, 태그 `v<VERSION>`을 푸시하면 `.github/workflows/release.yml`이 GitHub Release로 올린다)이고 버전은 루트 `VERSION` 한 곳(SemVer)입니다. **DB·로그·lock의 경로는 앱마다 정하지 말고 `common.paths.data_path`로 정하세요** — 번들에서는 `%LOCALAPPDATA%\whatever.log`로 가고, hub·recorder·sync가 같은 DB를 열기 때문에 한 곳에서 정해야 어긋나지 않습니다. 앱 아이콘 원본은 `apps/desktop/src/desktop/assets/`(`icon.svg`, `icon-mark.svg`)이고 `icon.ico`는 `apps/desktop/tools/build_icon.py`로 만듭니다.
+설치와 전체 실행(자동 시작 등록·바로가기·화면 빌드·구성 요소 시작/종료)은 `apps/launcher`의 `whatever-log` 명령이 맡습니다(`docs/packaging.md`). 로그인 시 자동으로 띄우는 대상은 recorder·동기화 에이전트·알림 에이전트(`apps/notifier`)의 **supervisor**이고, Registry Run 키 등록은 `packages/supervision/autostart.py` 한 곳에 있습니다. 사용자 배포는 릴리스 번들(`scripts/build_release.py`, 태그 `v<VERSION>`을 푸시하면 `.github/workflows/release.yml`이 GitHub Release로 올린다)이고 버전은 루트 `VERSION` 한 곳(SemVer)입니다. **DB·로그·lock의 경로는 앱마다 정하지 말고 `common.paths.data_path`로 정하세요** — 번들에서는 `%LOCALAPPDATA%\whatever.log`로 가고, hub·recorder·sync가 같은 DB를 열기 때문에 한 곳에서 정해야 어긋나지 않습니다. 앱 아이콘 원본은 `apps/desktop/src/desktop/assets/`(`icon.svg`, `icon-mark.svg`)이고 `icon.ico`는 `apps/desktop/tools/build_icon.py`로 만듭니다.
 
-메모리: 쉬는 시간이 긴 **백그라운드 프로세스**(recorder·sync·hub·supervisor)는 시작할 때 `common.memory.keep_trimmed()`를 불러 안 쓰는 물리 메모리를 돌려줍니다(작업 관리자의 숫자가 크게 내려갑니다). 사용자가 보는 창 프로세스(desktop)에는 쓰지 않습니다. 앱끼리 쓰는 포트는 무거운 앱을 불러오지 않게 `common.ports`에 둡니다(desktop이 hub 모듈을 불러오지 않는다). WebView2는 `--disable-gpu`로 띄웁니다. 숫자와 작업 관리자에 이름이 `pythonw`로 보이는 이유는 `docs/memory.md`.
+메모리: 쉬는 시간이 긴 **백그라운드 프로세스**(recorder·sync·notifier·hub·supervisor)는 시작할 때 `common.memory.keep_trimmed()`를 불러 안 쓰는 물리 메모리를 돌려줍니다(작업 관리자의 숫자가 크게 내려갑니다). 사용자가 보는 창 프로세스(desktop)에는 쓰지 않습니다. 앱끼리 쓰는 포트는 무거운 앱을 불러오지 않게 `common.ports`에 둡니다(desktop이 hub 모듈을 불러오지 않는다). WebView2는 `--disable-gpu`로 띄웁니다. 숫자와 작업 관리자에 이름이 `pythonw`로 보이는 이유는 `docs/memory.md`.
 
 프로세스 종료 코드와 HTTP API 에러 응답 형식처럼 앱들이 같은 뜻으로 공유해야 하는 범용
 계약은 `packages/common`에만 둡니다. 특정 앱에서만 쓰는 것은 그 앱 디렉터리에서

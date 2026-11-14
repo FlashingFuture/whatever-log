@@ -16,6 +16,14 @@ goals.db에만 저장되고, 그중 어떤 프로세스가 어느 목표에 속�
 
 from goals.errors import FieldError, GoalNotFoundError, GoalValidationError, SchemaVersionError, StaleSyncError
 from goals.models import SYNC_STATES, Goal, GoalSnapshot, SiteTarget, SyncLink
+from goals.alerts import (
+    FREQUENCIES,
+    MAX_ALERTS_PER_GOAL,
+    DueAlert,
+    GoalAlert,
+    ReportSchedule,
+    due_alerts,
+)
 from goals.progress import GoalProgress, ProcessTime, ProgressSummary, SiteTime, TopTarget, compute_progress
 from goals import sync_status
 from goals.store import META_ACCOUNT_EMAIL, META_DEVICE_ID, META_GENERATION, META_SYNC_ENABLED, GoalStore
@@ -32,6 +40,12 @@ from goals.validation import (
 )
 
 __all__ = [
+    "FREQUENCIES",
+    "MAX_ALERTS_PER_GOAL",
+    "DueAlert",
+    "GoalAlert",
+    "ReportSchedule",
+    "due_alerts",
     "MAX_GOALS",
     "MAX_PROCESSES_PER_GOAL",
     "MAX_SITES_PER_GOAL",

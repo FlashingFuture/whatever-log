@@ -44,7 +44,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ROOT / "release-out"
-PYTHON_APPS = ("launcher", "desktop", "hub", "recorder", "sync")
+PYTHON_APPS = ("launcher", "desktop", "hub", "recorder", "sync", "notifier")
 ROOT_FILES = ("VERSION", "README.md", "LICENSE")
 RELEASE_DIR = ROOT / "scripts" / "release"
 SKIP_NAMES = shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", "*.egg-info")

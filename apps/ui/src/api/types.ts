@@ -257,3 +257,47 @@ export interface DeleteAccountResult extends AccountSnapshot {
   /** false면 삭제 뒤 계정 상태를 읽지 못한 것이다 — 로그인 여부 등 나머지 칸을 믿지 말고 화면이 다시 읽어야 한다. */
   state_known?: boolean;
 }
+
+/** 목표의 알림 규칙: 마감 시각까지 대상의 오늘 활성 시간이 min_minutes에 못 미치면 알린다. target_process가 null이면 목표 전체가 대상이다. */
+export interface GoalAlert {
+  id: number;
+  goal_id: number;
+  target_process: string | null;
+  /** `HH:MM`(24시간). */
+  deadline: string;
+  min_minutes: number;
+  /** 적용 요일(월=0 … 일=6). */
+  weekdays: number[];
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 알림 규칙을 만들거나 바꿀 때 보내는 값. 숫자 칸에 문자열이 올 수도 있다(그러면 서버가 칸별로 알려 준다). */
+export interface GoalAlertInput {
+  target_process: string | null;
+  deadline: string;
+  min_minutes: number | string;
+  weekdays: number[];
+  enabled: boolean;
+}
+
+/** 목표의 보고서 메일 일정(설정). weekday는 weekly일 때만, day_of_month는 monthly일 때만 있다. 실제 발송은 서버가 연결되면 붙는다. */
+export interface ReportSchedule {
+  goal_id: number;
+  enabled: boolean;
+  frequency: "daily" | "weekly" | "monthly" | string;
+  weekday: number | null;
+  day_of_month: number | null;
+  send_time: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReportScheduleInput {
+  enabled: boolean;
+  frequency: string;
+  weekday: number | null;
+  day_of_month: number | null;
+  send_time: string;
+}

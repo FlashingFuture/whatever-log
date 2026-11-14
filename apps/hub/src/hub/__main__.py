@@ -63,6 +63,8 @@ from hub.cloud_adapter import create_cloud_port
 from hub.external_links import LINK_FAILED, LINK_OPENED, open_link
 from hub.goals_service import (
     BadRequest,
+    alert_fields,
+    alert_json,
     browsers_with_sites,
     check_write_origin,
     goal_fields,
@@ -71,6 +73,8 @@ from hub.goals_service import (
     progress_payload,
     read_json_object,
     reject_body,
+    schedule_fields,
+    schedule_json,
     validation_error_body,
 )
 from hub.icons import IconStore
@@ -275,6 +279,10 @@ _DEVICE_PATH = re.compile(r"/api/devices/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[
 STATUS_OUTCOME_UNKNOWN = 504
 _PROCESS_PATH_PREFIX = "/api/processes/"
 _GOAL_PATH = re.compile(r"/api/goals/(\d{1,9})")
+# 알림 규칙(목표 아래)과 보고서 일정(목표당 하나)
+_ALERTS_PATH = re.compile(r"/api/goals/(\d{1,9})/alerts")
+_ALERT_PATH = re.compile(r"/api/goals/(\d{1,9})/alerts/(\d{1,9})")
+_SCHEDULE_PATH = re.compile(r"/api/goals/(\d{1,9})/report-schedule")
 _PROCESS_USAGE_SUFFIX = "/usage"
 _ICON_PATH_PREFIX = "/api/icons/"
 _SITE_ICON_PATH_PREFIX = "/api/site-icons/"
@@ -382,6 +390,8 @@ class _Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/goals":
             self._write_goal(None)
+        elif _ALERTS_PATH.fullmatch(path):
+            self._write_alert(int(_ALERTS_PATH.fullmatch(path).group(1)), None)
         elif path == "/api/account/login":
             self._start_login()
         elif path == "/api/account/logout":
@@ -399,9 +409,15 @@ class _Handler(BaseHTTPRequestHandler):
         """PUT /api/goals/<id> — 목표를 통째로 바꾼다."""
         if not self._host_is_local():
             return
-        match = _GOAL_PATH.fullmatch(urlparse(self.path).path)
+        path = urlparse(self.path).path
+        match = _GOAL_PATH.fullmatch(path)
         if match:
             self._write_goal(int(match.group(1)))
+        elif _ALERT_PATH.fullmatch(path):
+            goal_id, alert_id = _ALERT_PATH.fullmatch(path).groups()
+            self._write_alert(int(goal_id), int(alert_id))
+        elif _SCHEDULE_PATH.fullmatch(path):
+            self._write_schedule(int(_SCHEDULE_PATH.fullmatch(path).group(1)))
         else:
             self._send_json(404, api_error.error_body(api_error.NOT_FOUND, "not found"))
 
@@ -413,6 +429,11 @@ class _Handler(BaseHTTPRequestHandler):
         match = _GOAL_PATH.fullmatch(path)
         if match:
             self._delete_goal(int(match.group(1)))
+        elif _ALERT_PATH.fullmatch(path):
+            goal_id, alert_id = _ALERT_PATH.fullmatch(path).groups()
+            self._delete_alert(int(goal_id), int(alert_id))
+        elif _SCHEDULE_PATH.fullmatch(path):
+            self._delete_schedule(int(_SCHEDULE_PATH.fullmatch(path).group(1)))
         elif path == "/api/account/login":
             self._cancel_login()
         elif _DEVICE_PATH.fullmatch(path):
@@ -434,6 +455,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._get_usage(parsed.query)
         elif parsed.path == "/api/goals":
             self._get_goals()
+        elif _ALERTS_PATH.fullmatch(parsed.path):
+            self._get_alerts(int(_ALERTS_PATH.fullmatch(parsed.path).group(1)))
+        elif _SCHEDULE_PATH.fullmatch(parsed.path):
+            self._get_schedule(int(_SCHEDULE_PATH.fullmatch(parsed.path).group(1)))
         elif parsed.path == "/api/account":
             self._send_account(200)
         elif parsed.path == "/api/sync/plan":
@@ -862,6 +887,128 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_unavailable("목표 DB", error)
             return
         self._send_json(200, {"goals": [goal_json(goal) for goal in goals]})
+
+    def _not_found(self, what: str) -> None:
+        self._send_json(404, api_error.error_body(api_error.NOT_FOUND, f"{what} not found"))
+
+    def _get_alerts(self, goal_id: int) -> None:
+        """GET /api/goals/<id>/alerts — 목표의 알림 규칙들(만든 순서)."""
+        try:
+            with GoalStore(self.goals_db_path) as store:
+                if store.get(goal_id) is None:
+                    self._not_found("goal")
+                    return
+                alerts = store.list_alerts(goal_id)
+        except (sqlite3.Error, SchemaVersionError) as error:
+            self._send_unavailable("목표 DB", error)
+            return
+        self._send_json(200, {"alerts": [alert_json(alert) for alert in alerts]})
+
+    def _write_alert(self, goal_id: int, alert_id: int | None) -> None:
+        """알림 규칙 만들기(alert_id가 None, 201)·통째로 바꾸기(200). 출처·본문 형식을 먼저 검사하고 입력은 goals가 검증한다."""
+        try:
+            check_write_origin(self.headers.get("Origin"), self.allowed_origins)
+            fields = alert_fields(read_json_object(self.headers, self.rfile))
+        except BadRequest as error:
+            self._send_bad_request(error)
+            return
+        try:
+            with GoalStore(self.goals_db_path) as store:
+                if alert_id is not None:
+                    current = store.get_alert(alert_id)
+                    if current is None or current.goal_id != goal_id:
+                        self._not_found("alert")
+                        return
+                    alert = store.update_alert(alert_id, **fields)
+                else:
+                    alert = store.create_alert(goal_id, **fields)
+        except GoalValidationError as error:
+            self._send_json(400, validation_error_body(error))
+            return
+        except GoalNotFoundError:
+            self._not_found("goal")
+            return
+        except (sqlite3.Error, SchemaVersionError) as error:
+            self._send_unavailable("목표 DB", error)
+            return
+        self._send_json(201 if alert_id is None else 200, alert_json(alert))
+
+    def _delete_alert(self, goal_id: int, alert_id: int) -> None:
+        """DELETE /api/goals/<id>/alerts/<alert_id> — 알림 규칙을 지운다."""
+        try:
+            check_write_origin(self.headers.get("Origin"), self.allowed_origins)
+            reject_body(self.headers)
+        except BadRequest as error:
+            self._send_bad_request(error)
+            return
+        try:
+            with GoalStore(self.goals_db_path) as store:
+                current = store.get_alert(alert_id)
+                if current is None or current.goal_id != goal_id:
+                    self._not_found("alert")
+                    return
+                store.delete_alert(alert_id)
+        except GoalNotFoundError:
+            self._not_found("alert")
+            return
+        except (sqlite3.Error, SchemaVersionError) as error:
+            self._send_unavailable("목표 DB", error)
+            return
+        self._send_empty(204)
+
+    def _get_schedule(self, goal_id: int) -> None:
+        """GET /api/goals/<id>/report-schedule — 보고서 일정(없으면 schedule이 null)."""
+        try:
+            with GoalStore(self.goals_db_path) as store:
+                if store.get(goal_id) is None:
+                    self._not_found("goal")
+                    return
+                schedule = store.report_schedule(goal_id)
+        except (sqlite3.Error, SchemaVersionError) as error:
+            self._send_unavailable("목표 DB", error)
+            return
+        self._send_json(200, {"schedule": None if schedule is None else schedule_json(schedule)})
+
+    def _write_schedule(self, goal_id: int) -> None:
+        """PUT /api/goals/<id>/report-schedule — 보고서 일정을 만들거나 통째로 바꾼다."""
+        try:
+            check_write_origin(self.headers.get("Origin"), self.allowed_origins)
+            fields = schedule_fields(read_json_object(self.headers, self.rfile))
+        except BadRequest as error:
+            self._send_bad_request(error)
+            return
+        try:
+            with GoalStore(self.goals_db_path) as store:
+                schedule = store.set_report_schedule(goal_id, **fields)
+        except GoalValidationError as error:
+            self._send_json(400, validation_error_body(error))
+            return
+        except GoalNotFoundError:
+            self._not_found("goal")
+            return
+        except (sqlite3.Error, SchemaVersionError) as error:
+            self._send_unavailable("목표 DB", error)
+            return
+        self._send_json(200, schedule_json(schedule))
+
+    def _delete_schedule(self, goal_id: int) -> None:
+        """DELETE /api/goals/<id>/report-schedule — 보고서 일정을 지운다."""
+        try:
+            check_write_origin(self.headers.get("Origin"), self.allowed_origins)
+            reject_body(self.headers)
+        except BadRequest as error:
+            self._send_bad_request(error)
+            return
+        try:
+            with GoalStore(self.goals_db_path) as store:
+                store.delete_report_schedule(goal_id)
+        except GoalNotFoundError:
+            self._not_found("schedule")
+            return
+        except (sqlite3.Error, SchemaVersionError) as error:
+            self._send_unavailable("목표 DB", error)
+            return
+        self._send_empty(204)
 
     def _get_goal_progress(self, raw_query: str) -> None:
         """구간의 목표별 수행 시간과 요약(홈 왼쪽 요약용). 수행 시간 = 연결 프로세스의 활성 시간 합."""

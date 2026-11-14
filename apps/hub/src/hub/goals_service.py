@@ -17,12 +17,24 @@ from collections.abc import Collection, Mapping
 from typing import Any, BinaryIO
 
 from aggregation.range import RangeUsage
-from goals import Goal, GoalProgress, GoalValidationError, ProgressSummary, TopTarget, compute_progress
+from goals import (
+    Goal,
+    GoalAlert,
+    GoalProgress,
+    GoalValidationError,
+    ProgressSummary,
+    ReportSchedule,
+    TopTarget,
+    compute_progress,
+)
 
 from common import api_error
 
 # 목표 입력의 모든 칸은 이 다섯 개뿐이다 — 모르는 칸이 있으면 오타나 다른 API의 본문일 수 있어 거부한다.
 GOAL_FIELDS = ("name", "daily_target_minutes", "weekdays", "processes", "sites")
+# 알림 규칙·보고서 일정 입력의 칸(docs/goal-management.md). 모르는 칸은 거부한다.
+ALERT_FIELDS = ("target_process", "deadline", "min_minutes", "weekdays", "enabled")
+SCHEDULE_FIELDS = ("enabled", "frequency", "weekday", "day_of_month", "send_time")
 MAX_BODY_BYTES = 32 * 1024
 
 _LOCAL_HOST = re.compile(r"(127\.0\.0\.1|localhost)(:\d+)?")
@@ -95,6 +107,53 @@ def goal_fields(body: dict[str, Any]) -> dict[str, Any]:
     if unknown:
         raise BadRequest(400, api_error.INVALID_REQUEST, f"알 수 없는 칸이 있습니다: {', '.join(unknown)}")
     return {field: body.get(field) for field in GOAL_FIELDS}
+
+
+def _fields(body: dict[str, Any], allowed: tuple[str, ...]) -> dict[str, Any]:
+    """본문에서 allowed 칸을 꺼낸다. 모르는 칸이 있으면 BadRequest, 빠진 칸은 None(검증이 칸별로 알린다)."""
+    unknown = sorted(set(body) - set(allowed))
+    if unknown:
+        raise BadRequest(400, api_error.INVALID_REQUEST, f"알 수 없는 칸이 있습니다: {', '.join(unknown)}")
+    return {field: body.get(field) for field in allowed}
+
+
+def alert_fields(body: dict[str, Any]) -> dict[str, Any]:
+    """알림 규칙 입력의 다섯 칸."""
+    return _fields(body, ALERT_FIELDS)
+
+
+def schedule_fields(body: dict[str, Any]) -> dict[str, Any]:
+    """보고서 일정 입력의 다섯 칸."""
+    return _fields(body, SCHEDULE_FIELDS)
+
+
+def alert_json(alert: GoalAlert) -> dict[str, Any]:
+    """알림 규칙을 API 응답 모양으로."""
+    return {
+        "id": alert.id,
+        "goal_id": alert.goal_id,
+        "target_process": alert.target_process,
+        "deadline": alert.deadline,
+        "min_minutes": alert.min_minutes,
+        "weekdays": sorted(alert.weekdays),
+        "enabled": alert.enabled,
+        "created_at": alert.created_at,
+        "updated_at": alert.updated_at,
+    }
+
+
+def schedule_json(schedule: ReportSchedule) -> dict[str, Any]:
+    """보고서 일정을 API 응답 모양으로. 이 PC에 저장된 설정일 뿐이고 실제 메일 발송은 서버 쪽 연결이 생길 때 붙는다(docs/goal-management.md)."""
+    return {
+        "goal_id": schedule.goal_id,
+        "enabled": schedule.enabled,
+        "frequency": schedule.frequency,
+        "weekday": schedule.weekday,
+        "day_of_month": schedule.day_of_month,
+        "send_time": schedule.send_time,
+        "created_at": schedule.created_at,
+        "updated_at": schedule.updated_at,
+    }
 
 
 def goal_json(goal: Goal) -> dict[str, Any]:

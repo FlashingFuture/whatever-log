@@ -14,6 +14,7 @@ from pathlib import Path
 
 from common import paths
 from supervision import autostart as run_key
+from supervision import heartbeat
 from supervision.autostart import pythonw_path
 
 from launcher import components, shortcuts, ui_build
@@ -258,11 +259,30 @@ _STATE_TEXT = {
 }
 
 
+def _ago(seconds: float) -> str:
+    """"12초 전", "3분 전", "2시간 전"."""
+    if seconds < 60:
+        return f"{int(seconds)}초 전"
+    if seconds < 3600:
+        return f"{int(seconds // 60)}분 전"
+    return f"{int(seconds // 3600)}시간 전"
+
+
+def _last_check_text(component: Component, state: str) -> str:
+    """실행 중인 구성 요소의 "마지막 확인" 표시(박동을 쓰는 것만). 떠 있는데 박동이 오래됐거나 없으면 멈췄을 수 있다는 단서가 된다."""
+    path = components.heartbeat_path(component)
+    if path is None or state == components.STOPPED:
+        return ""
+    age = heartbeat.age_seconds(path)
+    return " · 아직 확인 기록 없음" if age is None else f" · 마지막 확인 {_ago(age)}"
+
+
 def _status_line(component: Component) -> str:
     pids = components.running_pids(component)
-    running = _STATE_TEXT[components.state(component)] + (f" (pid {', '.join(map(str, pids))})" if pids else "")
+    state = components.state(component)
+    running = _STATE_TEXT[state] + (f" (pid {', '.join(map(str, pids))})" if pids else "")
     registered = "자동 시작 등록됨" if run_key.is_enabled(component.run_key_value) else "자동 시작 등록 안 됨"
-    return f"{component.label}: {running} · {registered}"
+    return f"{component.label}: {running} · {registered}{_last_check_text(component, state)}"
 
 
 def status(say: Say) -> None:

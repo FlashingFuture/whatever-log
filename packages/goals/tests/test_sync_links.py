@@ -91,7 +91,7 @@ def test_a_version_2_database_is_migrated_and_existing_goals_are_undecided(tmp_p
         store.link_remote(1, "r-1", 3)
         assert _link(store, 1).remote_id == "r-1"
     (version,) = sqlite3.connect(path).execute("PRAGMA user_version").fetchone()
-    assert version == SCHEMA_VERSION == 3
+    assert version == SCHEMA_VERSION == 4
 
 
 def test_choosing_to_sync_or_keep_local_applies_only_to_unlinked_goals(store) -> None:

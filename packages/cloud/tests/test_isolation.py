@@ -36,6 +36,7 @@ LOCAL_MODULES = [
     "chromium.snapshot",
     "hub.__main__",
     "desktop.__main__",
+    "notifier.__main__",
 ]
 
 

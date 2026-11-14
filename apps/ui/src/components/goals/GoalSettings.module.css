@@ -1,0 +1,83 @@
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  margin-top: var(--space-8);
+}
+.section {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+.title {
+  margin: 0;
+  font-size: 1.1rem;
+}
+.hint {
+  composes: muted from "../../styles/shared.module.css";
+  margin: 0;
+  font-size: var(--text-sm);
+  word-break: keep-all;
+}
+.empty {
+  composes: muted from "../../styles/shared.module.css";
+  margin: 0;
+}
+.list {
+  align-self: stretch;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+}
+.row:hover {
+  background: var(--color-track);
+}
+.label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.off {
+  color: var(--color-text-muted);
+}
+.actions {
+  display: inline-flex;
+  gap: var(--space-1);
+  flex: none;
+}
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.question {
+  margin: 0;
+}
+.confirmActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+.error {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+  font-size: var(--text-sm);
+}
+.danger {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
