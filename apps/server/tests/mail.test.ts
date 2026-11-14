@@ -12,7 +12,7 @@ import type { MailMessage, MailPort, SendResult } from "../src/mail/port.ts";
 import { createResendMail } from "../src/mail/resend.ts";
 import { maskEmail } from "../src/mail/testMail.ts";
 import { deleteAccount } from "../src/sync/account.ts";
-import { DAY_MS, setup } from "./helpers/syncFixtures.ts";
+import { DAY_MS, type Json, setup } from "./helpers/syncFixtures.ts";
 
 // --- 설정 ---
 
@@ -262,9 +262,22 @@ test("메일이 설정되지 않았거나 설정이 틀리면 503이고 다른 �
     const fixture = setup();
     fixture.deps.mail = mail;
     const token = await fixture.signIn();
-    const { status, json: body } = await fixture.call("POST", "/mail/test", {
-      token,
-    });
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.join(" "));
+    };
+    let status: number | null;
+    let body: Json;
+    try {
+      ({ status, json: body } = await fixture.call("POST", "/mail/test", {
+        token,
+      }));
+    } finally {
+      console.warn = original;
+    }
+    assert.equal(warnings.length, 1); // 무엇이 빠졌는지는 서버 로그에 남는다
+    assert.match(warnings[0], /^mail config: /);
     assert.equal(status, 503);
     assert.equal(body.error.code, "mail_not_configured");
     assert.equal((await fixture.call("GET", "/goals", { token })).status, 200);
