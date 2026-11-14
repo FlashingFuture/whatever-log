@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from launcher import commands, components, shortcuts, ui_build
 from launcher.__main__ import build_parser
-from launcher.components import RECORDER, SYNC
+from launcher.components import NOTIFIER, RECORDER, SYNC
 
 SCRIPTS = Path(sys.executable).parent.resolve()
 
@@ -250,14 +250,19 @@ def test_a_dry_run_changes_nothing() -> None:
     assert any("바탕화면" in line for line in lines) and all("미리보기" in line or "끝났어요" in line for line in lines)
 
 
-def test_install_registers_both_components_makes_the_shortcut_and_starts_them() -> None:
+def test_install_registers_every_component_makes_the_shortcut_and_starts_them() -> None:
     ok, _, run_key, create, start, _ = _install()
 
     assert ok is True
-    assert [call.args[0] for call in run_key.enable.call_args_list] == [RECORDER.run_key_value, SYNC.run_key_value]
+    assert [call.args[0] for call in run_key.enable.call_args_list] == [
+        RECORDER.run_key_value,
+        SYNC.run_key_value,
+        NOTIFIER.run_key_value,
+    ]
     assert run_key.enable.call_args_list[1].args[1].endswith("-m sync_agent.supervisor")
+    assert run_key.enable.call_args_list[2].args[1].endswith("-m notifier.supervisor")
     create.assert_called_once_with(Path("menu"))
-    assert start.call_count == 2
+    assert start.call_count == 3
 
 
 def test_one_failing_step_does_not_stop_the_rest_and_is_reported() -> None:
@@ -274,7 +279,7 @@ def test_one_failing_step_does_not_stop_the_rest_and_is_reported() -> None:
         ok = commands.install(say)
 
     assert ok is False
-    assert run_key.enable.call_count == 2 and start.call_count == 2  # 화면 빌드가 실패해도 나머지는 했다
+    assert run_key.enable.call_count == 3 and start.call_count == 3  # 화면 빌드가 실패해도 나머지는 했다
     assert any(line.startswith("문제: 화면 빌드") and "Node.js" in line for line in lines)
 
 
@@ -296,7 +301,7 @@ def test_install_collects_a_start_failure_and_keeps_going() -> None:
 
     ok, lines, *_ = _install(start_effect=start)
 
-    assert ok is False and calls == ["recorder", "sync"]  # 기록기가 실패해도 동기화 에이전트는 시작했다
+    assert ok is False and calls == ["recorder", "sync", "notifier"]  # 기록기가 실패해도 나머지는 시작했다
     assert any(line.startswith("문제: 기록기 시작") for line in lines)
 
 
@@ -326,7 +331,7 @@ def _uninstall(*, stop_result=None, registered=_own_registration, remove=lambda 
     """uninstall을 가짜 의존성으로 돌리고 (성공 여부, 출력 줄, run_key mock)을 돌려준다."""
     lines: list[str] = []
     result = stop_result or components.StopResult(2, ())
-    by_name = {RECORDER.run_key_value: RECORDER, SYNC.run_key_value: SYNC}
+    by_name = {RECORDER.run_key_value: RECORDER, SYNC.run_key_value: SYNC, NOTIFIER.run_key_value: NOTIFIER}
     with (
         patch("launcher.commands.run_key") as run_key,
         patch("launcher.commands.components.stop", return_value=result),
@@ -343,7 +348,11 @@ def test_uninstall_stops_unregisters_and_keeps_the_data() -> None:
     ok, lines, run_key = _uninstall()
 
     assert ok is True
-    assert [call.args[0] for call in run_key.disable.call_args_list] == [RECORDER.run_key_value, SYNC.run_key_value]
+    assert [call.args[0] for call in run_key.disable.call_args_list] == [
+        RECORDER.run_key_value,
+        SYNC.run_key_value,
+        NOTIFIER.run_key_value,
+    ]
     assert any("지우지 않았어요" in line for line in lines)
 
 
@@ -382,7 +391,7 @@ def test_uninstall_reports_a_shortcut_it_could_not_delete_and_fails() -> None:
     assert ok is False
     assert any(line.startswith("문제: 시작 메뉴 바로가기 삭제") and "access denied" in line for line in lines)
     assert not any("바로가기를 지웠어요" in line for line in lines)  # 못 지웠는데 지웠다고 하지 않는다
-    assert run_key.disable.call_count == 2  # 하나가 실패해도 나머지는 계속했다
+    assert run_key.disable.call_count == 3  # 하나가 실패해도 나머지는 계속했다
 
 
 def test_uninstall_fails_when_a_process_could_not_be_ended() -> None:
@@ -459,7 +468,7 @@ def test_start_reports_a_program_running_without_its_supervisor() -> None:
 
 def test_stop_reports_failure_and_still_tries_every_component() -> None:
     lines: list[str] = []
-    results = iter([components.StopResult(0, (7,)), components.StopResult(1, ())])
+    results = iter([components.StopResult(0, (7,)), components.StopResult(1, ()), components.StopResult(1, ())])
     with patch("launcher.commands.components.stop", side_effect=lambda component: next(results)):
         ok = commands.stop(lines.append)
 
@@ -615,8 +624,8 @@ def test_install_takes_over_another_folders_registration_and_stops_its_programs(
     ok, lines, stop, order = _install_over(f"{_OLD_SCRIPTS}\\pythonw.exe -m recorder.supervisor")
 
     assert ok is True
-    assert [call.kwargs["scripts_dir"] for call in stop.call_args_list] == [_OLD_SCRIPTS.resolve()] * 2
-    assert order == ["stop", "stop", "start", "start"]  # 끈 다음에 띄운다
+    assert [call.kwargs["scripts_dir"] for call in stop.call_args_list] == [_OLD_SCRIPTS.resolve()] * 3
+    assert order == ["stop", "stop", "stop", "start", "start", "start"]  # 끈 다음에 띄운다
     assert any("다른 폴더의 설치" in line and "이 폴더로 바꿉니다" in line for line in lines)
     assert any("이전 폴더에서 실행 중이던 것을 껐어요" in line for line in lines)
     assert not any("whatever-log stop" in line for line in lines)  # 사용자에게 시킬 일이 없다
@@ -655,7 +664,7 @@ def test_install_is_quiet_when_the_registration_is_already_this_folders() -> Non
         patch("launcher.commands.components.start", return_value=components.STARTED),
         patch("launcher.commands.ui_build.is_built", return_value=True),
     ):
-        run_key.registered_command.side_effect = lambda name: {RECORDER.run_key_value: RECORDER, SYNC.run_key_value: SYNC}[name].autostart_command()
+        run_key.registered_command.side_effect = lambda name: {RECORDER.run_key_value: RECORDER, SYNC.run_key_value: SYNC, NOTIFIER.run_key_value: NOTIFIER}[name].autostart_command()
         commands.install(lines.append)
 
     assert not any("다른 폴더의 설치" in line for line in lines)

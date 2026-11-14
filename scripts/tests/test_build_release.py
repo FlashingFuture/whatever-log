@@ -392,3 +392,13 @@ def test_the_release_notes_do_not_ask_for_uv() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
     assert "uv 필요" not in workflow
+
+
+def test_every_python_app_in_the_workspace_is_bundled() -> None:
+    """워크스페이스에 파이썬 앱을 더하고 PYTHON_APPS에 빠뜨리면, 번들에서 그 앱을 import하는 쪽(launcher 등)이 설치 뒤에야 깨진다."""
+    import tomllib
+
+    root = build_release.ROOT
+    members = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["uv"]["workspace"]["members"]
+    apps = {member.removeprefix("apps/") for member in members if member.startswith("apps/")}
+    assert apps == set(build_release.PYTHON_APPS)

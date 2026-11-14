@@ -13,6 +13,15 @@ export {
 export { isSiteTrackingBrowser } from "./browsers";
 export { ApiError, requestTimeoutMs } from "./client";
 export {
+  createAlert,
+  deleteAlert,
+  deleteReportSchedule,
+  fetchAlerts,
+  fetchReportSchedule,
+  saveReportSchedule,
+  updateAlert,
+} from "./goalSettings";
+export {
   createGoal,
   deleteGoal,
   fetchGoalProgress,
@@ -40,6 +49,8 @@ export type {
   ExternalLink,
   FieldError,
   Goal,
+  GoalAlert,
+  GoalAlertInput,
   GoalInput,
   GoalProgress,
   GoalProgressResponse,
@@ -51,6 +62,8 @@ export type {
   ProcessUsage,
   RangeSummary,
   RangeUsage,
+  ReportSchedule,
+  ReportScheduleInput,
   SiteLink,
   SiteRangeUsage,
   SiteTime,

@@ -8,6 +8,7 @@ import {
   type SiteUsage,
 } from "../api";
 import { createGoalManager } from "../components/goals/GoalManager";
+import { createGoalSettings } from "../components/goals/GoalSettings";
 import { createPeriodView } from "../components/period/PeriodView";
 import { createUsageColumn } from "../components/usage/ProcessColumn";
 import {
@@ -132,7 +133,10 @@ export function mountGoalPage(
   const manager = createGoalManager({
     // 로그인한 상태에서 만드는 목표는 이름·목표 시간·요일이 서버에도 저장되므로, 목표를 만드는 화면에서 알린다.
     notice: () => syncNotice(options.account.getState()),
-    onChange: () => view.refresh(),
+    onChange: () => {
+      view.refresh();
+      settings.reload(); // 연결 프로세스가 바뀌면 알림 대상 목록도 달라진다
+    },
     // 15초마다 요약이 다시 그려져 열었던 링크가 사라졌을 수 있다 — 지금 있는 링크로 포커스를 돌려준다.
     onClose: () =>
       root.querySelector<HTMLElement>("[data-goal-manage]")?.focus(),
@@ -227,9 +231,13 @@ export function mountGoalPage(
     },
   });
 
-  root.replaceChildren(header, view.element);
+  // 알림·보고서 설정은 15초마다 다시 그려지는 내용 바깥에 둔다(열려 있는 폼이 갱신에 지워지지 않게).
+  const settings = createGoalSettings(goalId);
+
+  root.replaceChildren(header, view.element, settings.element);
   return () => {
     latestLoad++;
+    settings.destroy();
     view.destroy();
     manager.destroy();
   };

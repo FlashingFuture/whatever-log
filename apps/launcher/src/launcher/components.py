@@ -1,6 +1,6 @@
-"""launcher가 다루는 백그라운드 구성 요소(기록기, 동기화 에이전트)와 그 프로세스를 찾고·띄우고·끄는 일.
+"""launcher가 다루는 백그라운드 구성 요소(기록기, 동기화 에이전트, 알림 에이전트)와 그 프로세스를 찾고·띄우고·끄는 일.
 
-두 구성 요소 모두 `supervisor → 실제 프로그램` 두 겹이다. 끌 때는 supervisor를 먼저 꺼야 한다 — 프로그램만 끄면 supervisor가
+세 구성 요소 모두 `supervisor → 실제 프로그램` 두 겹이다. 끌 때는 supervisor를 먼저 꺼야 한다 — 프로그램만 끄면 supervisor가
 크래시로 보고 다시 띄우고, supervisor만 끄면 프로그램이 혼자 남는다.
 
 프로세스는 "이 가상환경의 파이썬으로 `-m <모듈>`을 실행 중인 것"으로 알아본다. 다른 폴더의 설치본이나 같은 이름의 다른 프로그램은
@@ -14,6 +14,7 @@ from pathlib import Path
 
 import psutil
 from recorder.autostart import VALUE_NAME as RECORDER_RUN_VALUE
+from notifier.supervisor import AUTOSTART_VALUE_NAME as NOTIFIER_RUN_VALUE
 from supervision.autostart import module_command, pythonw_path
 from supervision.lock import AlreadyRunningError, acquire_lock
 from sync_agent.supervisor import AUTOSTART_VALUE_NAME as SYNC_RUN_VALUE
@@ -42,7 +43,8 @@ class Component:
 
 RECORDER = Component("recorder", "기록기", "recorder.supervisor", "recorder", RECORDER_RUN_VALUE)
 SYNC = Component("sync", "동기화 에이전트", "sync_agent.supervisor", "sync_agent", SYNC_RUN_VALUE)
-COMPONENTS = (RECORDER, SYNC)
+NOTIFIER = Component("notifier", "알림 에이전트", "notifier.supervisor", "notifier", NOTIFIER_RUN_VALUE)
+COMPONENTS = (RECORDER, SYNC, NOTIFIER)
 
 
 # 값을 따로 받는 파이썬 옵션(`-X utf8`, `-W ignore`처럼 다음 인자가 그 값이다). 이 값을 `-m`으로 오해하지 않으려고 건너뛴다.
@@ -116,6 +118,8 @@ def lock_path(component: Component) -> Path:
     """구성 요소의 중복 실행 lock 파일. 프로그램 모듈은 무겁고(동기화 에이전트는 cloud까지 불러온다) 시작할 때만 필요해서 여기서 import한다."""
     if component is SYNC:
         from sync_agent.__main__ import DEFAULT_LOCK_PATH
+    elif component is NOTIFIER:
+        from notifier.__main__ import DEFAULT_LOCK_PATH
     else:
         from recorder.__main__ import DEFAULT_LOCK_PATH
     return DEFAULT_LOCK_PATH

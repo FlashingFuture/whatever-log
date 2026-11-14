@@ -13,10 +13,19 @@ recorder.db와 파일을 나눈다: recorder.db는 recorder만 쓰고 hub는 읽
 import sqlite3
 from collections.abc import Callable, Collection, Iterator
 from contextlib import contextmanager
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from goals.alerts import (
+    MAX_ALERTS_PER_GOAL,
+    AlertSpec,
+    GoalAlert,
+    ReportSchedule,
+    ScheduleSpec,
+    validate_alert,
+    validate_schedule,
+)
 from goals.errors import FieldError, GoalNotFoundError, GoalValidationError, SchemaVersionError, StaleSyncError
 from goals.models import SYNC_STATES, Goal, GoalSnapshot, SiteTarget, SyncLink
 from goals.validation import (
@@ -32,7 +41,8 @@ from goals.validation import (
 
 # 2: 연결 대상 종류에 `site`(브라우저의 사이트)를 더했다. 1에서 올라올 때 대상 테이블을 새 CHECK로 다시 만든다.
 # 3: 서버와의 연결 칸(remote_id 등)과 동기화 보조 테이블을 더했다(docs/sync-client.md). 기존 목표는 모두 `ask`다.
-SCHEMA_VERSION = 3
+# 4: 알림 규칙(goal_alerts)·알린 기록(goal_alert_log)·보고서 일정(goal_report_schedules)을 더했다. 새 테이블뿐이라 옛 파일은 열 때 테이블이 추가된다.
+SCHEMA_VERSION = 4
 
 # sync_meta의 키: 동기화를 켰는지, 연결한 계정의 이메일(계정이 바뀌면 연결을 끊는 데 쓴다).
 META_SYNC_ENABLED = "sync_enabled"
@@ -116,6 +126,46 @@ CREATE TABLE IF NOT EXISTS goal_snapshots (
 );
 
 {_SNAPSHOT_TARGETS_DDL};
+
+-- 알림 규칙: 마감 시각까지 대상의 오늘 활성 시간이 min_minutes 미만이면 알린다. target_name이 NULL이면 목표 전체가 대상이다.
+CREATE TABLE IF NOT EXISTS goal_alerts (
+    id INTEGER PRIMARY KEY,
+    goal_id INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+    target_name TEXT,
+    target_key TEXT,
+    deadline TEXT NOT NULL CHECK (deadline GLOB '[0-2][0-9]:[0-5][0-9]'),
+    min_minutes INTEGER NOT NULL
+        CHECK (typeof(min_minutes) = 'integer' AND min_minutes BETWEEN 1 AND 1440),
+    weekdays INTEGER NOT NULL CHECK (typeof(weekdays) = 'integer' AND weekdays BETWEEN 1 AND 127),
+    enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK ((target_name IS NULL) = (target_key IS NULL))
+);
+
+CREATE INDEX IF NOT EXISTS idx_goal_alerts_goal ON goal_alerts(goal_id);
+
+-- 알린 기록: 같은 규칙은 하루에 한 번만 알린다. 규칙이 지워지면 같이 지워진다.
+CREATE TABLE IF NOT EXISTS goal_alert_log (
+    alert_id INTEGER NOT NULL REFERENCES goal_alerts(id) ON DELETE CASCADE,
+    day TEXT NOT NULL,
+    fired_at TEXT NOT NULL,
+    PRIMARY KEY (alert_id, day)
+);
+
+-- 보고서 메일 일정(설정만 — 발송은 서버가 한다). 목표당 하나.
+CREATE TABLE IF NOT EXISTS goal_report_schedules (
+    goal_id INTEGER PRIMARY KEY REFERENCES goals(id) ON DELETE CASCADE,
+    enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+    frequency TEXT NOT NULL CHECK (frequency IN ('daily', 'weekly', 'monthly')),
+    weekday INTEGER CHECK (weekday IS NULL OR (typeof(weekday) = 'integer' AND weekday BETWEEN 0 AND 6)),
+    day_of_month INTEGER CHECK (day_of_month IS NULL OR (typeof(day_of_month) = 'integer' AND day_of_month BETWEEN 1 AND 28)),
+    send_time TEXT NOT NULL CHECK (send_time GLOB '[0-2][0-9]:[0-5][0-9]'),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK ((frequency = 'weekly') = (weekday IS NOT NULL)),
+    CHECK ((frequency = 'monthly') = (day_of_month IS NOT NULL))
+);
 """
 
 
@@ -412,6 +462,188 @@ class GoalStore:
             )
             deleted = self._conn.execute("DELETE FROM goals WHERE id = ?", (goal_id,)).rowcount
             if deleted == 0:
+                raise GoalNotFoundError(goal_id)
+
+    # --- 알림 규칙과 보고서 일정(docs/goal-management.md) ---
+    # 둘 다 이 PC에만 저장된다(서버로 보내지 않는다). 목표를 지우면 함께 지워진다(ON DELETE CASCADE).
+
+    def _alert_from_row(self, row: tuple[Any, ...]) -> GoalAlert:
+        """goal_alerts 한 줄을 값 객체로."""
+        alert_id, goal_id, target, deadline, minutes, mask, enabled, created, updated = row
+        return GoalAlert(alert_id, goal_id, target, deadline, minutes, _weekdays_from_mask(mask), bool(enabled), created, updated)
+
+    _ALERT_COLUMNS = "id, goal_id, target_name, deadline, min_minutes, weekdays, enabled, created_at, updated_at"
+
+    def list_alerts(self, goal_id: int | None = None) -> list[GoalAlert]:
+        """알림 규칙들(만든 순서). goal_id를 주면 그 목표의 것만."""
+        if goal_id is None:
+            rows = self._conn.execute(f"SELECT {self._ALERT_COLUMNS} FROM goal_alerts ORDER BY id").fetchall()
+        else:
+            rows = self._conn.execute(
+                f"SELECT {self._ALERT_COLUMNS} FROM goal_alerts WHERE goal_id = ? ORDER BY id", (goal_id,)
+            ).fetchall()
+        return [self._alert_from_row(row) for row in rows]
+
+    def get_alert(self, alert_id: int) -> GoalAlert | None:
+        """알림 규칙 하나(없으면 None)."""
+        row = self._conn.execute(f"SELECT {self._ALERT_COLUMNS} FROM goal_alerts WHERE id = ?", (alert_id,)).fetchone()
+        return None if row is None else self._alert_from_row(row)
+
+    def _alert_spec(self, goal: Goal, fields: dict[str, Any]) -> AlertSpec:
+        return validate_alert(linked_processes=goal.processes, **fields)
+
+    def create_alert(
+        self, goal_id: int, *, target_process: Any, deadline: Any, min_minutes: Any, weekdays: Any, enabled: Any
+    ) -> GoalAlert:
+        """알림 규칙을 만든다. 입력 오류와 개수 상한(목표당 MAX_ALERTS_PER_GOAL개)은 GoalValidationError, 없는 목표는 GoalNotFoundError."""
+        fields = {
+            "target_process": target_process,
+            "deadline": deadline,
+            "min_minutes": min_minutes,
+            "weekdays": weekdays,
+            "enabled": enabled,
+        }
+        with self._write():
+            goal = self.get(goal_id)
+            if goal is None:
+                raise GoalNotFoundError(goal_id)
+            spec = self._alert_spec(goal, fields)
+            (count,) = self._conn.execute("SELECT COUNT(*) FROM goal_alerts WHERE goal_id = ?", (goal_id,)).fetchone()
+            if count >= MAX_ALERTS_PER_GOAL:
+                raise GoalValidationError(
+                    [FieldError("alerts", "too_many", f"알림은 목표마다 {MAX_ALERTS_PER_GOAL}개까지 만들 수 있습니다.")]
+                )
+            now = self._timestamp()
+            alert_id = self._conn.execute(
+                "INSERT INTO goal_alerts (goal_id, target_name, target_key, deadline, min_minutes, weekdays, enabled, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    goal_id,
+                    spec.target_process,
+                    spec.target_key,
+                    spec.deadline,
+                    spec.min_minutes,
+                    _weekday_mask(spec.weekdays),
+                    int(spec.enabled),
+                    now,
+                    now,
+                ),
+            ).lastrowid
+            created = self.get_alert(alert_id)
+        assert created is not None
+        return created
+
+    def update_alert(
+        self, alert_id: int, *, target_process: Any, deadline: Any, min_minutes: Any, weekdays: Any, enabled: Any
+    ) -> GoalAlert:
+        """알림 규칙을 통째로 바꾼다(모든 칸을 다시 받는다). 없는 id는 GoalNotFoundError.
+
+        마감 시각이나 조건이 바뀌면 오늘 이미 알린 기록은 지운다 — 고친 규칙이 오늘 다시 평가받는다. 켜짐 여부만 바뀐 경우에는 지우지 않는다.
+        """
+        fields = {
+            "target_process": target_process,
+            "deadline": deadline,
+            "min_minutes": min_minutes,
+            "weekdays": weekdays,
+            "enabled": enabled,
+        }
+        with self._write():
+            current = self.get_alert(alert_id)
+            goal = None if current is None else self.get(current.goal_id)
+            if current is None or goal is None:
+                raise GoalNotFoundError(alert_id)
+            spec = self._alert_spec(goal, fields)
+            self._conn.execute(
+                "UPDATE goal_alerts SET target_name = ?, target_key = ?, deadline = ?, min_minutes = ?, weekdays = ?, "
+                "enabled = ?, updated_at = ? WHERE id = ?",
+                (
+                    spec.target_process,
+                    spec.target_key,
+                    spec.deadline,
+                    spec.min_minutes,
+                    _weekday_mask(spec.weekdays),
+                    int(spec.enabled),
+                    self._timestamp(),
+                    alert_id,
+                ),
+            )
+            condition_changed = (
+                current.target_process != spec.target_process
+                or current.deadline != spec.deadline
+                or current.min_minutes != spec.min_minutes
+            )
+            if condition_changed:
+                self._conn.execute("DELETE FROM goal_alert_log WHERE alert_id = ?", (alert_id,))
+            updated = self.get_alert(alert_id)
+        assert updated is not None
+        return updated
+
+    def delete_alert(self, alert_id: int) -> None:
+        """알림 규칙을 지운다(알린 기록도 같이). 없는 id면 GoalNotFoundError."""
+        with self._write():
+            if self._conn.execute("DELETE FROM goal_alerts WHERE id = ?", (alert_id,)).rowcount == 0:
+                raise GoalNotFoundError(alert_id)
+
+    def fired_alert_ids(self, day: date) -> set[int]:
+        """그날(이 PC의 날짜) 이미 알린 규칙의 id들."""
+        rows = self._conn.execute("SELECT alert_id FROM goal_alert_log WHERE day = ?", (day.isoformat(),)).fetchall()
+        return {alert_id for (alert_id,) in rows}
+
+    def mark_alert_fired(self, alert_id: int, day: date) -> bool:
+        """그날 이 규칙을 알렸다고 적는다. 처음 적으면 True, 이미 적혀 있으면(다른 프로세스가 먼저 알림) False — 호출부는 True일 때만 알린다.
+
+        지난 기록은 쌓이지 않게 30일이 지난 것을 함께 지운다.
+        """
+        with self._write():
+            if self._conn.execute("SELECT 1 FROM goal_alerts WHERE id = ?", (alert_id,)).fetchone() is None:
+                return False  # 그새 규칙이 지워졌다
+            inserted = self._conn.execute(
+                "INSERT OR IGNORE INTO goal_alert_log (alert_id, day, fired_at) VALUES (?, ?, ?)",
+                (alert_id, day.isoformat(), self._timestamp()),
+            ).rowcount
+            self._conn.execute("DELETE FROM goal_alert_log WHERE day < ?", ((day - timedelta(days=30)).isoformat(),))
+        return inserted == 1
+
+    def _schedule_from_row(self, row: tuple[Any, ...]) -> ReportSchedule:
+        goal_id, enabled, frequency, weekday, day_of_month, send_time, created, updated = row
+        return ReportSchedule(goal_id, bool(enabled), frequency, weekday, day_of_month, send_time, created, updated)
+
+    _SCHEDULE_COLUMNS = "goal_id, enabled, frequency, weekday, day_of_month, send_time, created_at, updated_at"
+
+    def report_schedule(self, goal_id: int) -> ReportSchedule | None:
+        """목표의 보고서 일정(없으면 None)."""
+        row = self._conn.execute(
+            f"SELECT {self._SCHEDULE_COLUMNS} FROM goal_report_schedules WHERE goal_id = ?", (goal_id,)
+        ).fetchone()
+        return None if row is None else self._schedule_from_row(row)
+
+    def set_report_schedule(
+        self, goal_id: int, *, enabled: Any, frequency: Any, weekday: Any, day_of_month: Any, send_time: Any
+    ) -> ReportSchedule:
+        """목표의 보고서 일정을 만들거나 통째로 바꾼다. 입력 오류는 GoalValidationError, 없는 목표는 GoalNotFoundError."""
+        spec: ScheduleSpec = validate_schedule(
+            enabled=enabled, frequency=frequency, weekday=weekday, day_of_month=day_of_month, send_time=send_time
+        )
+        with self._write():
+            if self._conn.execute("SELECT 1 FROM goals WHERE id = ?", (goal_id,)).fetchone() is None:
+                raise GoalNotFoundError(goal_id)
+            now = self._timestamp()
+            self._conn.execute(
+                "INSERT INTO goal_report_schedules (goal_id, enabled, frequency, weekday, day_of_month, send_time, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(goal_id) DO UPDATE SET enabled = excluded.enabled, frequency = excluded.frequency, "
+                "weekday = excluded.weekday, day_of_month = excluded.day_of_month, send_time = excluded.send_time, "
+                "updated_at = excluded.updated_at",
+                (goal_id, int(spec.enabled), spec.frequency, spec.weekday, spec.day_of_month, spec.send_time, now, now),
+            )
+            saved = self.report_schedule(goal_id)
+        assert saved is not None
+        return saved
+
+    def delete_report_schedule(self, goal_id: int) -> None:
+        """목표의 보고서 일정을 지운다. 일정이 없으면 GoalNotFoundError."""
+        with self._write():
+            if self._conn.execute("DELETE FROM goal_report_schedules WHERE goal_id = ?", (goal_id,)).rowcount == 0:
                 raise GoalNotFoundError(goal_id)
 
     # --- 서버와의 연결(docs/sync-design.md) ---
