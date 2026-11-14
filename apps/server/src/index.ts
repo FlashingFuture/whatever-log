@@ -2,10 +2,12 @@ import { handleGoogleLogin } from "./auth/handler.ts";
 import { createGoogleKeyProvider } from "./auth/jwks.ts";
 import type { Db } from "./db.ts";
 import { errorResponse, jsonResponse } from "./http.ts";
+import { type MailEnv, resolveSender } from "./mail/config.ts";
+import { createMail } from "./mail/factory.ts";
 import { handleApi } from "./sync/api.ts";
 
 /** Worker가 받는 환경: wrangler.toml의 [vars]·바인딩과 비밀 값(.dev.vars / wrangler secret). */
-export interface Env {
+export interface Env extends MailEnv {
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
   DB: Db;
@@ -68,6 +70,11 @@ async function route(request: Request, env: Env): Promise<Response> {
     const handled = await handleApi(request, new URL(request.url), {
       db: env.DB,
       now: () => new Date(),
+      // 설정이 틀리면 MailConfigError가 나서 메일 주소만 "설정되지 않음"이 된다(다른 기능은 영향이 없다).
+      mail: () => ({
+        port: createMail(env, (input, init) => fetch(input, init)),
+        sender: resolveSender(env),
+      }),
     });
     return handled ?? errorResponse(404, "not_found", "없는 주소입니다.");
   } catch (error) {

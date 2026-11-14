@@ -15,6 +15,13 @@ preview_urls = false
 # 공개 값이다(로그인 화면에 보이는 값과 같다). 서버는 ID 토큰의 aud가 이 값인지 검사한다.
 GOOGLE_CLIENT_ID = "506740497505-okl0mm0ge5p7kojam78pdur54ej03j3e.apps.googleusercontent.com"
 
+# 메일 발송 설정(docs/mail-design.md). 비밀이 아니다 — 비밀 키(RESEND_API_KEY)는 여기 두지 않고 `wrangler secret put`/.dev.vars로 넣는다.
+# MAIL_PROVIDER: 메일 서비스(지금은 resend). 서비스를 바꿀 때는 이 값과 그 서비스의 비밀 키를 바꾼다.
+# MAIL_FROM_DOMAIN: 서비스에서 인증을 마친 발신 도메인(예: "example.com" → reports@example.com). **비워 두면** 서비스의 시험용 주소로 보내고,
+#   그 주소는 서비스에 가입한 계정의 이메일로만 갈 수 있다. 도메인을 산 뒤 DNS 인증(SPF·DKIM)을 마치고 여기에 채운다.
+MAIL_PROVIDER = "resend"
+MAIL_FROM_DOMAIN = ""
+
 # 사용자·토큰을 저장하는 D1(SQLite) 데이터베이스. 코드에서는 env.DB로 쓴다.
 # 로컬(`wrangler dev`)은 database_id를 쓰지 않고 .wrangler/ 안의 로컬 DB를 쓴다. 운영에 올리기 전에
 # `wrangler d1 create whatever-log`가 알려 주는 id로 바꾸고 `wrangler d1 migrations apply DB --remote`를 실행한다.
