@@ -133,3 +133,10 @@ def test_the_agent_beats_every_cycle_even_when_the_check_fails(tmp_path, monkeyp
     with pytest.raises(KeyboardInterrupt):
         agent.main(["--lock-path", str(tmp_path / "n.lock"), "--log-path", str(tmp_path / "n.log")], sleep=sleep)
     assert len(beats) == 4  # 주기마다 확인 전 한 번, 확인 뒤 한 번 — 확인이 실패해도 돌고 있다는 신호는 낸다
+
+
+def test_the_startup_grace_is_longer_than_the_stable_run_threshold() -> None:
+    """실제 알림 에이전트의 시작 유예는 supervisor의 안정 실행 기준보다 길다 — 그래서 "첫 박동 없이 멈춘 실행은 안정 실행으로 세지 않는다"(supervision 시험)가 필요하다."""
+    from supervision.supervisor import MIN_STABLE_RUN_SECONDS
+
+    assert supervisor.STARTUP_GRACE_SECONDS > MIN_STABLE_RUN_SECONDS

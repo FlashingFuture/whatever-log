@@ -31,7 +31,8 @@ FREQUENCIES = ("daily", "weekly", "monthly")
 # 매달 일자는 28일까지만 받는다 — 29~31일은 없는 달이 있어 "그 달에는 안 간다"는 모호함이 생긴다.
 MAX_DAY_OF_MONTH = 28
 
-_TIME = re.compile(r"([01]\d|2[0-3]):([0-5]\d)")
+# [0-9]로 쓴다: \d는 아라비아 숫자("٣") 같은 다른 문자의 숫자도 받는데, DB의 CHECK(GLOB '[0-2][0-9]:[0-5][0-9]')는 ASCII만 받는다.
+_TIME = re.compile(r"([01][0-9]|2[0-3]):([0-5][0-9])")
 
 
 @dataclass(frozen=True)

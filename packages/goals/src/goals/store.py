@@ -589,14 +589,25 @@ class GoalStore:
         rows = self._conn.execute("SELECT alert_id FROM goal_alert_log WHERE day = ?", (day.isoformat(),)).fetchall()
         return {alert_id for (alert_id,) in rows}
 
-    def mark_alert_fired(self, alert_id: int, day: date) -> bool:
-        """그날 이 규칙을 알렸다고 적는다. 처음 적으면 True, 이미 적혀 있으면(다른 프로세스가 먼저 알림) False — 호출부는 True일 때만 알린다.
+    def mark_alert_fired(self, alert_id: int, day: date, evaluated: GoalAlert | None = None) -> bool:
+        """그날 이 규칙을 알렸다고 적는다. 처음 적으면 True, 아니면 False — 호출부는 True일 때만 알린다.
+
+        False인 경우: 이미 적혀 있다(다른 프로세스가 먼저 알림) / 규칙이 지워졌다 / **평가한 뒤에 규칙이 바뀌었다**.
+        evaluated(평가에 쓴 규칙)를 주면 쓰기 트랜잭션 안에서 DB의 현재 규칙과 대상·마감 시각·최소 시간·요일·켜짐 여부를 비교한다. 평가하는 사이에 hub가 규칙을
+        고쳤다면 낡은 조건의 판단으로 오늘 기록을 남기거나(새 조건의 알림을 막는다), 꺼진 규칙의 알림을 띄우지 않게 하려는 것이다. 이때는 아무것도 적지 않는다 —
+        다음 확인에서 바뀐 규칙으로 다시 평가한다.
 
         지난 기록은 쌓이지 않게 30일이 지난 것을 함께 지운다.
         """
         with self._write():
-            if self._conn.execute("SELECT 1 FROM goal_alerts WHERE id = ?", (alert_id,)).fetchone() is None:
+            current = self.get_alert(alert_id)
+            if current is None:
                 return False  # 그새 규칙이 지워졌다
+            if evaluated is not None and (
+                (current.target_process, current.deadline, current.min_minutes, current.weekdays, current.enabled)
+                != (evaluated.target_process, evaluated.deadline, evaluated.min_minutes, evaluated.weekdays, evaluated.enabled)
+            ):
+                return False
             inserted = self._conn.execute(
                 "INSERT OR IGNORE INTO goal_alert_log (alert_id, day, fired_at) VALUES (?, ?, ?)",
                 (alert_id, day.isoformat(), self._timestamp()),

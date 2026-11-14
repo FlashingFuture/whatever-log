@@ -210,3 +210,38 @@ def test_the_child_is_told_where_to_beat(tmp_path) -> None:
     code = f"import os; open({str(out)!r}, 'w').write(os.environ.get({ENV_VAR!r}, 'missing'))"
     _run(code, tmp_path, stale=5.0, grace=5.0)
     assert out.read_text() == str(tmp_path / "x.heartbeat")
+
+
+def test_a_run_that_never_beat_is_not_a_stable_run_even_when_the_grace_is_long(tmp_path) -> None:
+    """시작 유예(여기서는 1.5초)가 안정 실행 시간(0.5초)보다 길면, 첫 박동 없이 멈춘 실행이 안정 실행으로 세어져 연속 실패가 리셋되고 영원히 포기하지 못한다."""
+    import threading
+
+    stop = threading.Event()
+    timer = threading.Timer(25.0, stop.set)  # 고치기 전 코드라면 영원히 도는 루프를 끝내는 안전장치
+    timer.start()
+    try:
+        started = time.monotonic()
+        supervise(
+            [sys.executable, "-c", _HANG],
+            logger=logger,
+            classify_exit=lambda code: None,
+            restart_delay_seconds=0.01,
+            heartbeat=_heartbeat(tmp_path, stale=1.0, grace=1.5),
+            min_stable_run_seconds=0.5,
+            max_consecutive_failures=3,
+            stop_event=stop,
+        )
+        elapsed = time.monotonic() - started
+    finally:
+        timer.cancel()
+    assert not stop.is_set()  # 안전장치가 아니라 스스로 포기했다
+    assert elapsed < 20
+
+
+def test_the_watch_reports_whether_the_child_ever_beat(tmp_path) -> None:
+    mtime = _Mtime()
+    watch = HeartbeatWatch(_heartbeat(tmp_path), started_at=0.0, read_modified=mtime)
+    assert watch.has_beaten is False
+    mtime.value = 5
+    watch.is_hung(1.0)
+    assert watch.has_beaten is True

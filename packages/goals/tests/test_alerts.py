@@ -301,3 +301,33 @@ def test_now_must_carry_a_timezone(store, goal):
     store.create_alert(goal.id, **_alert())
     with pytest.raises(ValueError):
         _due(store, datetime(2026, 11, 5, 23, 30))
+
+
+# --- 리뷰 반영: ASCII 숫자만, 평가 뒤에 바뀐 규칙은 기록하지 않는다 ---
+
+
+@pytest.mark.parametrize("deadline", ["0١:00", "٢3:00", "09:٣0", "09:0٣", "０９:００"])
+def test_a_time_with_non_ascii_digits_is_a_field_error_not_a_database_error(store, goal, deadline):
+    assert "deadline" in _errors(lambda: store.create_alert(goal.id, **_alert(deadline=deadline)))
+    assert "send_time" in _errors(lambda: store.set_report_schedule(goal.id, **_schedule(send_time=deadline)))
+
+
+def test_a_fired_record_is_refused_when_the_rule_changed_after_it_was_evaluated(store, goal):
+    day = date(2026, 11, 5)
+    evaluated = store.create_alert(goal.id, **_alert(min_minutes=5))
+    for change in (
+        {"deadline": "22:00"},
+        {"min_minutes": 6},
+        {"enabled": False},
+        {"weekdays": [0]},
+        {"target_process": "Other.exe"},
+    ):
+        store.update_alert(evaluated.id, **_alert(min_minutes=5))  # 평가했을 때의 규칙으로 되돌린다
+        store.update_alert(evaluated.id, **_alert(**{"min_minutes": 5, **change}))
+        assert store.mark_alert_fired(evaluated.id, day, evaluated) is False, change
+        assert store.fired_alert_ids(day) == set()  # 낡은 판단의 기록이 새 조건의 알림을 막지 않는다
+
+
+def test_a_fired_record_is_written_when_the_rule_is_unchanged(store, goal):
+    alert = store.create_alert(goal.id, **_alert())
+    assert store.mark_alert_fired(alert.id, date(2026, 11, 5), alert) is True

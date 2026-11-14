@@ -29,6 +29,8 @@ export function createFormKit(idPrefix: string): FormKit {
   form.append(banner);
 
   const slots = new Map<string, HTMLElement>();
+  // 오류가 걸린 입력 요소. 오류 문구와 이어 주고(aria-describedby) 오류가 있는 동안 aria-invalid를 켠다 — 스크린 리더 사용자가 입력 칸으로 돌아왔을 때도 알 수 있게.
+  const controls = new Map<string, HTMLElement>();
   let submitButton: HTMLButtonElement | null = null;
   let submitLabel = "";
 
@@ -37,11 +39,15 @@ export function createFormKit(idPrefix: string): FormKit {
       slot.hidden = true;
       slot.textContent = "";
     }
+    for (const control of controls.values()) {
+      control.removeAttribute("aria-invalid");
+    }
     banner.hidden = true;
     const unplaced: string[] = [];
     for (const error of errors) {
       const slot = slots.get(error.field);
       if (slot) {
+        controls.get(error.field)?.setAttribute("aria-invalid", "true");
         slot.hidden = false;
         slot.textContent = slot.textContent
           ? `${slot.textContent} ${error.message}`
@@ -76,7 +82,15 @@ export function createFormKit(idPrefix: string): FormKit {
       error.className = styles.error;
       error.setAttribute("role", "alert");
       error.hidden = true;
+      error.id = `${idPrefix}-${field}-error`;
       slots.set(field, error);
+      // 오류를 걸 요소: 입력·선택 칸은 그 자신, 요일 같은 묶음은 그 묶음, 체크박스를 감싼 라벨은 안의 체크박스.
+      const target =
+        control instanceof HTMLLabelElement
+          ? (control.querySelector("input") ?? control)
+          : control;
+      target.setAttribute("aria-describedby", error.id);
+      controls.set(field, target);
       wrapper.append(labelElement, control, error);
       return wrapper;
     },

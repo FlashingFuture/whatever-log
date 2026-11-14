@@ -128,8 +128,8 @@ def check_once(goals_db: Path, recorder_db: Path, *, now: datetime, notify: Noti
             goal_seconds=goal_seconds,
             already_fired=fired,
         ):
-            if not store.mark_alert_fired(due.alert.id, day):
-                continue  # 다른 곳에서 먼저 알렸거나 그새 규칙이 지워졌다
+            if not store.mark_alert_fired(due.alert.id, day, due.alert):
+                continue  # 다른 곳에서 먼저 알렸거나, 그새 규칙이 지워지거나 바뀌었다(다음 확인에서 바뀐 규칙으로 다시 평가한다)
             title, body = describe(due)
             if notify(title, body):
                 sent += 1
@@ -147,7 +147,11 @@ def main(
     clock: Callable[[], datetime] = lambda: datetime.now().astimezone(),
 ) -> int:
     """에이전트를 실행한다(--once·--test가 아니면 계속 돈다). 종료 코드를 돌려준다."""
-    parser = argparse.ArgumentParser(description="whatever.log 알림 에이전트")
+    parser = argparse.ArgumentParser(
+        description="whatever.log 알림 에이전트",
+        # `--inter 600` 같은 축약을 받으면 supervisor(정확한 `--interval`만 읽는다)와 주기를 다르게 읽어 박동 허용 시간이 어긋난다
+        allow_abbrev=False,
+    )
     parser.add_argument("--interval", type=_interval_type, default=DEFAULT_INTERVAL_SECONDS, help="확인 주기(초)")
     parser.add_argument("--once", action="store_true", help="한 번만 확인하고 끝낸다")
     parser.add_argument("--test", action="store_true", help="시험 알림 하나를 띄우고 끝낸다")

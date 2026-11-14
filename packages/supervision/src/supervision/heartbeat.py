@@ -119,6 +119,11 @@ class HeartbeatWatch:
         return now - self._last_beat_at > limit
 
     @property
+    def has_beaten(self) -> bool:
+        """시작한 뒤 박동이 한 번이라도 있었는가. 없었다면 이 실행은 일을 시작조차 못 한 것이다."""
+        return self._beaten
+
+    @property
     def silent_seconds_limit(self) -> float:
         """지금 단계(첫 박동 전/후)에서 허용하는 침묵 시간. 로그에 적는 값이다."""
         return self._heartbeat.stale_after_seconds if self._beaten else self._heartbeat.startup_grace_seconds

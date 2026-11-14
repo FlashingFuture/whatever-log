@@ -56,7 +56,21 @@ export function createGoalSettings(goalId: number): GoalSettings {
   // 불러오기를 연달아 시작했을 때 먼저 시작한 것의 늦은 응답이 나중 것을 덮지 않게 하는 순번.
   let load = 0;
 
-  const modal = createModal({ label: "알림·보고서 설정", onClose: () => {} });
+  // 모달에 지금 보이는 장면의 번호. 장면을 열거나 닫을 때마다 올린다 — 저장·삭제 요청이 끝났을 때 **그 요청을 시작한 장면이 아직 그대로일 때만** 모달을 닫는다
+  // (요청이 도는 동안 취소하고 다른 폼을 열었다면, 늦게 끝난 요청이 새 폼을 닫아 입력을 지우면 안 된다).
+  let scene = 0;
+  const modal = createModal({
+    label: "알림·보고서 설정",
+    onClose: () => {
+      scene++;
+    },
+  });
+
+  function openScene(view: Parameters<typeof modal.show>[0]): void {
+    scene++;
+    modal.show(view);
+    modal.open();
+  }
 
   async function fetchAll(): Promise<Loaded | null> {
     const [goals, alerts, schedule] = await Promise.all([
@@ -92,9 +106,11 @@ export function createGoalSettings(goalId: number): GoalSettings {
     );
   }
 
-  /** 저장·삭제가 끝났다 — 모달을 닫고 다시 불러온다. */
-  async function done(): Promise<void> {
-    modal.close();
+  /** 저장·삭제가 끝났다 — 요청을 시작한 장면(startedScene)이 아직 그대로면 모달을 닫고, 어느 쪽이든 목록은 다시 불러온다. */
+  async function done(startedScene: number): Promise<void> {
+    if (scene === startedScene) {
+      modal.close();
+    }
     await reload();
   }
 
@@ -169,21 +185,21 @@ export function createGoalSettings(goalId: number): GoalSettings {
   }
 
   function showAlertForm(goal: Goal, alert: GoalAlert | null): void {
-    modal.show({
+    openScene({
       title: alert ? "알림 수정" : "알림 추가",
       content: createAlertForm({
         alert,
         processes: goal.processes,
         onCancel: () => modal.close(),
         onSubmit: async (input) => {
+          const startedScene = scene;
           await (alert
             ? updateAlert(goalId, alert.id, input)
             : createAlert(goalId, input));
-          await done();
+          await done(startedScene);
         },
       }),
     });
-    modal.open();
   }
 
   function showDeleteAlert(alert: GoalAlert): void {
@@ -234,18 +250,18 @@ export function createGoalSettings(goalId: number): GoalSettings {
   }
 
   function showScheduleForm(schedule: ReportSchedule | null): void {
-    modal.show({
+    openScene({
       title: "보고서 메일 일정",
       content: createScheduleForm({
         schedule,
         onCancel: () => modal.close(),
         onSubmit: async (input) => {
+          const startedScene = scene;
           await saveReportSchedule(goalId, input);
-          await done();
+          await done(startedScene);
         },
       }),
     });
-    modal.open();
   }
 
   function showDeleteSchedule(schedule: ReportSchedule): void {
@@ -265,6 +281,7 @@ export function createGoalSettings(goalId: number): GoalSettings {
   }): void {
     const content = document.createElement("div");
     content.className = styles.confirm;
+    const startedScene = scene + 1; // 아래 openScene이 이 장면의 번호를 이 값으로 올린다
     const error = paragraph("", styles.error);
     error.hidden = true;
     error.setAttribute("role", "alert");
@@ -274,7 +291,7 @@ export function createGoalSettings(goalId: number): GoalSettings {
         button.disabled = true;
         options
           .onConfirm()
-          .then(done)
+          .then(() => done(startedScene))
           .catch((failure: unknown) => {
             error.hidden = false;
             error.textContent = message(failure);
@@ -295,8 +312,7 @@ export function createGoalSettings(goalId: number): GoalSettings {
       error,
       actions,
     );
-    modal.show({ title: options.title, content });
-    modal.open();
+    openScene({ title: options.title, content });
   }
 
   void reload();

@@ -205,3 +205,31 @@ def test_a_second_agent_is_refused(env, tmp_path) -> None:
 @pytest.mark.parametrize("interval", ["abc", "1", "nan", "inf"])
 def test_a_bad_interval_is_an_argument_error(interval, tmp_path) -> None:
     assert notifier.main(["--interval", interval, "--log-path", str(tmp_path / "n.log")]) == EXIT_ARGUMENT_ERROR
+
+
+def test_a_rule_changed_while_being_evaluated_is_not_notified_with_the_old_values(env, monkeypatch) -> None:
+    """평가하는 사이에 hub가 규칙을 끄거나 고치면, 낡은 판단으로 알리지도 오늘 기록을 남기지도 않는다(다음 확인에서 바뀐 규칙으로 다시 평가한다)."""
+    goals_db, _, goal_id = env
+    alert = _add(goals_db, goal_id)
+    notify = _Recorder()
+    real_due = notifier.due_alerts
+
+    def due_then_hub_edits(*args, **kwargs):
+        result = real_due(*args, **kwargs)
+        with GoalStore(goals_db, now=_Clock()) as store:  # 평가가 끝난 뒤, 알리기 전에 사용자가 규칙을 끈다
+            store.update_alert(alert.id, **_alert(enabled=False))
+        return result
+
+    monkeypatch.setattr(notifier, "due_alerts", due_then_hub_edits)
+    assert _check(env, 23, 30, notify) == 0 and notify.calls == []
+    with GoalStore(goals_db) as store:
+        assert store.fired_alert_ids(datetime(2026, 11, 5, tzinfo=KST).date()) == set()
+        store.update_alert(alert.id, **_alert(enabled=True))
+    monkeypatch.setattr(notifier, "due_alerts", real_due)
+    assert _check(env, 23, 31, notify) == 1  # 새 조건으로는 오늘 알림이 막히지 않았다
+
+
+@pytest.mark.parametrize("argument", ["--inter", "--int=600", "--interv"])
+def test_an_abbreviated_interval_is_an_argument_error(argument, tmp_path) -> None:
+    """supervisor는 정확한 `--interval`만 읽는다 — 자식이 축약형을 받아들이면 둘이 주기를 다르게 읽어 박동 허용 시간이 어긋난다."""
+    assert notifier.main([argument, "600", "--log-path", str(tmp_path / "n.log")]) == EXIT_ARGUMENT_ERROR

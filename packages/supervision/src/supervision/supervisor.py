@@ -69,6 +69,7 @@ def supervise(
             watch = HeartbeatWatch(heartbeat, started_at=started_at)  # 이전 실행의 박동 파일을 지운 뒤 자식을 띄운다
             process = subprocess.Popen(command, env={**os.environ, ENV_VAR: str(heartbeat.path)})
         hung = False
+        never_beat = False
 
         while process.poll() is None:
             if stop_event.wait(timeout=0.2):
@@ -81,6 +82,7 @@ def supervise(
                 )
                 _terminate(process, command, logger)
                 hung = True
+                never_beat = not watch.has_beaten
                 break
 
         exit_code = process.returncode
@@ -92,7 +94,9 @@ def supervise(
             logger.info("%s (exit code %d). 재시작하지 않고 멈춥니다.", stop_reason, exit_code)
             return
 
-        if ran_for_seconds >= min_stable_run_seconds:
+        # 첫 박동도 없이 멈춘 실행은 오래 기다렸어도(시작 유예가 안정 실행 시간보다 길다) 일을 시작하지 못한 것이라 안정 실행으로 세지 않는다 —
+        # 세면 연속 실패 횟수가 계속 리셋돼 "뜨자마자 계속 멈추는" 자식을 영영 포기하지 못한다.
+        if ran_for_seconds >= min_stable_run_seconds and not never_beat:
             consecutive_failures = 0
         else:
             consecutive_failures += 1
