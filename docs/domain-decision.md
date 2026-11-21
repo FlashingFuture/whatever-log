@@ -10,7 +10,7 @@
 | 등록업체 | **Cloudflare Registrar** |
 | DNS | Cloudflare DNS(무료, 등록하면 자동으로 쓴다) |
 | 도메인 확장자 | **`.com`** (예산·평판·단순함 기준 1순위) |
-| 도메인 이름 | _(구매하면 여기에 적는다: `____`)_ |
+| 도메인 이름 | `whateverlog.com` (Resend 인증 완료, 지역 도쿄) |
 | 메일 서비스 | Resend(무료 플랜). 도메인 연결은 `wrangler.toml`의 `MAIL_FROM_DOMAIN` 한 줄 |
 
 ## 배경과 기준
@@ -60,7 +60,7 @@
 7. **인증 확인** — Resend에서 *Verify*를 누른다(DNS 전파에 몇 분~몇 시간). 상태가 *Verified*가 되면 끝이다.
 8. **서버 설정** — `apps/server/wrangler.toml`의 `MAIL_FROM_DOMAIN = "내도메인.com"`으로 채운다. 발신 주소는 `reports@내도메인.com`이 된다. 운영 배포에는 `wrangler secret put RESEND_API_KEY`가 필요하다.
 9. **시험** — 시험 메일(`POST /mail/test`, 절차는 `docs/mail-design.md`)을 보내 받은 메일의 *원본 보기*에서 `spf=pass dkim=pass dmarc=pass`를 확인하고, **받은편지함으로 갔는지 스팸함으로 갔는지** 기록한다.
-10. **기록** — 이 문서의 "도메인 이름" 칸을 채운다.
+10. **기록** — 이 문서의 "도메인 이름" 칸을 채운다(채움).
 
 ## 위험과 다시 판단할 조건
 

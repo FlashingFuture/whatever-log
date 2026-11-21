@@ -20,7 +20,7 @@ GOOGLE_CLIENT_ID = "506740497505-okl0mm0ge5p7kojam78pdur54ej03j3e.apps.googleuse
 # MAIL_FROM_DOMAIN: 서비스에서 인증을 마친 발신 도메인(예: "example.com" → reports@example.com). **비워 두면** 서비스의 시험용 주소로 보내고,
 #   그 주소는 서비스에 가입한 계정의 이메일로만 갈 수 있다. 도메인을 산 뒤 DNS 인증(SPF·DKIM)을 마치고 여기에 채운다.
 MAIL_PROVIDER = "resend"
-MAIL_FROM_DOMAIN = ""
+MAIL_FROM_DOMAIN = "whateverlog.com"
 
 # 사용자·토큰을 저장하는 D1(SQLite) 데이터베이스. 코드에서는 env.DB로 쓴다.
 # 로컬(`wrangler dev`)은 database_id를 쓰지 않고 .wrangler/ 안의 로컬 DB를 쓴다. 운영에 올리기 전에
