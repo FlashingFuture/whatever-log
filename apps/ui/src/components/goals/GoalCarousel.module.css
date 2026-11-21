@@ -15,8 +15,11 @@
 .arrow {
   flex: none;
   display: flex;
+  /* 화살표와 이웃 글자를 줄 높이의 가운데에 맞춘다. */
   align-items: center;
-  gap: var(--space-1);
+  justify-content: center;
+  /* 화살표와 이웃 글자 사이를 띄운다. */
+  gap: var(--space-3);
   padding: 0 var(--space-2);
   min-width: 2rem;
   border: 0;
@@ -24,7 +27,6 @@
   background: transparent;
   color: var(--color-text);
   font: inherit;
-  font-size: 1.4rem;
   line-height: 1;
   cursor: pointer;
 }
@@ -80,18 +82,49 @@
   justify-content: center;
   gap: var(--space-1);
 }
-/* 화살표 안쪽에 연하게 엿보이는 이웃 이름(왼쪽은 뒤 두 글자, 오른쪽은 앞 두 글자). 글자 수와 관계없이 두 글자 너비로 고정해 양쪽이 같은 크기다. */
+/* 화살표 안쪽에 연하게 엿보이는 이웃 이름(왼쪽은 뒤 두 글자, 오른쪽은 앞 두 글자). 가운데 이름과 같은 크기·두께이고, 글자 수와 관계없이 두 글자 너비로 고정해 양쪽이 같은 크기다. */
 .hint {
   flex: none;
   box-sizing: content-box;
   width: 2em;
   color: var(--color-text-muted);
-  font-size: var(--text-sm);
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1;
   text-align: center;
   white-space: nowrap;
-  opacity: 0.7;
 }
 .chevron {
   font-size: 1.4rem;
   line-height: 1;
+}
+/* 이웃 글자와 화살표가 천천히 진해졌다 옅어졌다 한다(눈에 띄게 하되 거슬리지 않게). 단추에 마우스를 올리거나 포커스가 있으면 멈추고 또렷하게 보이며,
+   움직임을 줄이는 설정(prefers-reduced-motion)이면 움직이지 않는다. */
+@keyframes breathe {
+  from {
+    opacity: 0.3;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.hint,
+.chevron {
+  animation: breathe 2.4s ease-in-out infinite alternate;
+}
+.arrow:hover .hint,
+.arrow:hover .chevron,
+.arrow:focus-visible .hint,
+.arrow:focus-visible .chevron {
+  animation-play-state: paused;
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hint,
+  .chevron {
+    animation: none;
+  }
+  .hint {
+    opacity: 0.7;
+  }
 }
