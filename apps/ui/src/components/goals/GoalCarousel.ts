@@ -1,8 +1,11 @@
 import { truncateName } from "../../lib/format";
 import {
   carouselItems,
+  headChars,
+  neighborsOf,
   positionOf,
   stepSelection,
+  tailChars,
 } from "../../lib/goalCarousel";
 import { createRouteLink } from "../../router/router";
 import styles from "./GoalCarousel.module.css";
@@ -26,8 +29,9 @@ export interface GoalCarousel {
 const MAX_NAME_CHARS = 14;
 
 /**
- * 홈 맨 위의 목표 캐러셀: "목표 전체 → 목표 1 → … → 목표 N → (다시) 목표 전체"로 이어지는 원형이다. **자동으로 넘어가지 않는다** — 좌우 화살표, 아래의 점 단추,
- * 키보드(← →)로만 옮긴다(자동 전환은 읽는 중에 화면이 바뀌고 접근성 규칙도 늘어서 쓰지 않는다).
+ * 홈 맨 위의 목표 캐러셀: "목표 전체 → 목표 1 → … → 목표 N → (다시) 목표 전체"로 이어지는 원형이다. **자동으로 넘어가지 않는다** — 좌우 화살표와
+ * 키보드(← →)로만 옮긴다(자동 전환은 읽는 중에 화면이 바뀌고 접근성 규칙도 늘어서 쓰지 않는다). 화살표 바깥에는 이웃 목표를 **연하게 엿보여** 준다:
+ * 왼쪽에 앞 칸 이름의 뒤 두 글자, 오른쪽에 다음 칸 이름의 앞 두 글자(힌트이자 화살표 단추의 일부라 눌러도 그쪽으로 간다).
  *
  * 홈은 15초마다 내용을 통째로 다시 그린다. 이 캐러셀은 그 바깥(페이지 맨 위)에 한 번만 붙여 두고 `update`로 목록만 갱신한다 — 그래야 포커스가 갱신에 지워지지 않는다.
  * 순서·이동 규칙은 `lib/goalCarousel`(순수 로직)이 갖고 여기서는 그리기만 한다.
@@ -45,27 +49,20 @@ export function createGoalCarousel(props: GoalCarouselProps): GoalCarousel {
   const previous = document.createElement("button");
   previous.type = "button";
   previous.className = styles.arrow;
-  previous.textContent = "‹";
-  previous.setAttribute("aria-label", "이전 목표");
 
   const next = document.createElement("button");
   next.type = "button";
   next.className = styles.arrow;
-  next.textContent = "›";
-  next.setAttribute("aria-label", "다음 목표");
 
   const current = document.createElement("div");
   current.className = styles.current;
   // 사용자가 눌러서 바뀐 것만 알리므로(자동으로 바뀌지 않는다) 스크린 리더에 읽어 준다.
   current.setAttribute("aria-live", "polite");
 
-  const dots = document.createElement("div");
-  dots.className = styles.dots;
-
   const row = document.createElement("div");
   row.className = styles.row;
   row.append(previous, current, next);
-  root.append(row, dots);
+  root.append(row);
 
   function choose(id: number | null): void {
     selectedId = id;
@@ -94,7 +91,7 @@ export function createGoalCarousel(props: GoalCarouselProps): GoalCarousel {
       center = createRouteLink({ name: "goal", goalId: item.id });
       center.className = `${styles.center} ${styles.link}`;
       center.title = `${item.name} — 목표 개요 보기`;
-      // 위치(몇 번째 중 몇 개)는 화면에 글자로 보이지 않는다(아래 점 단추가 보여 준다) — 스크린 리더에는 알린다.
+      // 위치(몇 번째 중 몇 개)는 화면에 글자로 보이지 않는다 — 스크린 리더에는 알린다.
       center.setAttribute(
         "aria-label",
         `${item.name}, ${count}개 중 ${index + 1}번째. 목표 개요 보기`,
@@ -102,24 +99,46 @@ export function createGoalCarousel(props: GoalCarouselProps): GoalCarousel {
     }
     center.append(name);
     current.replaceChildren(center);
-    // 칸이 하나뿐이면(목표가 없다) 넘길 곳이 없다.
-    previous.disabled = count === 1;
-    next.disabled = count === 1;
-    dots.hidden = count === 1;
-    dots.replaceChildren(
-      ...items.map((candidate, candidateIndex) => {
-        const dot = document.createElement("button");
-        dot.type = "button";
-        dot.className = styles.dot;
-        dot.setAttribute("aria-label", candidate.name);
-        dot.title = candidate.name;
-        if (candidateIndex === index) {
-          dot.setAttribute("aria-current", "true");
-        }
-        dot.addEventListener("click", () => choose(candidate.id));
-        return dot;
-      }),
+    // 화살표 단추: 화살표와 이웃 힌트(연하게). 칸이 하나뿐이면(목표가 없다) 넘길 곳이 없어 힌트도 비운다.
+    const alone = count === 1;
+    const neighbors = neighborsOf(goals, selectedId);
+    previous.replaceChildren(
+      hint(alone ? "" : tailChars(neighbors.previous.name)),
+      chevron("‹"),
     );
+    next.replaceChildren(
+      chevron("›"),
+      hint(alone ? "" : headChars(neighbors.next.name)),
+    );
+    previous.setAttribute(
+      "aria-label",
+      alone ? "이전 목표" : `이전 목표: ${neighbors.previous.name}`,
+    );
+    next.setAttribute(
+      "aria-label",
+      alone ? "다음 목표" : `다음 목표: ${neighbors.next.name}`,
+    );
+    previous.title = alone ? "" : neighbors.previous.name;
+    next.title = alone ? "" : neighbors.next.name;
+    previous.disabled = alone;
+    next.disabled = alone;
+  }
+
+  /** 이웃 이름의 일부(사용자 입력이라 textContent로만). 눈에는 연하게 보이고 스크린 리더는 단추 이름이 따로 있어 읽지 않는다. */
+  function hint(text: string): HTMLSpanElement {
+    const element = document.createElement("span");
+    element.className = styles.hint;
+    element.setAttribute("aria-hidden", "true");
+    element.textContent = text;
+    return element;
+  }
+
+  function chevron(symbol: string): HTMLSpanElement {
+    const element = document.createElement("span");
+    element.className = styles.chevron;
+    element.setAttribute("aria-hidden", "true");
+    element.textContent = symbol;
+    return element;
   }
 
   previous.addEventListener("click", () => step(-1));

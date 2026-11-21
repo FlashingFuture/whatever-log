@@ -4,8 +4,11 @@ import { test } from "node:test";
 import {
   ALL_GOALS_LABEL,
   carouselItems,
+  headChars,
+  neighborsOf,
   positionOf,
   stepSelection,
+  tailChars,
 } from "../../src/lib/goalCarousel.ts";
 
 const GOALS = [
@@ -54,4 +57,32 @@ test("고른 목표가 지워졌으면 목표 전체에서 시작한다", () => 
 test("위치는 0부터이고 칸 수에는 목표 전체가 들어 있다", () => {
   assert.deepEqual(positionOf(GOALS, null), { index: 0, count: 4 });
   assert.deepEqual(positionOf(GOALS, 9), { index: 2, count: 4 });
+});
+
+test("이웃 칸은 원형이라 목표 전체의 앞은 마지막 목표, 마지막 목표의 뒤는 목표 전체이다", () => {
+  assert.deepEqual(neighborsOf(GOALS, null), {
+    previous: { id: 2, name: "독서" },
+    next: { id: 4, name: "공부" },
+  });
+  assert.deepEqual(neighborsOf(GOALS, 2), {
+    previous: { id: 9, name: "운동" },
+    next: { id: null, name: ALL_GOALS_LABEL },
+  });
+  assert.equal(neighborsOf(GOALS, 4).previous.id, null);
+});
+
+test("칸이 하나뿐이면 이웃은 자기 자신이다", () => {
+  const only = { id: null, name: ALL_GOALS_LABEL };
+  assert.deepEqual(neighborsOf([], null), { previous: only, next: only });
+});
+
+test("이웃 힌트는 이름의 뒤 두 글자(왼쪽)와 앞 두 글자(오른쪽)이다", () => {
+  assert.equal(tailChars("프로젝트 알파"), "알파");
+  assert.equal(headChars("프로젝트 알파"), "프로");
+  assert.equal(tailChars("공부"), "공부");
+  assert.equal(headChars("A"), "A");
+  assert.equal(tailChars(""), "");
+  // 이모지처럼 코드 단위가 둘인 글자도 한 글자로 센다
+  assert.equal(headChars("😀😀😀"), "😀😀");
+  assert.equal(tailChars("가😀나"), "😀나");
 });

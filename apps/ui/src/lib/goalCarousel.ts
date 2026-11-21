@@ -49,3 +49,26 @@ export function stepSelection(
   const next = (index + delta + count) % count;
   return next === 0 ? null : goals[next - 1].id;
 }
+
+/** 지금 칸의 앞(왼쪽 화살표가 가는 곳)과 뒤(오른쪽 화살표가 가는 곳) 칸. 원형이라 끝에서는 반대쪽 끝이다. 칸이 하나뿐이면 둘 다 자기 자신이다. */
+export function neighborsOf(
+  goals: readonly CarouselGoal[],
+  selectedId: number | null,
+): { previous: CarouselItem; next: CarouselItem } {
+  const items = carouselItems(goals);
+  const { index, count } = positionOf(goals, selectedId);
+  return {
+    previous: items[(index - 1 + count) % count],
+    next: items[(index + 1) % count],
+  };
+}
+
+/** 이름의 **뒤** n글자(왼쪽 화살표 옆에 연하게 보이는 이웃 힌트). 글자 단위(이모지·한글 조합)로 센다. */
+export function tailChars(text: string, count = 2): string {
+  return Array.from(text).slice(-count).join("");
+}
+
+/** 이름의 **앞** n글자(오른쪽 화살표 옆에 연하게 보이는 이웃 힌트). */
+export function headChars(text: string, count = 2): string {
+  return Array.from(text).slice(0, count).join("");
+}
