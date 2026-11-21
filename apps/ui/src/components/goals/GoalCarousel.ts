@@ -4,6 +4,7 @@ import {
   positionOf,
   stepSelection,
 } from "../../lib/goalCarousel";
+import { createRouteLink } from "../../router/router";
 import styles from "./GoalCarousel.module.css";
 
 export interface GoalCarouselProps {
@@ -57,11 +58,6 @@ export function createGoalCarousel(props: GoalCarouselProps): GoalCarousel {
   current.className = styles.current;
   // 사용자가 눌러서 바뀐 것만 알리므로(자동으로 바뀌지 않는다) 스크린 리더에 읽어 준다.
   current.setAttribute("aria-live", "polite");
-  const name = document.createElement("span");
-  name.className = styles.name;
-  const position = document.createElement("span");
-  position.className = styles.position;
-  current.append(name, position);
 
   const dots = document.createElement("div");
   dots.className = styles.dots;
@@ -85,9 +81,25 @@ export function createGoalCarousel(props: GoalCarouselProps): GoalCarousel {
     const items = carouselItems(goals);
     const { index, count } = positionOf(goals, selectedId);
     const item = items[index];
+    const name = document.createElement("span");
+    name.className = styles.name;
     name.textContent = truncateName(item.name, MAX_NAME_CHARS); // 목표 이름은 사용자 입력이라 textContent로만 넣는다
-    current.title = item.name;
+    const position = document.createElement("span");
+    position.className = styles.position;
     position.textContent = `${index + 1} / ${count}`;
+    // 가운데 칸: 목표 하나를 보는 중이면 누르면 그 목표의 개요 화면으로 가는 링크(손 모양 커서, 올리면 회색), 목표 전체는 갈 곳이 없어 그냥 글자다(평범한 커서).
+    let center: HTMLElement;
+    if (item.id === null) {
+      center = document.createElement("div");
+      center.className = `${styles.center} ${styles.plain}`;
+      center.title = item.name;
+    } else {
+      center = createRouteLink({ name: "goal", goalId: item.id });
+      center.className = `${styles.center} ${styles.link}`;
+      center.title = `${item.name} — 목표 개요 보기`;
+    }
+    center.append(name, position);
+    current.replaceChildren(center);
     // 칸이 하나뿐이면(목표가 없다) 넘길 곳이 없다.
     previous.disabled = count === 1;
     next.disabled = count === 1;
