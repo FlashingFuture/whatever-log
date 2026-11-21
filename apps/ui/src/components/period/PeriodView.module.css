@@ -1,10 +1,24 @@
 .header {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-3);
   margin-bottom: var(--space-5);
+}
+/* 왼쪽 조각(홈의 목표 캐러셀). 아래 요약 칸과 같은 너비로 맞춘다. */
+.leading {
+  flex: 0 1 16rem;
+  min-width: 12rem;
+}
+/* 조회 단위와 구간 이동: 오른쪽에 모이고, 좁으면 줄바꿈된다. */
+.controls {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
 }
 .loading {
   composes: muted from "../../styles/shared.module.css";

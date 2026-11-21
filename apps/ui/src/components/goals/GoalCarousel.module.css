@@ -71,10 +71,6 @@
   white-space: nowrap;
   font-weight: 600;
 }
-.position {
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
-}
 .dots {
   display: flex;
   flex-wrap: wrap;

@@ -35,6 +35,11 @@ let rememberedPeriod: Period | null = null;
 export interface PeriodViewProps {
   /** 구간이 정해지면 그 구간의 내용을 만든다. 무엇을 보여주는지는 호출부 몫이다. */
   loadContent: (period: Period) => Promise<HTMLElement>;
+  /**
+   * 조회 단위·구간 이동 줄의 **왼쪽**에 나란히 놓을 조각(홈의 목표 캐러셀). 한 번만 붙이고 구간이 바뀌어도 다시 그리지 않는다 —
+   * 그 안의 포커스와 상태가 구간 이동에 지워지지 않는다.
+   */
+  leading?: HTMLElement;
 }
 
 export interface PeriodView {
@@ -68,6 +73,17 @@ export function createPeriodView(props: PeriodViewProps): PeriodView {
   const element = document.createElement("div");
   const header = document.createElement("div");
   header.className = styles.header;
+  // 구간이 바뀔 때 다시 그리는 것은 controls뿐이다. leading(캐러셀)은 header 안에 그대로 남는다.
+  const controls = document.createElement("div");
+  controls.className = styles.controls;
+  if (props.leading) {
+    const leading = document.createElement("div");
+    leading.className = styles.leading;
+    leading.append(props.leading);
+    header.append(leading, controls);
+  } else {
+    header.append(controls);
+  }
   const content = document.createElement("div");
   element.append(header, content);
 
@@ -92,7 +108,7 @@ export function createPeriodView(props: PeriodViewProps): PeriodView {
   function selectFromPicker(next: Period): void {
     closePopover();
     goTo(next);
-    header.querySelector<HTMLElement>('[aria-haspopup="dialog"]')?.focus();
+    controls.querySelector<HTMLElement>('[aria-haspopup="dialog"]')?.focus();
   }
 
   function openPicker(anchor: HTMLButtonElement): void {
@@ -124,8 +140,8 @@ export function createPeriodView(props: PeriodViewProps): PeriodView {
     const isCurrent = isCurrentPeriod(period, new Date());
     headerShowsCurrent = isCurrent;
     headerDay = new Date().toDateString();
-    const focusKey = focusKeyWithin(header);
-    header.replaceChildren(
+    const focusKey = focusKeyWithin(controls);
+    controls.replaceChildren(
       createSegmentedControl({
         options: UNIT_OPTIONS,
         selected: period.unit,
@@ -145,7 +161,7 @@ export function createPeriodView(props: PeriodViewProps): PeriodView {
     );
     // 헤더를 통째로 다시 그리면 눌렀던 버튼이 사라져 포커스가 body로 빠진다 —
     // 키보드로 같은 버튼을 이어서 누를 수 있게 같은 버튼으로 돌려놓는다.
-    restoreFocus(header, focusKey);
+    restoreFocus(controls, focusKey);
   }
 
   function load({ isBackgroundRefresh = false } = {}): void {
