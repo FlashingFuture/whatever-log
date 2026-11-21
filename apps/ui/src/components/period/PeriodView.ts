@@ -51,8 +51,7 @@ export interface PeriodView {
 }
 
 /**
- * 단위 선택(일/주/월) + 구간 이동(← 라벨 →, 라벨을 누르면 달력/목록 팝업) + 그
- * 아래 내용을 묶은 화면 조각. 홈(프로세스별 합계)과 상세(한 프로세스의 칸별)가
+ * 구간 이동(← 라벨 →)과 그 아래 내용을 묶은 화면 조각. 조회 단위(일/주/월)는 줄에 따로 놓지 않고 라벨을 누르면 열리는 팝업(달력/목록) 맨 위에 있다. 홈(프로세스별 합계)과 상세(한 프로세스의 칸별)가
  * 내용만 다르고 이동 방식은 같아서 한곳에 둔다. 상태(보고 있는 구간)는 여기 있다.
  */
 export function createPeriodView(props: PeriodViewProps): PeriodView {
@@ -111,6 +110,10 @@ export function createPeriodView(props: PeriodViewProps): PeriodView {
     controls.querySelector<HTMLElement>('[aria-haspopup="dialog"]')?.focus();
   }
 
+  /**
+   * 날짜 라벨을 누르면 열리는 팝업: 맨 위에 조회 단위(일/주/월), 그 아래에 그 단위의 달력·목록. 단위를 바꾸면 구간을 그 단위로 옮기고 팝업을 새 라벨 버튼
+   * 아래에 다시 연다(라벨이 바뀌면서 기준 버튼이 새로 그려지기 때문이다). 다시 열린 뒤 포커스는 방금 누른 단위 단추로 돌려 키보드로 이어서 바꿀 수 있게 한다.
+   */
   function openPicker(anchor: HTMLButtonElement): void {
     const now = new Date();
     const picker =
@@ -126,7 +129,32 @@ export function createPeriodView(props: PeriodViewProps): PeriodView {
             now,
             onSelect: selectFromPicker,
           });
-    togglePopover(anchor, picker, "구간 선택");
+    const panel = document.createElement("div");
+    panel.className = styles.panel;
+    panel.append(
+      createSegmentedControl({
+        options: UNIT_OPTIONS,
+        selected: period.unit,
+        ariaLabel: "조회 단위",
+        onChange: (unit) => {
+          closePopover();
+          goTo(periodContaining(unit, anchorForUnitChange(period, new Date())));
+          const next = controls.querySelector<HTMLButtonElement>(
+            '[aria-haspopup="dialog"]',
+          );
+          if (next) {
+            openPicker(next);
+            document
+              .querySelector<HTMLElement>(
+                '[role="dialog"][aria-label="구간 선택"] [aria-pressed="true"]',
+              )
+              ?.focus();
+          }
+        },
+      }),
+      picker,
+    );
+    togglePopover(anchor, panel, "구간 선택");
   }
 
   // 마지막으로 그린 헤더가 "현재 구간" 상태였는지 — 주기 갱신 때 바뀐 경우에만
@@ -142,13 +170,6 @@ export function createPeriodView(props: PeriodViewProps): PeriodView {
     headerDay = new Date().toDateString();
     const focusKey = focusKeyWithin(controls);
     controls.replaceChildren(
-      createSegmentedControl({
-        options: UNIT_OPTIONS,
-        selected: period.unit,
-        ariaLabel: "조회 단위",
-        onChange: (unit) =>
-          goTo(periodContaining(unit, anchorForUnitChange(period, new Date()))),
-      }),
       createStepper({
         label: formatPeriod(period),
         hint: isCurrent ? CURRENT_PERIOD_HINT[period.unit] : undefined,
