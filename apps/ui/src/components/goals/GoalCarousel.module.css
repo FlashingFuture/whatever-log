@@ -80,12 +80,16 @@
   justify-content: center;
   gap: var(--space-1);
 }
-/* 화살표 바깥에 연하게 엿보이는 이웃 이름(왼쪽은 뒤 두 글자, 오른쪽은 앞 두 글자). */
+/* 화살표 안쪽에 연하게 엿보이는 이웃 이름(왼쪽은 뒤 두 글자, 오른쪽은 앞 두 글자). 글자 수와 관계없이 두 글자 너비로 고정해 양쪽이 같은 크기다. */
 .hint {
+  flex: none;
+  box-sizing: content-box;
+  width: 2em;
   color: var(--color-text-muted);
-  font-size: var(--text-xs);
-  opacity: 0.7;
+  font-size: var(--text-sm);
+  text-align: center;
   white-space: nowrap;
+  opacity: 0.7;
 }
 .chevron {
   font-size: 1.4rem;

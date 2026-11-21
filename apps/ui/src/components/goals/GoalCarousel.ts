@@ -31,7 +31,7 @@ const MAX_NAME_CHARS = 14;
 /**
  * 홈 맨 위의 목표 캐러셀: "목표 전체 → 목표 1 → … → 목표 N → (다시) 목표 전체"로 이어지는 원형이다. **자동으로 넘어가지 않는다** — 좌우 화살표와
  * 키보드(← →)로만 옮긴다(자동 전환은 읽는 중에 화면이 바뀌고 접근성 규칙도 늘어서 쓰지 않는다). 화살표 바깥에는 이웃 목표를 **연하게 엿보여** 준다:
- * 왼쪽에 앞 칸 이름의 뒤 두 글자, 오른쪽에 다음 칸 이름의 앞 두 글자(힌트이자 화살표 단추의 일부라 눌러도 그쪽으로 간다).
+ * 왼쪽에 앞 칸 이름의 뒤 두 글자, 오른쪽에 다음 칸 이름의 앞 두 글자 — **화살표가 가장 바깥, 연한 글자가 그 안쪽**이다(힌트이자 화살표 단추의 일부라 눌러도 그쪽으로 간다).
  *
  * 홈은 15초마다 내용을 통째로 다시 그린다. 이 캐러셀은 그 바깥(페이지 맨 위)에 한 번만 붙여 두고 `update`로 목록만 갱신한다 — 그래야 포커스가 갱신에 지워지지 않는다.
  * 순서·이동 규칙은 `lib/goalCarousel`(순수 로직)이 갖고 여기서는 그리기만 한다.
@@ -102,13 +102,14 @@ export function createGoalCarousel(props: GoalCarouselProps): GoalCarousel {
     // 화살표 단추: 화살표와 이웃 힌트(연하게). 칸이 하나뿐이면(목표가 없다) 넘길 곳이 없어 힌트도 비운다.
     const alone = count === 1;
     const neighbors = neighborsOf(goals, selectedId);
+    // 화살표가 가장 바깥, 연한 이웃 글자가 그 안쪽(가운데 칸 쪽)이다.
     previous.replaceChildren(
-      hint(alone ? "" : tailChars(neighbors.previous.name)),
       chevron("‹"),
+      hint(alone ? "" : tailChars(neighbors.previous.name)),
     );
     next.replaceChildren(
-      chevron("›"),
       hint(alone ? "" : headChars(neighbors.next.name)),
+      chevron("›"),
     );
     previous.setAttribute(
       "aria-label",
