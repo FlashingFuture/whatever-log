@@ -36,6 +36,8 @@ export interface GoalManager {
   open: () => void;
   /** 모달을 열어 한 목표의 연결 프로세스 관리 화면으로 바로 간다(목표 개요 화면의 "프로세스 연결 관리"). */
   openDetail: (goalId: number) => void;
+  /** 모달을 열어 목표 만들기 폼으로 바로 간다(홈에 목표가 하나도 없을 때의 "목표 만들기"). 취소하면 목록으로 간다. */
+  openCreate: () => void;
   destroy: () => void;
 }
 
@@ -365,6 +367,10 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
     open() {
       modal.open();
       void showList();
+    },
+    openCreate() {
+      modal.open();
+      showForm(null, showList);
     },
     openDetail(goalId) {
       modal.open();

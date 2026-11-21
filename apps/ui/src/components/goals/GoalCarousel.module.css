@@ -1,0 +1,83 @@
+/* 홈 맨 위의 목표 캐러셀: 화살표 · 현재 칸(이름과 위치) · 화살표, 그 아래 점 단추들. 요약 칸(왼쪽)과 같은 너비다. */
+.carousel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.arrow {
+  flex: none;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.arrow:hover:not(:disabled) {
+  background: var(--color-track);
+}
+.arrow:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.arrow:focus-visible,
+.dot:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+.current {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+.name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.position {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+.dots {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-1);
+}
+/* hidden 속성이 display:flex에 가려지지 않게 한다(칸이 하나뿐이면 점을 숨긴다). */
+.dots[hidden] {
+  display: none;
+}
+/* 점 단추: 보이는 점은 작지만 누를 자리는 넉넉하게(투명한 테두리) 둔다. */
+.dot {
+  width: 1rem;
+  height: 1rem;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--color-border);
+  background-clip: content-box;
+  border: 0.3rem solid transparent;
+  cursor: pointer;
+}
+.dot:hover {
+  background-color: var(--color-text-muted);
+}
+.dot[aria-current="true"] {
+  background-color: var(--color-link);
+}
