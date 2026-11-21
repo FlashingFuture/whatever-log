@@ -10,7 +10,7 @@ import {
 import { createMail } from "../src/mail/factory.ts";
 import type { MailMessage, MailPort, SendResult } from "../src/mail/port.ts";
 import { createResendMail } from "../src/mail/resend.ts";
-import { maskEmail } from "../src/mail/testMail.ts";
+import { maskEmail, userKey } from "../src/mail/testMail.ts";
 import { deleteAccount } from "../src/sync/account.ts";
 import { DAY_MS, type Json, setup } from "./helpers/syncFixtures.ts";
 
@@ -313,9 +313,6 @@ test("다른 사용자의 발송은 내 한도를 쓰지 않지만, 서버 전�
 
   // 서버 전체 상한에 닿았다고 만든다(오늘 기록이 상한만큼 있다)
   const day = clock.now.toISOString().slice(0, 10);
-  const user = sqlite.prepare("SELECT id FROM users LIMIT 1").get() as {
-    id: number;
-  };
   const have = (
     sqlite
       .prepare("SELECT COUNT(*) AS n FROM mail_sends WHERE sent_on = ?")
@@ -324,9 +321,9 @@ test("다른 사용자의 발송은 내 한도를 쓰지 않지만, 서버 전�
   for (let n = have; n < LIMITS.perDayTotal; n += 1) {
     sqlite
       .prepare(
-        "INSERT INTO mail_sends (user_id, kind, sent_on, token, created_at) VALUES (?, 'report', ?, ?, ?)",
+        "INSERT INTO mail_sends (user_key, kind, sent_on, token, created_at) VALUES (?, 'report', ?, ?, ?)",
       )
-      .run(user.id, day, `fill-${n}`, clock.now.toISOString());
+      .run("f".repeat(64), day, `fill-${n}`, clock.now.toISOString());
   }
   const third = await signIn("sub-3", "c@example.com");
   const blocked = await call("POST", "/mail/test", { token: third });
@@ -334,26 +331,41 @@ test("다른 사용자의 발송은 내 한도를 쓰지 않지만, 서버 전�
   assert.equal(blocked.json.error.code, "service_daily_limit");
 });
 
-test("발송에 실패하면 잡아 둔 자리를 돌려주고, 실패 이유에 맞는 응답을 한다", async () => {
-  const cases: [SendResult, number, string][] = [
+test("접수되지 않았음이 확실한 실패는 자리를 돌려주고, 접수됐을 수 있는 실패(unavailable)는 자리를 유지한다", async () => {
+  const cases: [SendResult, number, string, number][] = [
     [
       { ok: false, reason: "unauthorized", retryable: false },
       502,
       "mail_not_configured",
+      0,
     ],
-    [{ ok: false, reason: "rejected", retryable: false }, 502, "mail_rejected"],
+    [
+      { ok: false, reason: "rejected", retryable: false },
+      502,
+      "mail_rejected",
+      0,
+    ],
     [
       { ok: false, reason: "rate_limited", retryable: true },
       429,
       "provider_rate_limited",
+      0,
     ],
+    // 서비스가 이미 접수했을 수 있다 — 자리를 돌려주면 재시도가 새 멱등 키로 같은 메일을 한 번 더 보내 실제 발송이 한도를 넘는다
     [
       { ok: false, reason: "unavailable", retryable: true },
       503,
       "mail_unavailable",
+      1,
+    ],
+    [
+      { ok: false, reason: "unavailable", retryable: false, detail: "no_id" },
+      503,
+      "mail_unavailable",
+      1,
     ],
   ];
-  for (const [result, status, code] of cases) {
+  for (const [result, status, code, kept] of cases) {
     const { call, signIn, port, sqlite } = mailSetup();
     port.result = result;
     const token = await signIn();
@@ -366,22 +378,36 @@ test("발송에 실패하면 잡아 둔 자리를 돌려주고, 실패 이유에
           n: number;
         }
       ).n,
-      0,
+      kept,
+      `${result.ok ? "" : result.reason}/${result.ok ? "" : result.detail}`,
     );
   }
 });
 
-test("실패가 한도를 깎지 않아서, 실패를 여러 번 겪은 뒤에도 한도만큼 보낼 수 있다", async () => {
+test("확실한 실패(거절·키 오류·한도)는 한도를 깎지 않아서, 여러 번 겪은 뒤에도 한도만큼 보낼 수 있다", async () => {
   const { call, signIn, port } = mailSetup();
   const token = await signIn();
-  port.result = { ok: false, reason: "unavailable", retryable: true };
+  port.result = { ok: false, reason: "rejected", retryable: false };
   for (let n = 0; n < LIMITS.testPerUserPerDay + 2; n += 1) {
-    assert.equal((await call("POST", "/mail/test", { token })).status, 503);
+    assert.equal((await call("POST", "/mail/test", { token })).status, 502);
   }
   port.result = { ok: true, id: "ok" };
   for (let n = 0; n < LIMITS.testPerUserPerDay; n += 1) {
     assert.equal((await call("POST", "/mail/test", { token })).status, 200);
   }
+});
+
+test("응답을 확인하지 못한 실패는 사용자의 하루 한도에 들어가고, 안내에 메일이 이미 갔을 수 있다고 알린다", async () => {
+  const { call, signIn, port } = mailSetup();
+  const token = await signIn();
+  port.result = { ok: false, reason: "unavailable", retryable: true };
+  for (let n = 0; n < LIMITS.testPerUserPerDay; n += 1) {
+    const { status, json: body } = await call("POST", "/mail/test", { token });
+    assert.equal(status, 503);
+    assert.match(body.error.message, /이미 갔을 수/);
+  }
+  port.result = { ok: true, id: "ok" };
+  assert.equal((await call("POST", "/mail/test", { token })).status, 429);
 });
 
 test("샌드박스 발신에서 거절되면 도메인 설정이 필요하다고 알린다", async () => {
@@ -392,25 +418,93 @@ test("샌드박스 발신에서 거절되면 도메인 설정이 필요하다고
   assert.match(body.error.message, /도메인/);
 });
 
-test("성공한 발송은 접수 번호를 기록하고, 계정을 지우면 기록도 지워진다", async () => {
-  const { call, signIn, sqlite, db } = mailSetup();
+test("성공한 발송은 접수 번호를 기록한다", async () => {
+  const { call, signIn, sqlite } = mailSetup();
   const token = await signIn();
   await call("POST", "/mail/test", { token });
   const row = sqlite
     .prepare("SELECT kind, provider_id FROM mail_sends")
     .get() as { kind: string; provider_id: string };
   assert.deepEqual({ ...row }, { kind: "test", provider_id: "msg-1" });
+});
+
+test("계정을 지웠다 같은 Google 계정으로 다시 로그인해도 사용자별 한도가 이어진다", async () => {
+  const { call, signIn, sqlite, db, port } = mailSetup();
+  const token = await signIn("sub-1", "a@example.com");
+  for (let n = 0; n < LIMITS.testPerUserPerDay; n += 1) {
+    assert.equal((await call("POST", "/mail/test", { token })).status, 200);
+  }
 
   const user = sqlite.prepare("SELECT id FROM users").get() as { id: number };
   await deleteAccount(db as never, user.id);
+  const again = await signIn("sub-1", "a@example.com"); // 새 users 행(새 id)
+  const blocked = await call("POST", "/mail/test", { token: again });
+
+  assert.equal(blocked.status, 429);
+  assert.equal(blocked.json.error.code, "daily_limit");
+  assert.equal(port.sent.length, LIMITS.testPerUserPerDay);
+  // 다른 Google 계정은 영향을 받지 않는다
+  const other = await signIn("sub-2", "b@example.com");
   assert.equal(
+    (await call("POST", "/mail/test", { token: other })).status,
+    200,
+  );
+});
+
+test("계정을 지워도 서버 전체 발송 횟수는 줄지 않는다", async () => {
+  const { call, signIn, sqlite, db } = mailSetup();
+  const token = await signIn("sub-1", "a@example.com");
+  await call("POST", "/mail/test", { token });
+  await call("POST", "/mail/test", { token });
+  const count = () =>
     (
       sqlite.prepare("SELECT COUNT(*) AS n FROM mail_sends").get() as {
         n: number;
       }
-    ).n,
+    ).n;
+  assert.equal(count(), 2);
+
+  const user = sqlite.prepare("SELECT id FROM users").get() as { id: number };
+  await deleteAccount(db as never, user.id);
+  assert.equal(count(), 2);
+});
+
+test("발송 기록은 계정 행을 참조하지 않고(연쇄 삭제 없음), 사용자 키는 sub의 해시이다", async () => {
+  const { call, signIn, sqlite } = mailSetup();
+  const token = await signIn("sub-secret-1", "a@example.com");
+  await call("POST", "/mail/test", { token });
+  assert.equal(
+    sqlite.prepare("PRAGMA foreign_key_list(mail_sends)").all().length,
     0,
   );
+  const row = sqlite.prepare("SELECT user_key FROM mail_sends").get() as {
+    user_key: string;
+  };
+  assert.equal(row.user_key, await userKey("sub-secret-1"));
+  assert.match(row.user_key, /^[0-9a-f]{64}$/);
+  assert.ok(!row.user_key.includes("sub-secret-1"));
+  assert.notEqual(await userKey("sub-1"), await userKey("sub-2"));
+});
+
+test("이틀이 지난 발송 기록은 다음 발송 때 지워진다", async () => {
+  const { call, signIn, sqlite, clock } = mailSetup();
+  const token = await signIn();
+  await call("POST", "/mail/test", { token });
+  const have = () =>
+    (
+      sqlite.prepare("SELECT COUNT(*) AS n FROM mail_sends").get() as {
+        n: number;
+      }
+    ).n;
+  assert.equal(have(), 1);
+
+  clock.now = new Date(clock.now.getTime() + 2 * DAY_MS); // 2일 뒤: 아직 보관 기간 안
+  await call("POST", "/mail/test", { token });
+  assert.equal(have(), 2);
+
+  clock.now = new Date(clock.now.getTime() + DAY_MS); // 3일 뒤: 첫 기록이 지나갔다
+  await call("POST", "/mail/test", { token });
+  assert.equal(have(), 2);
 });
 
 test("발송 기록에는 주소·제목·본문을 담는 칸이 없다", () => {
@@ -421,7 +515,7 @@ test("발송 기록에는 주소·제목·본문을 담는 칸이 없다", () =>
     .map((row) => row.name);
   assert.deepEqual(columns, [
     "id",
-    "user_id",
+    "user_key",
     "kind",
     "sent_on",
     "token",

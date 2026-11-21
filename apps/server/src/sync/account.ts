@@ -16,7 +16,7 @@ export async function deleteAccount(db: Db, userId: number): Promise<void> {
   await db.batch([
     db.prepare("DELETE FROM progress WHERE user_id = ?").bind(userId),
     db.prepare("DELETE FROM goals WHERE user_id = ?").bind(userId),
-    db.prepare("DELETE FROM mail_sends WHERE user_id = ?").bind(userId),
+    // 메일 발송 기록(mail_sends)은 일부러 지우지 않는다 — 계정을 지웠다 다시 만들어 일일 한도를 되돌리지 못하게(해시와 날짜뿐이고 며칠 뒤 자동으로 사라진다).
     db.prepare("DELETE FROM tokens WHERE user_id = ?").bind(userId),
     db.prepare("DELETE FROM users WHERE id = ?").bind(userId),
   ]);

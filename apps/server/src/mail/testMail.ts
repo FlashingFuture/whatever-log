@@ -32,8 +32,29 @@ const BODY_LINES = [
  * 우리 도메인으로 아무에게나 보내는 스팸 중계가 되지 않는다.
  *
  * 한도(사용자별·서버 전체 일일 상한)는 "확인 + 자리 잡기"를 한 문장으로 해서(동시에 요청이 몰려도 넘지 않는다) 먼저 통과해야 보낸다.
- * 발송에 실패하면 잡은 자리를 돌려준다(실패가 한도를 깎지 않는다).
+ *
+ * - **계정을 지워도 한도는 이어진다:** 사용자별 횟수는 계정(`users.id`)이 아니라 Google 계정 고유 값의 해시(`userKey`)로 센다. 계정 삭제는 이 기록을 지우지 않고
+ *   재로그인해도 같은 키라, "발송 → 삭제 → 재로그인"으로 한도를 되돌릴 수 없다. 서버 전체 횟수도 줄지 않는다.
+ * - **자리를 돌려주는 때:** 서비스가 **접수하지 않았음이 확실한** 실패(키 오류, 거절, 한도)만 자리를 돌려준다. `unavailable`(5xx·네트워크·시간 초과·접수 번호 없음)은
+ *   서비스가 이미 접수했을 수 있어서 자리를 **유지한다** — 돌려주면 재시도가 새 멱등 키로 같은 메일을 한 번 더 보내 실제 발송이 한도를 넘을 수 있다.
  */
+/** 발송 기록을 이 기간(일)만 남긴다. 한도는 오늘 기록만 세므로 그 이상 보관할 이유가 없다 — 해시라도 필요 이상 오래 남기지 않는다. */
+export const RETENTION_DAYS = 2;
+
+/**
+ * 계정과 무관한 사용자 키: Google 계정 고유 값(sub)의 SHA-256(16진 64자). 원문을 남기지 않고, 같은 Google 계정이면 삭제·재로그인 뒤에도 같다.
+ * 접두사 `mail:`로 이 용도의 해시를 다른 곳의 해시와 구분한다.
+ */
+export async function userKey(googleSub: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`mail:${googleSub}`),
+  );
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 export async function sendTestMail(
   db: Db,
   userId: number,
@@ -41,9 +62,9 @@ export async function sendTestMail(
   now: Date,
 ): Promise<TestMailResult> {
   const user = await db
-    .prepare("SELECT email FROM users WHERE id = ?")
+    .prepare("SELECT email, google_sub FROM users WHERE id = ?")
     .bind(userId)
-    .first<{ email: string }>();
+    .first<{ email: string; google_sub: string }>();
   if (!user) {
     return {
       ok: false,
@@ -54,16 +75,25 @@ export async function sendTestMail(
   }
 
   const day = now.toISOString().slice(0, 10);
+  const key = await userKey(user.google_sub);
   const token = crypto.randomUUID();
+  // 오래된 기록을 지운다(오늘 이후만 한도에 쓰인다).
+  const oldest = new Date(now.getTime() - RETENTION_DAYS * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
+  await db
+    .prepare("DELETE FROM mail_sends WHERE sent_on < ?")
+    .bind(oldest)
+    .run();
   const reserved = await db
     .prepare(
-      `INSERT INTO mail_sends (user_id, kind, sent_on, token, created_at)
+      `INSERT INTO mail_sends (user_key, kind, sent_on, token, created_at)
        SELECT ?1, 'test', ?2, ?3, ?4
        WHERE (SELECT COUNT(*) FROM mail_sends WHERE sent_on = ?2) < ?5
-         AND (SELECT COUNT(*) FROM mail_sends WHERE sent_on = ?2 AND user_id = ?1 AND kind = 'test') < ?6`,
+         AND (SELECT COUNT(*) FROM mail_sends WHERE sent_on = ?2 AND user_key = ?1 AND kind = 'test') < ?6`,
     )
     .bind(
-      userId,
+      key,
       day,
       token,
       now.toISOString(),
@@ -74,9 +104,9 @@ export async function sendTestMail(
   if (reserved.meta.changes === 0) {
     const mine = await db
       .prepare(
-        "SELECT COUNT(*) AS n FROM mail_sends WHERE sent_on = ? AND user_id = ? AND kind = 'test'",
+        "SELECT COUNT(*) AS n FROM mail_sends WHERE sent_on = ? AND user_key = ? AND kind = 'test'",
       )
-      .bind(day, userId)
+      .bind(day, key)
       .first<{ n: number }>();
     const personal = (mine?.n ?? 0) >= LIMITS.testPerUserPerDay;
     return {
@@ -107,7 +137,13 @@ export async function sendTestMail(
     return { ok: true, mode: mail.sender.mode, to: maskEmail(user.email) };
   }
 
-  await db.prepare("DELETE FROM mail_sends WHERE token = ?").bind(token).run();
+  // 접수되지 않았음이 확실한 실패만 자리를 돌려준다. unavailable은 접수됐을 수 있어 유지한다(위 설명).
+  if (result.reason !== "unavailable") {
+    await db
+      .prepare("DELETE FROM mail_sends WHERE token = ?")
+      .bind(token)
+      .run();
+  }
   switch (result.reason) {
     case "unauthorized":
       return {
@@ -138,7 +174,8 @@ export async function sendTestMail(
         ok: false,
         status: 503,
         code: "mail_unavailable",
-        message: "메일 서비스에 연결하지 못했어요. 잠시 뒤 다시 시도해 주세요.",
+        message:
+          "메일 서비스의 응답을 확인하지 못했어요. 메일이 이미 갔을 수 있으니 받은편지함을 확인하고, 오지 않으면 잠시 뒤 다시 시도해 주세요.",
       };
   }
 }
