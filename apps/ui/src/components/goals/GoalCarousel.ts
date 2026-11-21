@@ -104,12 +104,12 @@ export function createGoalCarousel(props: GoalCarouselProps): GoalCarousel {
     const neighbors = neighborsOf(goals, selectedId);
     // 화살표가 가장 바깥, 연한 이웃 글자가 그 안쪽(가운데 칸 쪽)이다.
     previous.replaceChildren(
-      chevron("‹"),
+      chevron("←"),
       hint(alone ? "" : tailChars(neighbors.previous.name)),
     );
     next.replaceChildren(
       hint(alone ? "" : headChars(neighbors.next.name)),
-      chevron("›"),
+      chevron("→"),
     );
     previous.setAttribute(
       "aria-label",
