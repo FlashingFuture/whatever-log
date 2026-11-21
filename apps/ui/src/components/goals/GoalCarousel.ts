@@ -5,9 +5,9 @@ import {
   neighborsOf,
   positionOf,
   stepSelection,
-  tailChars,
 } from "../../lib/goalCarousel";
 import { createRouteLink } from "../../router/router";
+import { createTripleNav, type TripleNavState } from "../common/TripleNav";
 import styles from "./GoalCarousel.module.css";
 
 export interface GoalCarouselProps {
@@ -25,13 +25,13 @@ export interface GoalCarousel {
   destroy: () => void;
 }
 
-// 좁은 요약 칸에 긴 이름이 넘치지 않게 줄인다(전체 이름은 title과 점 단추의 이름에 있다).
+// 좁은 요약 칸에 긴 이름이 넘치지 않게 줄인다(전체 이름은 title에 있다).
 const MAX_NAME_CHARS = 14;
 
 /**
  * 홈 맨 위의 목표 캐러셀: "목표 전체 → 목표 1 → … → 목표 N → (다시) 목표 전체"로 이어지는 원형이다. **자동으로 넘어가지 않는다** — 좌우 화살표와
  * 키보드(← →)로만 옮긴다(자동 전환은 읽는 중에 화면이 바뀌고 접근성 규칙도 늘어서 쓰지 않는다). 화살표 바깥에는 이웃 목표를 **연하게 엿보여** 준다:
- * 왼쪽에 앞 칸 이름의 뒤 두 글자, 오른쪽에 다음 칸 이름의 앞 두 글자 — **화살표가 가장 바깥, 연한 글자가 그 안쪽**이다(힌트이자 화살표 단추의 일부라 눌러도 그쪽으로 간다).
+ * 양쪽 모두 이웃 칸 이름의 **앞 두 글자** — **화살표가 가장 바깥, 연한 글자가 그 안쪽**이다(힌트이자 화살표 단추의 일부라 눌러도 그쪽으로 간다). 단추 둘과 가운데 칸의 틀은 날짜 이동과 같은 `TripleNav`(테두리 없는 쪽)다.
  *
  * 홈은 15초마다 내용을 통째로 다시 그린다. 이 캐러셀은 그 바깥(페이지 맨 위)에 한 번만 붙여 두고 `update`로 목록만 갱신한다 — 그래야 포커스가 갱신에 지워지지 않는다.
  * 순서·이동 규칙은 `lib/goalCarousel`(순수 로직)이 갖고 여기서는 그리기만 한다.
@@ -46,23 +46,40 @@ export function createGoalCarousel(props: GoalCarouselProps): GoalCarousel {
   root.setAttribute("aria-roledescription", "캐러셀");
   root.setAttribute("aria-label", "목표 보기");
 
-  const previous = document.createElement("button");
-  previous.type = "button";
-  previous.className = styles.arrow;
-
-  const next = document.createElement("button");
-  next.type = "button";
-  next.className = styles.arrow;
-
   const current = document.createElement("div");
   current.className = styles.current;
   // 사용자가 눌러서 바뀐 것만 알리므로(자동으로 바뀌지 않는다) 스크린 리더에 읽어 준다.
   current.setAttribute("aria-live", "polite");
 
-  const row = document.createElement("div");
-  row.className = styles.row;
-  row.append(previous, current, next);
-  root.append(row);
+  const nav = createTripleNav({
+    center: current,
+    bordered: false,
+    pulse: true,
+    onPrevious: () => step(-1),
+    onNext: () => step(1),
+    state: navState(),
+  });
+  root.append(nav.element);
+
+  /** 지금 목표와 이웃에 맞춘 단추 상태. 칸이 하나뿐이면(목표가 없다) 넘길 곳이 없어 비활성이고 이웃 글자는 비어 있다. */
+  function navState(): TripleNavState {
+    const alone = goals.length === 0;
+    const { previous, next } = neighborsOf(goals, selectedId);
+    return {
+      previous: {
+        hint: alone ? "" : headChars(previous.name),
+        ariaLabel: alone ? "이전 목표" : `이전 목표: ${previous.name}`,
+        title: alone ? "" : previous.name,
+        disabled: alone,
+      },
+      next: {
+        hint: alone ? "" : headChars(next.name),
+        ariaLabel: alone ? "다음 목표" : `다음 목표: ${next.name}`,
+        title: alone ? "" : next.name,
+        disabled: alone,
+      },
+    };
+  }
 
   function choose(id: number | null): void {
     selectedId = id;
@@ -99,51 +116,9 @@ export function createGoalCarousel(props: GoalCarouselProps): GoalCarousel {
     }
     center.append(name);
     current.replaceChildren(center);
-    // 화살표 단추: 화살표와 이웃 힌트(연하게). 칸이 하나뿐이면(목표가 없다) 넘길 곳이 없어 힌트도 비운다.
-    const alone = count === 1;
-    const neighbors = neighborsOf(goals, selectedId);
-    // 화살표가 가장 바깥, 연한 이웃 글자가 그 안쪽(가운데 칸 쪽)이다.
-    previous.replaceChildren(
-      chevron("←"),
-      hint(alone ? "" : tailChars(neighbors.previous.name)),
-    );
-    next.replaceChildren(
-      hint(alone ? "" : headChars(neighbors.next.name)),
-      chevron("→"),
-    );
-    previous.setAttribute(
-      "aria-label",
-      alone ? "이전 목표" : `이전 목표: ${neighbors.previous.name}`,
-    );
-    next.setAttribute(
-      "aria-label",
-      alone ? "다음 목표" : `다음 목표: ${neighbors.next.name}`,
-    );
-    previous.title = alone ? "" : neighbors.previous.name;
-    next.title = alone ? "" : neighbors.next.name;
-    previous.disabled = alone;
-    next.disabled = alone;
+    nav.update(navState());
   }
 
-  /** 이웃 이름의 일부(사용자 입력이라 textContent로만). 눈에는 연하게 보이고 스크린 리더는 단추 이름이 따로 있어 읽지 않는다. */
-  function hint(text: string): HTMLSpanElement {
-    const element = document.createElement("span");
-    element.className = styles.hint;
-    element.setAttribute("aria-hidden", "true");
-    element.textContent = text;
-    return element;
-  }
-
-  function chevron(symbol: string): HTMLSpanElement {
-    const element = document.createElement("span");
-    element.className = styles.chevron;
-    element.setAttribute("aria-hidden", "true");
-    element.textContent = symbol;
-    return element;
-  }
-
-  previous.addEventListener("click", () => step(-1));
-  next.addEventListener("click", () => step(1));
   root.addEventListener("keydown", (event) => {
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
       return;

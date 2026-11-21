@@ -63,12 +63,7 @@ export function neighborsOf(
   };
 }
 
-/** 이름의 **뒤** n글자(왼쪽 화살표 옆에 연하게 보이는 이웃 힌트). 글자 단위(이모지·한글 조합)로 센다. */
-export function tailChars(text: string, count = 2): string {
-  return Array.from(text).slice(-count).join("");
-}
-
-/** 이름의 **앞** n글자(오른쪽 화살표 옆에 연하게 보이는 이웃 힌트). */
+/** 이름의 **앞** n글자(양쪽 화살표 안쪽에 연하게 보이는 이웃 힌트). 글자 단위(이모지·한글 조합)로 센다. */
 export function headChars(text: string, count = 2): string {
   return Array.from(text).slice(0, count).join("");
 }

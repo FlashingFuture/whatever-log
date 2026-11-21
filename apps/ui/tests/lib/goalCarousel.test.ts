@@ -8,7 +8,6 @@ import {
   neighborsOf,
   positionOf,
   stepSelection,
-  tailChars,
 } from "../../src/lib/goalCarousel.ts";
 
 const GOALS = [
@@ -76,13 +75,12 @@ test("칸이 하나뿐이면 이웃은 자기 자신이다", () => {
   assert.deepEqual(neighborsOf([], null), { previous: only, next: only });
 });
 
-test("이웃 힌트는 이름의 뒤 두 글자(왼쪽)와 앞 두 글자(오른쪽)이다", () => {
-  assert.equal(tailChars("프로젝트 알파"), "알파");
+test("이웃 힌트는 이름의 앞 두 글자이다", () => {
   assert.equal(headChars("프로젝트 알파"), "프로");
-  assert.equal(tailChars("공부"), "공부");
+  assert.equal(headChars("공부"), "공부");
   assert.equal(headChars("A"), "A");
-  assert.equal(tailChars(""), "");
+  assert.equal(headChars(""), "");
   // 이모지처럼 코드 단위가 둘인 글자도 한 글자로 센다
   assert.equal(headChars("😀😀😀"), "😀😀");
-  assert.equal(tailChars("가😀나"), "😀나");
+  assert.equal(headChars("가😀나"), "가😀");
 });
