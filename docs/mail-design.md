@@ -63,6 +63,8 @@ PC(앱) ──▶ 서버(Workers) ──▶ 메일 서비스(Resend) ──▶ �
 
 ## 도메인을 산 뒤
 
+> 어떤 도메인을 어디서 왜 샀는지는 `docs/domain-decision.md`(결정 기록과 구매·연결 절차 전체).
+
 1. Cloudflare Registrar에서 도메인을 산다(원가 판매, 연 $10 안팎).
 2. Resend에서 그 도메인을 추가하고, 알려 주는 **SPF·DKIM(·DMARC) DNS 레코드**를 Cloudflare DNS에 넣어 인증을 마친다. 발신 주소의 도메인이 서명 도메인과 같아야(정렬) 스팸함으로 가지 않는다.
 3. `wrangler.toml`의 `MAIL_FROM_DOMAIN`을 채우고 배포한다. 운영 키는 `wrangler secret put RESEND_API_KEY`, DB는 `wrangler d1 migrations apply DB --remote`.
