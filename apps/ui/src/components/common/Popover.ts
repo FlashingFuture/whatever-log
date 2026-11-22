@@ -32,6 +32,13 @@ export function closePopoverFor(
   }
 }
 
+/** container 안에 붙은 팝업을 닫는다(모달이 장면을 바꿀 때 — anchor가 사라진 팝업이 새 장면 위에 남지 않게). */
+export function closePopoverWithin(container: Node): void {
+  if (active && container.contains(active.element)) {
+    active.close();
+  }
+}
+
 /**
  * anchor 아래에 content를 띄운다. 같은 anchor로 다시 부르면 닫는다(토글).
  * 바깥을 누르거나 Esc를 누르면 닫힌다.
@@ -59,7 +66,8 @@ export function togglePopover(
   popover.setAttribute("role", "dialog");
   popover.setAttribute("aria-label", ariaLabel);
   popover.append(content);
-  (anchor.closest("dialog[open]") ?? document.body).append(popover);
+  const owner = anchor.closest("dialog[open]");
+  (owner ?? document.body).append(popover);
   place(popover, anchor);
   anchor.setAttribute("aria-expanded", "true");
 
@@ -83,6 +91,11 @@ export function togglePopover(
     place(popover, anchor);
   }
 
+  // 팝업을 품은 모달이 (닫기 버튼 등으로) 닫히면 팝업과 전역 리스너도 함께 정리한다 — 다시 열었을 때 옛 팝업이 남아 있지 않게.
+  function onOwnerClose(): void {
+    close();
+  }
+
   function close({ restoreFocus = false }: CloseOptions = {}): void {
     if (active?.element !== popover) {
       return;
@@ -92,6 +105,7 @@ export function togglePopover(
     document.removeEventListener("keydown", onKeyDown, true);
     window.removeEventListener("resize", onReposition);
     document.removeEventListener("scroll", onReposition, true);
+    owner?.removeEventListener("close", onOwnerClose);
     popover.remove();
     anchor.setAttribute("aria-expanded", "false");
     if (restoreFocus && anchor.isConnected) {
@@ -103,6 +117,7 @@ export function togglePopover(
   document.addEventListener("keydown", onKeyDown, true);
   window.addEventListener("resize", onReposition);
   document.addEventListener("scroll", onReposition, true);
+  owner?.addEventListener("close", onOwnerClose);
   active = { anchor, element: popover, close };
 
   focusInitial(popover);

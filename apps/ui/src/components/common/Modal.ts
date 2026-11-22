@@ -1,5 +1,6 @@
 import { createIconButton } from "./IconButton";
 import styles from "./Modal.module.css";
+import { closePopoverWithin } from "./Popover";
 
 /** 모달에 한 번에 보여 주는 한 장면(제목 + 내용). 장면을 바꿀 때마다 show로 통째로 갈아 끼운다. */
 export interface ModalView {
@@ -68,7 +69,9 @@ export function createModal(props: ModalProps): Modal {
   function show(view: ModalView): void {
     // 장면을 통째로 갈아 끼우면 눌렀던 버튼이 사라져 포커스가 문서 맨 위로 빠진다 — 모달 안에 있던 포커스는
     // 새 제목으로 옮겨 키보드·스크린 리더 사용자가 모달 안에 머물게 한다.
+    // 팝업 안의 포커스도 "모달 안"이다 — 포커스를 먼저 확인하고, 이전 장면의 버튼에 붙은 팝업은 장면과 함께 닫는다.
     const hadFocus = dialog.contains(document.activeElement);
+    closePopoverWithin(dialog);
     const title = document.createElement("h2");
     title.tabIndex = -1;
     title.className = styles.title;

@@ -42,7 +42,8 @@ export function createPeriodField(props: PeriodFieldProps): PeriodField {
   const root = document.createElement("div");
   root.className = styles.field;
 
-  function render(): void {
+  /** 다시 그린다. focus를 주면 새로 그린 그 버튼으로 포커스를 돌린다(누른 버튼이 다시 그리며 사라지므로) — 처음 그릴 때는 주지 않는다. */
+  function render(focus?: "none" | "set"): void {
     const toggle = document.createElement("div");
     toggle.className = styles.toggle;
     toggle.setAttribute("role", "group");
@@ -53,7 +54,7 @@ export function createPeriodField(props: PeriodFieldProps): PeriodField {
         pressed: !enabled,
         onClick: () => {
           enabled = false;
-          render();
+          render("none");
         },
       }),
       createButton({
@@ -61,15 +62,19 @@ export function createPeriodField(props: PeriodFieldProps): PeriodField {
         pressed: enabled,
         onClick: () => {
           enabled = true;
-          render();
+          render("set");
         },
       }),
     );
     root.replaceChildren(toggle);
-    if (!enabled) {
-      return;
+    if (enabled) {
+      root.append(dateRow("start", "시작일"), dateRow("end", "종료일"));
     }
-    root.append(dateRow("start", "시작일"), dateRow("end", "종료일"));
+    if (focus) {
+      (
+        toggle.children[focus === "none" ? 0 : 1] as HTMLElement | undefined
+      )?.focus();
+    }
   }
 
   /** 날짜 한 줄: 라벨 + 고른 날(누르면 그 버튼에 붙은 달력 팝업을 열고 닫는다). */
