@@ -87,18 +87,25 @@ export function createGoalCarousel(props: GoalCarouselProps): GoalCarousel {
     props.onSelect(id);
   }
 
+  // 마지막으로 넘긴 방향. 가운데 칸에 있던 포커스를 단추로 돌려보낼 때 그쪽 단추를 고른다.
+  let lastDelta: 1 | -1 = 1;
+  // 지금 그려 둔 가운데 칸의 내용 키(선택·이름·위치). 같으면 가운데 칸을 다시 만들지 않는다.
+  let centerKey = "";
+
   function step(delta: 1 | -1): void {
+    lastDelta = delta;
     choose(stepSelection(goals, selectedId, delta));
   }
 
-  function render(): void {
-    const items = carouselItems(goals);
-    const { index, count } = positionOf(goals, selectedId);
-    const item = items[index];
+  /** 가운데 칸: 목표 하나를 보는 중이면 누르면 그 목표의 개요 화면으로 가는 링크(손 모양 커서, 올리면 회색), 목표 전체는 갈 곳이 없어 그냥 글자다(평범한 커서). */
+  function createCenter(
+    item: { id: number | null; name: string },
+    index: number,
+    count: number,
+  ): HTMLElement {
     const name = document.createElement("span");
     name.className = styles.name;
     name.textContent = truncateName(item.name, MAX_NAME_CHARS); // 목표 이름은 사용자 입력이라 textContent로만 넣는다
-    // 가운데 칸: 목표 하나를 보는 중이면 누르면 그 목표의 개요 화면으로 가는 링크(손 모양 커서, 올리면 회색), 목표 전체는 갈 곳이 없어 그냥 글자다(평범한 커서).
     let center: HTMLElement;
     if (item.id === null) {
       center = document.createElement("div");
@@ -115,7 +122,30 @@ export function createGoalCarousel(props: GoalCarouselProps): GoalCarousel {
       );
     }
     center.append(name);
-    current.replaceChildren(center);
+    return center;
+  }
+
+  function render(): void {
+    const items = carouselItems(goals);
+    const { index, count } = positionOf(goals, selectedId);
+    const item = items[index];
+    // 홈이 15초마다 목록을 다시 넘겨도(update) 같은 칸이면 가운데 칸을 그대로 둔다 — 다시 만들면 포커스가 있던 링크가 사라져 키보드 이동이 끊긴다.
+    const key = `${item.id}|${item.name}|${index}|${count}`;
+    if (key !== centerKey) {
+      // 포커스가 가운데 칸 안에 있었을 때만(밖의 포커스는 가져오지 않는다) 새 가운데 링크로, 링크가 없는 칸(목표 전체)이면 넘긴 방향의 단추로 옮긴다.
+      const hadFocus = current.contains(document.activeElement);
+      const center = createCenter(item, index, count);
+      current.replaceChildren(center);
+      centerKey = key;
+      if (hadFocus) {
+        (center instanceof HTMLAnchorElement
+          ? center
+          : lastDelta === -1
+            ? nav.previous
+            : nav.next
+        ).focus();
+      }
+    }
     nav.update(navState());
   }
 

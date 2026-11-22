@@ -22,8 +22,8 @@ export interface TripleNavProps {
   /** 단추에 테두리를 둘지(날짜 이동) 말지(목표 캐러셀). 이 컴포넌트가 주는 유일한 모양 선택이다. */
   bordered: boolean;
   /**
-   * 화살표와 이웃 글자가 천천히 진해졌다 옅어진다(주의를 끌고 싶은 곳에서만 켠다). 마우스를 올리거나 포커스가 있으면 멈추고,
-   * 움직임 줄이기 설정이면 움직이지 않는다.
+   * 화살표와 이웃 글자가 천천히 진해졌다 옅어진다(주의를 끌고 싶은 곳에서만 켠다). 마우스를 올리거나 포커스가 있는 동안에는 애니메이션이 꺼지고
+   * 또렷하게 보이며, 움직임 줄이기 설정이면 움직이지 않는다.
    */
   pulse?: boolean;
   onPrevious: () => void;
@@ -35,6 +35,9 @@ export interface TripleNav {
   element: HTMLElement;
   /** 단추의 글자·이름·비활성 상태를 그 자리에서 바꾼다(단추를 다시 만들지 않아 포커스가 유지된다). */
   update: (state: TripleNavState) => void;
+  /** 왼쪽·오른쪽 단추(포커스를 옮겨야 할 때). 한 번 만들면 바뀌지 않는다. */
+  previous: HTMLButtonElement;
+  next: HTMLButtonElement;
 }
 
 /**
@@ -67,7 +70,7 @@ export function createTripleNav(props: TripleNavProps): TripleNav {
     fill(next, "→", state.next, "next");
   }
   update(props.state);
-  return { element: root, update };
+  return { element: root, update, previous, next };
 }
 
 function createSideButton(
