@@ -345,6 +345,9 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
         weekdays: goal.weekdays,
         processes,
         sites,
+        // 연결만 바꾸는 수정이라 기간은 지금 값을 그대로 보낸다(서버는 같은 값을 과거여도 받는다).
+        start_date: goal.start_date,
+        end_date: goal.end_date,
       });
       notifyChange();
       if (scene === sceneId) {

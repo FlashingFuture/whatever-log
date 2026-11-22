@@ -7,6 +7,7 @@ import {
 import { WEEKDAY_LABELS } from "../../lib/goalText";
 import { createButton } from "../common/Button";
 import styles from "./GoalForm.module.css";
+import { createPeriodField } from "./PeriodField";
 
 export interface GoalFormProps {
   /** 수정이면 그 목표, 새로 만들면 null. */
@@ -18,7 +19,12 @@ export interface GoalFormProps {
   onCancel: () => void;
 }
 
-const FORM_FIELDS = ["name", "daily_target_minutes", "weekdays"] as const;
+const FORM_FIELDS = [
+  "name",
+  "daily_target_minutes",
+  "weekdays",
+  "period",
+] as const;
 
 /**
  * 목표 시간 칸의 글자를 서버에 보낼 값으로: 10진 정수로만 이뤄진 글자(앞의 0 없이)면 숫자, 아니면 글자 그대로
@@ -29,7 +35,7 @@ function minutesValue(text: string): number | string {
 }
 
 /**
- * 목표 만들기·수정 폼(이름, 하루 목표 시간, 적용 요일). 규칙은 서버(packages/goals)가 엄격하게 검증하므로
+ * 목표 만들기·수정 폼(이름, 하루 목표 시간, 적용 요일, 기간). 규칙은 서버(packages/goals)가 엄격하게 검증하므로
  * 여기서는 다시 구현하지 않고, 서버가 돌려준 칸별 오류를 그 칸 옆에 그대로 보여 준다. 이름 앞뒤 공백만
  * 입력 편의로 지우고 나머지 값은 사용자가 넣은 그대로 보낸다. 연결 프로세스·사이트는 이 폼에서 바꾸지 않는다(수정할
  * 때 기존 연결을 그대로 보낸다 — 연결은 상세 화면에서 한다).
@@ -103,6 +109,12 @@ export function createGoalForm(props: GoalFormProps): HTMLElement {
     weekdays.append(toggle);
   });
 
+  // 기간: 없음 / 설정(시작일·종료일, 달력으로 고른다). 새 목표는 기간 없음에서 시작한다.
+  const period = createPeriodField({
+    start: props.goal?.start_date ?? null,
+    end: props.goal?.end_date ?? null,
+  });
+
   const submit = document.createElement("button");
   submit.type = "submit";
   submit.className = styles.submit;
@@ -126,8 +138,15 @@ export function createGoalForm(props: GoalFormProps): HTMLElement {
     field("name", "이름", nameInput),
     field("daily_target_minutes", "하루 목표 시간(분)", minutesInput),
     field("weekdays", "적용 요일", weekdays),
+    field("period", "기간", period.element),
     actions,
   );
+  // 서버의 기간 오류(시작일·종료일 칸)는 기간 칸 아래에 보인다.
+  const periodSlot = errorSlots.get("period");
+  if (periodSlot) {
+    errorSlots.set("start_date", periodSlot);
+    errorSlots.set("end_date", periodSlot);
+  }
 
   function showErrors(errors: readonly FieldError[], fallback: string): void {
     for (const slot of errorSlots.values()) {
@@ -165,6 +184,8 @@ export function createGoalForm(props: GoalFormProps): HTMLElement {
         weekdays: [...selected].sort((a, b) => a - b),
         processes: props.goal?.processes ?? [],
         sites: props.goal?.sites ?? [],
+        start_date: period.read().start,
+        end_date: period.read().end,
       })
       .catch((error: unknown) => {
         showErrors(
