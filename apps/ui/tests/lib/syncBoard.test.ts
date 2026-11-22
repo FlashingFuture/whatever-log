@@ -149,3 +149,58 @@ test("결과 요약과 실패 줄", () => {
     "바뀐 것이 없어요",
   );
 });
+
+const NOW = new Date(2026, 10, 22);
+
+test("기간이 있으면 항목의 값에 기간을 붙이고, 없으면 붙이지 않는다", () => {
+  assert.equal(itemMeta(UPLOAD, NOW), "2시간 · 평일");
+  assert.equal(
+    itemMeta(item({ start_date: "2026-11-25", end_date: "2027-01-10" }), NOW),
+    "2시간 · 평일 · 11월 25일 ~ 2027년 1월 10일",
+  );
+});
+
+test("합치기에서 기간만 달라도 알리고, 그때는 이 PC의 기간을 함께 보여 준다", () => {
+  const sameValues = {
+    ...MERGE,
+    local_daily_target_minutes: 60,
+    local_weekdays: [5, 6],
+  };
+  assert.equal(
+    mergeNote(
+      item({
+        ...sameValues,
+        start_date: "2026-12-01",
+        end_date: "2026-12-31",
+      }),
+      NOW,
+    ),
+    "합치면 서버의 값으로 맞춰져요 (이 PC: 1시간 · 주말 · 기간 없음)",
+  );
+  assert.equal(
+    mergeNote(
+      item({
+        ...sameValues,
+        local_start_date: "2026-12-01",
+        local_end_date: "2026-12-31",
+      }),
+      NOW,
+    ),
+    "합치면 서버의 값으로 맞춰져요 (이 PC: 1시간 · 주말 · 12월 1일 ~ 12월 31일)",
+  );
+  // 기간도 같으면 알리지 않는다(칸이 없는 이전 hub의 항목도 기간 없음끼리 같다)
+  assert.equal(
+    mergeNote(
+      item({
+        ...sameValues,
+        start_date: "2026-12-01",
+        end_date: "2026-12-31",
+        local_start_date: "2026-12-01",
+        local_end_date: "2026-12-31",
+      }),
+      NOW,
+    ),
+    null,
+  );
+  assert.equal(mergeNote(item(sameValues), NOW), null);
+});

@@ -6,6 +6,11 @@ export interface GoalInput {
   /** 월=bit0 … 일=bit6 */
   weekdays: number;
   baseRevision: number;
+  /**
+   * 목표 기간. undefined면 요청에 기간 칸이 없었다 — 만들 때는 기간 없음, 고칠 때는 **지금 값을 그대로 둔다**(기간을 모르는 이전 버전의
+   * 클라이언트가 다른 기기에서 정한 기간을 지우지 않게). null이면 기간 없음으로 정한다.
+   */
+  period?: { start: string; end: string } | null;
 }
 
 export type GoalParse =
@@ -19,7 +24,56 @@ const FIELDS = new Set([
   "daily_target_minutes",
   "weekdays",
   "base_revision",
+  "start_date",
+  "end_date",
 ]);
+const DAY_FORMAT = /^\d{4}-\d{2}-\d{2}$/;
+export const MIN_PERIOD_YEAR = 2000;
+export const MAX_PERIOD_YEAR = 2100;
+
+/** `YYYY-MM-DD`가 실제 달력의 날짜이고 2000~2100년인지(로컬 `goals.validation`과 같은 규칙). */
+export function isPeriodDay(value: unknown): value is string {
+  if (typeof value !== "string" || !DAY_FORMAT.test(value)) return false;
+  const year = Number(value.slice(0, 4));
+  if (year < MIN_PERIOD_YEAR || year > MAX_PERIOD_YEAR) return false;
+  const ms = Date.parse(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(ms) && new Date(ms).toISOString().slice(0, 10) === value;
+}
+
+type PeriodParse =
+  | { ok: true; value: GoalInput["period"] }
+  | { ok: false; message: string };
+
+/**
+ * 기간 두 칸. 둘 다 없으면 undefined(지금 값 유지), 둘 다 null이면 기간 없음, 둘 다 날짜면 기간. 한쪽만 있거나 한쪽만 null이면 거부한다.
+ * "지난 날로는 정할 수 없다"는 규칙은 서버가 사용자의 오늘을 모르므로 이 PC(로컬)가 맡는다.
+ */
+function parsePeriod(record: Record<string, unknown>): PeriodParse {
+  const hasStart = "start_date" in record;
+  const hasEnd = "end_date" in record;
+  if (!hasStart && !hasEnd) return { ok: true, value: undefined };
+  if (hasStart !== hasEnd) {
+    return {
+      ok: false,
+      message: "start_date와 end_date는 함께 보내야 합니다.",
+    };
+  }
+  const { start_date: start, end_date: end } = record;
+  if (start === null && end === null) return { ok: true, value: null };
+  if (!isPeriodDay(start) || !isPeriodDay(end)) {
+    return {
+      ok: false,
+      message: `start_date와 end_date는 둘 다 null이거나 둘 다 ${MIN_PERIOD_YEAR}~${MAX_PERIOD_YEAR}년의 YYYY-MM-DD여야 합니다.`,
+    };
+  }
+  if (start > end) {
+    return {
+      ok: false,
+      message: "start_date는 end_date보다 늦을 수 없습니다.",
+    };
+  }
+  return { ok: true, value: { start, end } };
+}
 const UUID_V4 =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -103,6 +157,8 @@ export function parseGoalInput(body: unknown): GoalParse {
   if (!isInt(baseRevision) || baseRevision < 0) {
     return { ok: false, message: "base_revision은 0 이상의 정수여야 합니다." };
   }
+  const period = parsePeriod(record);
+  if (!period.ok) return period;
   return {
     ok: true,
     value: {
@@ -114,6 +170,7 @@ export function parseGoalInput(body: unknown): GoalParse {
         0,
       ),
       baseRevision,
+      period: period.value,
     },
   };
 }

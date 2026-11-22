@@ -309,3 +309,56 @@ def test_deleting_the_account_removes_everything_and_the_token_stops_working() -
 
     with pytest.raises(NotAuthorized):  # 토큰도 함께 지워졌다
         victim.list_goals()
+
+
+def test_a_period_travels_between_devices_and_an_old_client_does_not_clear_it(tmp_path, api, suffix) -> None:
+    name = f"e2e-기간-{suffix}"
+    start, end = TODAY.isoformat(), (TODAY + timedelta(days=20)).isoformat()
+    with _store(tmp_path, "a") as a, _store(tmp_path, "b") as b, SyncState(tmp_path / "b-sync.db") as state_b:
+        a.create(**_fields(name), start_date=start, end_date=end, today=TODAY)
+        _confirm_all(a, api)
+        (remote,) = [g for g in api.list_goals() if g.name == name]
+        assert (remote.start_date, remote.end_date) == (start, end)
+
+        # 기간 칸을 모르는 이전 클라이언트처럼 보내면(칸 없음) 서버는 기간을 지우지 않는다.
+        raw = ServerApi(SERVER, TOKEN)
+        status, payload = raw._call(
+            "PUT",
+            f"/goals/{remote.id}",
+            {"name": name, "daily_target_minutes": 90, "weekdays": [0, 1, 2, 3, 4, 5, 6], "base_revision": remote.revision},
+        )
+        assert status == 200 and (payload["start_date"], payload["end_date"]) == (start, end)
+
+        # 다른 기기는 합치기로 서버의 기간을 받는다.
+        _confirm_all(b, api)
+        (goal_b,) = b.list_goals()
+        assert (goal_b.start_date.isoformat(), goal_b.end_date.isoformat()) == (start, end)
+        # 그 기기에서 기간을 지우면 다음 주기에 서버도 기간 없음이 된다.
+        b.update(goal_b.id, **_fields(name, daily_target_minutes=90))
+        sync_once(b, state_b, api, tmp_path / "none.db", email=EMAIL, today=TODAY)
+    (after,) = [g for g in api.list_goals() if g.name == name]
+    assert (after.start_date, after.end_date) == (None, None)
+
+
+def test_a_day_that_leaves_the_period_is_removed_from_the_real_server(tmp_path, api, suffix) -> None:
+    name = f"e2e-정리-{suffix}"
+    with _store(tmp_path, "a") as a, SyncState(tmp_path / "a-sync.db") as state:
+        goal = a.create(**_fields(name, processes=["Code.exe"]))
+        _confirm_all(a, api)
+        db = _recorder(tmp_path / "a.db", "Code.exe", 40)  # 오늘 10분
+        sync_once(a, state, api, db, email=EMAIL, today=TODAY)
+        (remote,) = [g for g in api.list_goals() if g.name == name]
+        assert [d.minutes for d in api.get_progress(TODAY.isoformat(), TODAY.isoformat()) if d.goal_id == remote.id] == [10]
+
+        # 내일부터 시작하는 기간으로 바꾸면 오늘은 기간 밖이다 — 보낸 오늘 줄을 지운다.
+        tomorrow = TODAY + timedelta(days=1)
+        a.update(
+            goal.id,
+            **_fields(name, processes=["Code.exe"]),
+            start_date=tomorrow.isoformat(),
+            end_date=(tomorrow + timedelta(days=5)).isoformat(),
+            today=TODAY,
+        )
+        report = sync_once(a, state, api, db, email=EMAIL, today=TODAY)
+        assert report.progress_removed >= 1 and not report.problems
+    assert [d for d in api.get_progress(TODAY.isoformat(), TODAY.isoformat()) if d.goal_id == remote.id] == []

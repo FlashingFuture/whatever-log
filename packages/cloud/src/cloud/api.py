@@ -7,10 +7,12 @@
 
 import http.client
 import json
+import re
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 from urllib.parse import urlencode
 
@@ -45,7 +47,10 @@ class ServerUnreachable(Exception):
 
 @dataclass(frozen=True)
 class RemoteGoal:
-    """서버의 목표. 삭제된 목표(deleted)는 이름·목표 시간·요일 없이 id와 revision만 있다."""
+    """서버의 목표. 삭제된 목표(deleted)는 이름·목표 시간·요일 없이 id와 revision만 있다.
+
+    start_date·end_date는 목표 기간(`YYYY-MM-DD`, 사용자의 로컬 날짜, 양끝 포함). 둘 다 None이면 기간 없음.
+    """
 
     id: str
     deleted: bool
@@ -54,6 +59,8 @@ class RemoteGoal:
     name: str | None = None
     daily_target_minutes: int | None = None
     weekdays: frozenset[int] = frozenset()
+    start_date: str | None = None
+    end_date: str | None = None
 
 
 @dataclass(frozen=True)
@@ -111,6 +118,19 @@ def _int(value: Any) -> int:
     return value
 
 
+_DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+
+def _day_or_none(value: Any) -> str | None:
+    """None 또는 실제 날짜인 `YYYY-MM-DD`. 그 밖의 값은 ValueError."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _DAY.fullmatch(value):
+        raise ValueError("날짜 모양이 다릅니다.")
+    date.fromisoformat(value)  # 2026-02-30 같은 없는 날짜는 ValueError
+    return value
+
+
 def _parse_goal(item: Any) -> RemoteGoal:
     """서버의 목표 JSON을 RemoteGoal로. 모양이 다르면 ValueError/KeyError/TypeError."""
     if item["deleted"] is True:
@@ -119,6 +139,11 @@ def _parse_goal(item: Any) -> RemoteGoal:
     weekdays = item["weekdays"]
     if not isinstance(name, str) or not isinstance(weekdays, list):
         raise ValueError("목표 모양이 다릅니다.")
+    # 기간 칸은 반드시 있어야 한다(없으면 기간을 모르는 이전 서버다 — "기간 없음"으로 짐작해 이 PC의 기간을 지우지 않게 거부한다).
+    start_date = _day_or_none(item["start_date"])
+    end_date = _day_or_none(item["end_date"])
+    if (start_date is None) != (end_date is None) or (start_date is not None and end_date is not None and start_date > end_date):
+        raise ValueError("기간 모양이 다릅니다.")
     return RemoteGoal(
         id=str(item["id"]),
         deleted=False,
@@ -127,6 +152,8 @@ def _parse_goal(item: Any) -> RemoteGoal:
         name=name,
         daily_target_minutes=_int(item["daily_target_minutes"]),
         weekdays=frozenset(_int(day) for day in weekdays),
+        start_date=start_date,
+        end_date=end_date,
     )
 
 
@@ -198,8 +225,10 @@ class ServerApi:
         daily_target_minutes: int,
         weekdays: Collection[int],
         base_revision: int,
+        start_date: str | None = None,
+        end_date: str | None = None,
     ) -> RemoteGoal:
-        """목표를 만들거나(base_revision 0) 고친다. 서버가 받지 않으면 GoalConflict(409) 등을 올린다."""
+        """목표를 만들거나(base_revision 0) 고친다. 기간은 늘 함께 보낸다(None이면 기간 없음). 서버가 받지 않으면 GoalConflict(409) 등을 올린다."""
         _, payload = self._call(
             "PUT",
             f"/goals/{goal_id}",
@@ -208,6 +237,8 @@ class ServerApi:
                 "daily_target_minutes": daily_target_minutes,
                 "weekdays": sorted(weekdays),
                 "base_revision": base_revision,
+                "start_date": start_date,
+                "end_date": end_date,
             },
         )
         try:
@@ -262,6 +293,18 @@ class ServerApi:
             if not isinstance(ignored, list):
                 raise ValueError
             return ProgressResult(accepted=_int(payload["accepted"]), ignored_goal_ids=tuple(str(item) for item in ignored))
+        except (KeyError, ValueError, TypeError):
+            raise ServerError(0, "bad_response", "서버 응답을 이해하지 못했습니다.") from None
+
+    def remove_progress(self, device_id: str, keys: Sequence[tuple[str, str]]) -> int:
+        """이 기기가 보냈던 (목표 id, 날짜) 줄들을 서버에서 지운다(한 번에 50줄까지, 없는 줄은 넘어간다). 지운 줄 수를 돌려준다."""
+        _, payload = self._call(
+            "POST",
+            "/progress/remove",
+            {"device_id": device_id, "entries": [{"goal_id": goal_id, "day": day} for goal_id, day in keys]},
+        )
+        try:
+            return _int(payload["removed"])
         except (KeyError, ValueError, TypeError):
             raise ServerError(0, "bad_response", "서버 응답을 이해하지 못했습니다.") from None
 

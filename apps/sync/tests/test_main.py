@@ -41,11 +41,11 @@ class FakeApi:
         self._do("list_goals")
         return []
 
-    def put_goal(self, goal_id, *, name, daily_target_minutes, weekdays, base_revision):
+    def put_goal(self, goal_id, *, name, daily_target_minutes, weekdays, base_revision, start_date=None, end_date=None):
         self._do("put_goal")
         if FakeApi.duplicate_name:
             raise GoalConflict("duplicate_name", f"'{name}'과 같은 이름의 목표가 있습니다.", None)
-        return RemoteGoal(goal_id, False, 1, "t", name, daily_target_minutes, frozenset(weekdays))
+        return RemoteGoal(goal_id, False, 1, "t", name, daily_target_minutes, frozenset(weekdays), start_date, end_date)
 
     def delete_goal(self, goal_id) -> bool:
         self._do("delete_goal")
@@ -54,6 +54,10 @@ class FakeApi:
     def put_progress(self, device_id, entries) -> ProgressResult:
         self._do("put_progress")
         return ProgressResult(len(entries), ())
+
+    def remove_progress(self, device_id, keys) -> int:
+        self._do("remove_progress")
+        return len(keys)
 
 
 @pytest.fixture(autouse=True)

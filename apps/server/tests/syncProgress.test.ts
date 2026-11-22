@@ -457,6 +457,8 @@ test("서버에 저장되는 칸에는 프로세스·사이트·기기 이름이
     "created_at",
     "updated_at",
     "deleted_at",
+    "start_date",
+    "end_date",
   ]);
 });
 

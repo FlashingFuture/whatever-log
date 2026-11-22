@@ -16,6 +16,16 @@ export type PutProgressParse =
   | { ok: true; deviceId: string; entries: ProgressEntry[] }
   | { ok: false; message: string };
 
+/** 이 기기가 보냈던 (목표, 날짜) 줄 하나를 지우라는 요청. */
+export interface ProgressKey {
+  goalId: string;
+  day: string;
+}
+
+export type RemoveProgressParse =
+  | { ok: true; deviceId: string; entries: ProgressKey[] }
+  | { ok: false; message: string };
+
 export type RangeParse =
   | { ok: true; from: string; to: string }
   | { ok: false; message: string };
@@ -121,6 +131,80 @@ export function parsePutProgress(body: unknown, now: Date): PutProgressParse {
       minutes: item.minutes,
       targetMinutes: item.target_minutes,
     });
+  }
+  return { ok: true, deviceId, entries: parsed };
+}
+
+/**
+ * `POST /progress/remove`의 본문: `{device_id, entries: [{goal_id, day}]}`. 보낸 뒤에 그날이 목표에 들지 않게 된(기간·요일을 바꿨다) 줄을
+ * 지울 때 쓴다. 날짜 범위·개수 한도는 보내기와 같다.
+ */
+export function parseRemoveProgress(
+  body: unknown,
+  now: Date,
+): RemoveProgressParse {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return { ok: false, message: "본문은 JSON 객체여야 합니다." };
+  }
+  const record = body as Record<string, unknown>;
+  const extra = Object.keys(record).filter(
+    (key) => key !== "device_id" && key !== "entries",
+  );
+  if (extra.length > 0) {
+    return {
+      ok: false,
+      message: `알 수 없는 칸이 있습니다: ${extra.join(", ")}`,
+    };
+  }
+  const { device_id: deviceId, entries } = record;
+  if (typeof deviceId !== "string" || !isUuid(deviceId)) {
+    return { ok: false, message: "device_id는 UUID v4여야 합니다." };
+  }
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return {
+      ok: false,
+      message: "entries는 비어 있지 않은 목록이어야 합니다.",
+    };
+  }
+  if (entries.length > MAX_ENTRIES) {
+    return {
+      ok: false,
+      message: `entries는 한 번에 ${MAX_ENTRIES}개까지 보낼 수 있습니다.`,
+    };
+  }
+  const seen = new Set<string>();
+  const parsed: ProgressKey[] = [];
+  for (const [index, entry] of entries.entries()) {
+    const where = `entries[${index}]`;
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      return { ok: false, message: `${where}는 객체여야 합니다.` };
+    }
+    const item = entry as Record<string, unknown>;
+    const unknown = Object.keys(item).filter(
+      (key) => key !== "goal_id" && key !== "day",
+    );
+    if (unknown.length > 0) {
+      return {
+        ok: false,
+        message: `${where}에 알 수 없는 칸이 있습니다: ${unknown.join(", ")}`,
+      };
+    }
+    if (typeof item.goal_id !== "string" || !isUuid(item.goal_id)) {
+      return { ok: false, message: `${where}.goal_id는 UUID v4여야 합니다.` };
+    }
+    const ms = dayToMs(item.day);
+    if (ms === null || !dayAllowed(ms, now)) {
+      return {
+        ok: false,
+        message: `${where}.day는 최근 ${MAX_RANGE_DAYS}일 안의 YYYY-MM-DD여야 합니다.`,
+      };
+    }
+    const key = `${item.goal_id}|${item.day}`;
+    if (seen.has(key)) {
+      return { ok: false, message: `${where}가 같은 목표·날짜를 중복합니다.` };
+    }
+    seen.add(key);
+    parsed.push({ goalId: item.goal_id, day: item.day as string });
   }
   return { ok: true, deviceId, entries: parsed };
 }

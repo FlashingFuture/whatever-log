@@ -24,6 +24,8 @@ LIVE = {
     "weekdays": [0, 1],
     "revision": 2,
     "updated_at": "2026-11-06T03:00:00.000Z",
+    "start_date": None,
+    "end_date": None,
 }
 GONE = {"id": "00000000-0000-4000-8000-000000000002", "deleted": True, "revision": 3, "updated_at": "t"}
 
@@ -109,6 +111,11 @@ def test_list_goals_parses_live_and_deleted_goals(serve) -> None:
         {"goals": [{**LIVE, "weekdays": "0,1"}]},
         {"goals": [{k: v for k, v in LIVE.items() if k != "name"}]},
         {"goals": "x"},
+        {"goals": [{k: v for k, v in LIVE.items() if k != "start_date"}]},  # 기간을 모르는 서버
+        {"goals": [{**LIVE, "start_date": "2026-11-10"}]},  # 한쪽만
+        {"goals": [{**LIVE, "start_date": "2026-11-30", "end_date": "2026-11-10"}]},  # 순서
+        {"goals": [{**LIVE, "start_date": "2026-02-30", "end_date": "2026-03-01"}]},  # 없는 날
+        {"goals": [{**LIVE, "start_date": "２０２６-11-10", "end_date": "2026-11-30"}]},  # 전각 숫자
         {"nope": []},
         b"not json",
     ],
@@ -132,8 +139,42 @@ def test_put_goal_sends_the_wire_format(serve) -> None:
     (request,) = server.requests
     assert request["method"] == "PUT" and request["path"] == f"/goals/{LIVE['id']}"
     assert request["type"] == "application/json"
-    assert request["body"] == {"name": "공부", "daily_target_minutes": 120, "weekdays": [0, 1], "base_revision": 0}
+    assert request["body"] == {
+        "name": "공부",
+        "daily_target_minutes": 120,
+        "weekdays": [0, 1],
+        "base_revision": 0,
+        "start_date": None,
+        "end_date": None,
+    }
     assert goal.revision == 2
+
+
+def test_put_goal_sends_and_reads_the_period(serve) -> None:
+    server = serve(200, {**LIVE, "start_date": "2026-11-10", "end_date": "2026-11-30"})
+
+    goal = ServerApi(server.url, TOKEN).put_goal(
+        LIVE["id"], name="공부", daily_target_minutes=120, weekdays={0}, base_revision=2, start_date="2026-11-10", end_date="2026-11-30"
+    )
+
+    assert (server.requests[0]["body"]["start_date"], server.requests[0]["body"]["end_date"]) == ("2026-11-10", "2026-11-30")
+    assert (goal.start_date, goal.end_date) == ("2026-11-10", "2026-11-30")
+
+
+def test_remove_progress_sends_the_keys_and_reads_the_count(serve) -> None:
+    server = serve(200, {"removed": 2})
+
+    removed = ServerApi(server.url, TOKEN).remove_progress("device-1", [("g1", "2026-11-05"), ("g1", "2026-11-06")])
+
+    assert removed == 2
+    (request,) = server.requests
+    assert (request["method"], request["path"]) == ("POST", "/progress/remove")
+    assert request["body"] == {
+        "device_id": "device-1",
+        "entries": [{"goal_id": "g1", "day": "2026-11-05"}, {"goal_id": "g1", "day": "2026-11-06"}],
+    }
+    with pytest.raises(ServerError):
+        ServerApi(serve(200, {"removed": "2"}).url, TOKEN).remove_progress("device-1", [("g1", "2026-11-05")])
 
 
 def test_a_409_becomes_a_goal_conflict_with_the_servers_current_value(serve) -> None:

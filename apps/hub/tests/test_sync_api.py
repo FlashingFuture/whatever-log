@@ -56,12 +56,12 @@ class FakeApi:
             raise FakeApi.fail
         return list(FakeApi.goals.values())
 
-    def put_goal(self, goal_id, *, name, daily_target_minutes, weekdays, base_revision):
+    def put_goal(self, goal_id, *, name, daily_target_minutes, weekdays, base_revision, start_date=None, end_date=None):
         if FakeApi.fail:
             raise FakeApi.fail
         if any(goal.name == name for goal in FakeApi.goals.values() if not goal.deleted):
             raise GoalConflict("duplicate_name", "같은 이름", None)
-        goal = RemoteGoal(goal_id, False, 1, "t", name, daily_target_minutes, frozenset(weekdays))
+        goal = RemoteGoal(goal_id, False, 1, "t", name, daily_target_minutes, frozenset(weekdays), start_date, end_date)
         FakeApi.goals[goal_id] = goal
         FakeApi.created.append((goal_id, name))
         return goal
@@ -93,6 +93,9 @@ class FakeApi:
 
     def put_progress(self, device_id, entries):
         return ProgressResult(0, ())
+
+    def remove_progress(self, device_id, keys):
+        return 0
 
     days: list = []  # cloud.DayProgress들(서버가 합산한 (목표, 날짜))
     progress_requests: list[tuple[str, str]] = []
@@ -177,6 +180,7 @@ def test_the_plan_lists_what_would_go_out_and_never_the_process_links(sync_serve
     assert set(kinds["upload"]) == {
         "key", "kind", "name", "daily_target_minutes", "weekdays",
         "local_daily_target_minutes", "local_weekdays", "declined",
+        "start_date", "end_date", "local_start_date", "local_end_date",
     }  # fmt: skip
 
 

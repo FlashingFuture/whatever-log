@@ -175,7 +175,7 @@ def _describe(report: SyncReport) -> str:
         return f"건너뜀({report.skipped})"
     return (
         f"올림 {report.created}, 수정 {report.pushed}, 삭제 {report.deleted}, 반영 {report.pulled}, "
-        f"연결 끊김 {report.unlinked}, 달성도 {report.progress_sent}줄, 문제 {len(report.problems)}건"
+        f"연결 끊김 {report.unlinked}, 달성도 {report.progress_sent}줄(지움 {report.progress_removed}줄), 문제 {len(report.problems)}건"
     )
 
 

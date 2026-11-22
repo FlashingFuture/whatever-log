@@ -1,6 +1,7 @@
 // 동기화 확인 창("서버에 넘길 목표를 고르세요")의 순수 로직: 기본 선택, 항목 설명, 결과 요약.
 // DOM·hub를 모르므로(lib 층) 필요한 모양만 구조로 받는다 — api의 SyncItem·SyncResult가 그대로 들어온다.
 
+import { formatPeriodRange } from "./goalPeriod.ts";
 import { formatTarget, formatWeekdays } from "./goalText.ts";
 
 export interface BoardItem {
@@ -11,7 +12,20 @@ export interface BoardItem {
   weekdays: readonly number[];
   local_daily_target_minutes: number | null;
   local_weekdays: readonly number[] | null;
+  /** 목표 기간(둘 다 null·없음이면 기간 없음). 기간을 모르는 이전 hub는 칸을 보내지 않는다. */
+  start_date?: string | null;
+  end_date?: string | null;
+  local_start_date?: string | null;
+  local_end_date?: string | null;
   declined: boolean;
+}
+
+/** 칸이 없는(이전 hub) 기간을 기간 없음으로 읽는다. */
+function periodOf(
+  start: string | null | undefined,
+  end: string | null | undefined,
+): { start_date: string | null; end_date: string | null } {
+  return { start_date: start ?? null, end_date: end ?? null };
 }
 
 export interface BoardResult {
@@ -51,9 +65,17 @@ export function moveItem(
   return next;
 }
 
-/** 목표 이름 아래에 보여 줄 값: 서버로 올라가는(또는 서버에서 오는) 목표 시간과 요일. */
-export function itemMeta(item: BoardItem): string {
-  return `${formatTarget(item.daily_target_minutes)} · ${formatWeekdays(item.weekdays)}`;
+/** 목표 이름 아래에 보여 줄 값: 서버로 올라가는(또는 서버에서 오는) 목표 시간과 요일, 기간이 있으면 기간. */
+export function itemMeta(item: BoardItem, now: Date = new Date()): string {
+  const period = periodOf(item.start_date, item.end_date);
+  const parts = [
+    formatTarget(item.daily_target_minutes),
+    formatWeekdays(item.weekdays),
+  ];
+  if (period.start_date !== null) {
+    parts.push(formatPeriodRange(period, now));
+  }
+  return parts.join(" · ");
 }
 
 /**
@@ -77,10 +99,13 @@ export function itemTag(item: BoardItem, selected: boolean): string {
 }
 
 /**
- * 합치기에서 이 PC의 값과 서버의 값이 다르면 알려 줄 문장(같으면 null). 합치면 목표 시간·요일이 서버 값으로
+ * 합치기에서 이 PC의 값과 서버의 값이 다르면 알려 줄 문장(같으면 null). 합치면 목표 시간·요일·기간이 서버 값으로
  * 맞춰지므로, 사용자가 놀라지 않게 선택하기 전에 두 값을 함께 보여 준다.
  */
-export function mergeNote(item: BoardItem): string | null {
+export function mergeNote(
+  item: BoardItem,
+  now: Date = new Date(),
+): string | null {
   if (
     item.kind !== "merge" ||
     item.local_daily_target_minutes === null ||
@@ -88,13 +113,26 @@ export function mergeNote(item: BoardItem): string | null {
   ) {
     return null;
   }
+  const theirs = periodOf(item.start_date, item.end_date);
+  const mine = periodOf(item.local_start_date, item.local_end_date);
+  const samePeriod =
+    theirs.start_date === mine.start_date && theirs.end_date === mine.end_date;
   const same =
     item.local_daily_target_minutes === item.daily_target_minutes &&
-    formatWeekdays(item.local_weekdays) === formatWeekdays(item.weekdays);
+    formatWeekdays(item.local_weekdays) === formatWeekdays(item.weekdays) &&
+    samePeriod;
   if (same) {
     return null;
   }
-  const local = `${formatTarget(item.local_daily_target_minutes)} · ${formatWeekdays(item.local_weekdays)}`;
+  const parts = [
+    formatTarget(item.local_daily_target_minutes),
+    formatWeekdays(item.local_weekdays),
+  ];
+  // 기간은 서로 다를 때만 적는다(둘 다 기간 없음인 흔한 경우에 문장을 늘리지 않게).
+  if (!samePeriod) {
+    parts.push(formatPeriodRange(mine, now));
+  }
+  const local = parts.join(" · ");
   return `합치면 서버의 값으로 맞춰져요 (이 PC: ${local})`;
 }
 
