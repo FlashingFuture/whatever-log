@@ -9,9 +9,11 @@
 이 모듈이 규칙의 원본이다. 화면의 즉시 안내는 편의일 뿐이고, 저장 전에는 항상 여기를 거친다.
 """
 
+import re
 import unicodedata
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
 from goals.errors import FieldError, GoalValidationError
@@ -56,6 +58,9 @@ class GoalSpec:
     processes: tuple[tuple[str, str], ...]
     # (사이트, 비교 키) — 비교 키(site_key) 순서.
     sites: tuple[tuple[SiteTarget, str], ...] = ()
+    # 기간(없으면 둘 다 None). 정하면 둘 다 있고 시작 ≤ 종료다.
+    start_date: date | None = None
+    end_date: date | None = None
 
 
 def _utf16_units(text: str) -> int:
@@ -146,6 +151,71 @@ def _check_weekdays(value: Any, errors: list[FieldError]) -> frozenset[int] | No
         errors.append(FieldError("weekdays", "duplicate", "같은 요일이 두 번 들어 있습니다."))
         return None
     return frozenset(value)
+
+
+# 날짜 칸의 모양: ASCII 숫자만(`\d`는 다른 문자의 숫자도 받는다). `date.fromisoformat`은 `20261105`·`2026-W45-3` 같은 다른 표기도 받아 주므로 쓰지 않는다.
+_DATE_TEXT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+# 기간으로 받는 해의 범위(상식적인 값만 — 잘못 넣은 먼 날짜가 저장되지 않게).
+MIN_PERIOD_YEAR = 2000
+MAX_PERIOD_YEAR = 2100
+
+
+def _check_date(field: str, label: str, value: Any, errors: list[FieldError]) -> date | None:
+    """날짜 칸(`YYYY-MM-DD`)을 검사해 통과하면 date, 아니면 errors에 한 건을 더하고 None."""
+    if not isinstance(value, str):
+        errors.append(FieldError(field, "type", f"{label}은 `YYYY-MM-DD` 문자열이어야 합니다."))
+        return None
+    if _DATE_TEXT.fullmatch(value) is None:
+        errors.append(FieldError(field, "format", f"{label}은 `2026-11-05` 같은 `YYYY-MM-DD` 형식이어야 합니다."))
+        return None
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError:
+        errors.append(FieldError(field, "format", f"{label}이 달력에 없는 날짜입니다."))
+        return None
+    if not MIN_PERIOD_YEAR <= parsed.year <= MAX_PERIOD_YEAR:
+        errors.append(FieldError(field, "range", f"{label}은 {MIN_PERIOD_YEAR}~{MAX_PERIOD_YEAR}년 사이여야 합니다."))
+        return None
+    return parsed
+
+
+def check_period(
+    start_date: Any,
+    end_date: Any,
+    errors: list[FieldError],
+    *,
+    today: date | None = None,
+    current: tuple[date | None, date | None] = (None, None),
+) -> tuple[date | None, date | None]:
+    """목표 기간 두 칸을 검사한다. 통과하면 (시작, 종료) — 기간이 없으면 (None, None).
+
+    - 둘 다 비워 두면 기간 없음(무기한). **하나만 정하면 거부한다**(기간은 시작일과 종료일을 함께 정한다).
+    - 시작 ≤ 종료.
+    - **지난 날은 확정**이라 과거로는 정할 수 없다: 시작일은 오늘 이후여야 하고(오늘 포함), 종료일도 오늘 이후여야 한다. 단, 이미 저장돼 있는 값을 그대로 두는 것은 괜찮다
+      (current — 지금 저장된 기간. 이미 시작한 목표를 다른 칸만 고칠 때 막히지 않게). today를 모르는 호출(서버에서 받은 값 등)은 이 규칙을 건너뛴다.
+    """
+    if start_date is None and end_date is None:
+        return None, None
+    if start_date is None or end_date is None:
+        missing, label = ("start_date", "시작일") if start_date is None else ("end_date", "종료일")
+        errors.append(FieldError(missing, "incomplete", f"기간을 정하려면 시작일과 종료일을 모두 정해야 합니다({label}이 비어 있습니다)."))
+        return None, None
+    start = _check_date("start_date", "시작일", start_date, errors)
+    end = _check_date("end_date", "종료일", end_date, errors)
+    if start is None or end is None:
+        return None, None
+    if start > end:
+        errors.append(FieldError("end_date", "order", "종료일은 시작일보다 빠를 수 없습니다."))
+        return None, None
+    ok = True
+    if today is not None:
+        if start != current[0] and start < today:
+            errors.append(FieldError("start_date", "past", "시작일은 오늘 이후로만 정할 수 있습니다."))
+            ok = False
+        if end != current[1] and end < today:
+            errors.append(FieldError("end_date", "past", "종료일은 오늘 이후로만 정할 수 있습니다."))
+            ok = False
+    return (start, end) if ok else (None, None)
 
 
 def _process_name_problem(name: str) -> tuple[str, str] | None:
@@ -341,6 +411,10 @@ def validate_goal(
     known_processes: Collection[str] | None = None,
     known_sites: Collection[tuple[str, str]] | None = None,
     known_browsers: Collection[str] | None = None,
+    start_date: Any = None,
+    end_date: Any = None,
+    today: date | None = None,
+    current_period: tuple[date | None, date | None] = (None, None),
 ) -> GoalSpec:
     """목표 입력을 엄격하게 검증해 GoalSpec으로 돌려준다. 하나라도 어긋나면 GoalValidationError.
 
@@ -356,6 +430,7 @@ def validate_goal(
     checked_processes = _check_processes(processes, known_processes, errors)
     process_keys = {process_key(item) for item in processes} if checked_processes is not None else set()
     checked_sites = _check_sites(sites, process_keys, known_sites, known_browsers, errors)
+    checked_start, checked_end = check_period(start_date, end_date, errors, today=today, current=current_period)
     if errors:
         raise GoalValidationError(errors)
     assert checked_name is not None and minutes is not None
@@ -368,4 +443,6 @@ def validate_goal(
         weekdays=checked_weekdays,
         processes=checked_processes,
         sites=checked_sites,
+        start_date=checked_start,
+        end_date=checked_end,
     )

@@ -46,6 +46,7 @@ from goals import (
     GoalValidationError,
     SchemaVersionError,
     days_between,
+    period_window,
     is_valid_domain,
     is_valid_process_name,
     period_target_minutes,
@@ -1039,21 +1040,38 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             conn = sqlite3.connect(f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True)
             try:
+                def sites_for(browsers: list[str], window_start: datetime, window_end: datetime) -> dict[str, list]:
+                    found: dict[str, list] = {}
+                    for browser in browsers:
+                        try:
+                            found[browser] = site_usage_by_range(conn, browser, window_start, window_end)["by_site"]
+                        except sqlite3.OperationalError as error:
+                            if not _is_missing_site_schema(error):
+                                raise
+                            found[browser] = []  # 사이트 컬럼이 없는 옛 DB — 사이트 시간은 0이다
+                    return found
+
                 usage = usage_by_range(conn, start, end)
-                site_usage: dict[str, list] = {}
-                for browser in browsers_with_sites(goals):
-                    try:
-                        site_usage[browser] = site_usage_by_range(conn, browser, start, end)["by_site"]
-                    except sqlite3.OperationalError as error:
-                        if not _is_missing_site_schema(error):
-                            raise
-                        site_usage[browser] = []  # 사이트 컬럼이 없는 옛 DB — 사이트 시간은 0이다
+                site_usage = sites_for(browsers_with_sites(goals), start, end)
+                # 기간이 있는 목표는 기간 안의 날만 센다: 구간과 기간의 겹침에서 그 목표의 사용량을 따로 잰다(겹치지 않으면 0).
+                windowed: dict[int, tuple] = {}
+                for goal in goals:
+                    if goal.start_date is None:
+                        continue
+                    window = period_window(goal, start, end)
+                    if window is None:
+                        windowed[goal.id] = (None, {})
+                        continue
+                    windowed[goal.id] = (
+                        usage_by_range(conn, *window),
+                        sites_for(browsers_with_sites([goal]), *window),
+                    )
             finally:
                 conn.close()
         except sqlite3.Error as error:
             self._send_unavailable("집계 DB", error)
             return
-        self._send_json(200, progress_payload(goals, usage, site_usage, targets))
+        self._send_json(200, progress_payload(goals, usage, site_usage, targets, windowed))
 
     def _get_goal_totals(self, raw_query: str) -> None:
         """GET /api/goals/all-devices?from=YYYY-MM-DD&to=YYYY-MM-DD — 목표별 모든 기기의 수행 시간 합계(분, 끝날 포함).
@@ -1107,6 +1125,8 @@ class _Handler(BaseHTTPRequestHandler):
             "known_processes": recorded,
             "known_sites": recorded_sites,
             "known_browsers": {browser.process_name for browser in BROWSERS},
+            # 기간의 시작·종료가 오늘 이후인지 확인하는 기준: 이 PC의 로컬 날짜(구간을 정하는 화면과 같은 시계)
+            "today": datetime.now().astimezone().date(),
         }
         try:
             with GoalStore(self.goals_db_path) as store:

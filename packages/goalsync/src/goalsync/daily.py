@@ -68,7 +68,8 @@ def day_entries(
             # 그날 적용되지 않는 목표도 시간이 있으면 보내려고, 계산 대상은 "지금 목표 전부 + 그날 적용 목표"의 합집합이다.
             by_id = {goal.id: goal for goal in applicable}
             for goal in current:
-                by_id.setdefault(goal.id, goal)
+                if goal.covers(day):  # 기간 밖의 날은 시간이 있어도 올리지 않는다(기간 안의 날만 센다)
+                    by_id.setdefault(goal.id, goal)
             goals = list(by_id.values())
             usage = usage_by_range(conn, start, end)
             site_usage: dict[str, list] = {}

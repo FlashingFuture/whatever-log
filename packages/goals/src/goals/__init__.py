@@ -24,7 +24,16 @@ from goals.alerts import (
     ReportSchedule,
     due_alerts,
 )
-from goals.progress import GoalProgress, ProcessTime, ProgressSummary, SiteTime, TopTarget, compute_progress
+from goals.progress import (
+    GoalProgress,
+    ProcessTime,
+    ProgressSummary,
+    SiteTime,
+    TopTarget,
+    compute_progress,
+    compute_progress_per_goal,
+    period_window,
+)
 from goals import sync_status
 from goals.store import META_ACCOUNT_EMAIL, META_DEVICE_ID, META_GENERATION, META_SYNC_ENABLED, GoalStore
 from goals.targets import days_between, goals_for_day, period_target_minutes
@@ -72,6 +81,8 @@ __all__ = [
     "process_key",
     "sync_status",
     "compute_progress",
+    "compute_progress_per_goal",
+    "period_window",
     "days_between",
     "goals_for_day",
     "period_target_minutes",

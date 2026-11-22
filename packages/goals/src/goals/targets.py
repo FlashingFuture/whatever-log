@@ -2,7 +2,7 @@
 
 정의:
 - 하루의 목표 설정 = 그날의 스냅샷이 있으면 그것(목표를 나중에 바꿔도 지난 날이 바뀌지 않는다), 없으면 지금 목표 중
-  그 요일(월=0 … 일=6)에 적용되는 것. 서버로 올리는 날짜별 달성(`goalsync.daily`)과 같은 규칙이다.
+  그 요일(월=0 … 일=6)에 적용되고 **기간 안**인 것(`Goal.applies_on`). 서버로 올리는 날짜별 달성(`goalsync.daily`)과 같은 규칙이다.
 - 구간의 목표량(분) = 구간의 각 날짜에 그날 적용된 목표의 하루 목표 분을 더한 것. 쉬는 요일(목표를 적용하지 않는 요일)은 더하지 않는다.
   아직 오지 않은 날(이번 주의 남은 날)도 그 요일에 적용되는 목표라면 더한다 — 구간 전체의 목표에 얼마나 다가갔는지를 보여 준다.
 - 달성률 = 수행 시간 ÷ 구간의 목표량. 목표량이 0이면(구간에 적용되는 날이 없다) 달성률은 없다. 100%를 넘을 수 있다.
@@ -34,7 +34,7 @@ def goals_for_day(store: GoalStore, day: date, current: Sequence[Goal]) -> list[
             )
             for snap in snapshots
         ]
-    return [goal for goal in current if day.weekday() in goal.weekdays]
+    return [goal for goal in current if goal.applies_on(day)]
 
 
 def days_between(start: datetime, end: datetime, tz: tzinfo | None = None) -> list[date]:
