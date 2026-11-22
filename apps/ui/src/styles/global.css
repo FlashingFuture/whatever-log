@@ -10,3 +10,10 @@ body {
   background: var(--color-bg);
   color: var(--color-text);
 }
+
+/* hidden 속성은 언제나 숨긴다. 브라우저 기본값([hidden] { display: none })은 클래스의 display(flex 등)에 지므로,
+   display를 정한 요소(폼 칸 등)에 hidden을 걸어도 그대로 보이는 일이 없게 한다. */
+[hidden] {
+  /* biome-ignore lint/complexity/noImportantStyles: hidden은 클래스의 display보다 항상 이겨야 한다 */
+  display: none !important;
+}
