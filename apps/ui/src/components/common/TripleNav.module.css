@@ -1,0 +1,93 @@
+/* `[← 글자] 가운데 [글자 →]` 한 줄. 높이는 옆 요소가 정한 --period-row-height를 따른다(없으면 내용 높이). */
+.nav {
+  height: var(--period-row-height, auto);
+}
+.borderless {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-1);
+}
+
+/* 단추 안: 화살표(바깥)와 이웃 글자(안쪽)를 줄 높이의 가운데에 맞추고, 둘 사이를 띄운다. */
+.plainButton {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  min-width: 2rem;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+.plainButton:hover:not(:disabled) {
+  background: var(--color-track);
+}
+.plainButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.plainButton:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+/* 테두리 있는 단추(Button 모양)도 안에서 같은 순서·간격으로 놓인다. */
+.nav > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+}
+
+.symbol {
+  font-size: var(--text-md);
+  line-height: 1;
+}
+/* 이웃 글자: 연하게, 가운데 이름과 같은 크기·두께로, 글자 수와 관계없이 두 글자 너비로 고정해 양쪽이 같은 크기다. */
+.hint {
+  flex: none;
+  box-sizing: content-box;
+  width: 2em;
+  color: var(--color-text-muted);
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* pulse: 화살표와 이웃 글자가 천천히 진해졌다 옅어진다. 단추에 마우스를 올리거나 포커스가 있는 동안에는 애니메이션을 **걷어 내** 또렷하게 보이고(멈추기만 하면 애니메이션의
+   opacity가 일반 선언보다 우선해 옅은 구간에서 흐린 채 굳는다), 벗어나면 다시 시작한다. 움직임 줄이기 설정이면 움직이지 않는다. */
+@keyframes breathe {
+  from {
+    opacity: 0.3;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.pulse .symbol,
+.pulse .hint {
+  animation: breathe 2.4s ease-in-out infinite alternate;
+}
+.pulse button:hover .symbol,
+.pulse button:hover .hint,
+.pulse button:focus-visible .symbol,
+.pulse button:focus-visible .hint {
+  animation: none;
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pulse .symbol,
+  .pulse .hint {
+    animation: none;
+  }
+  .pulse .hint {
+    opacity: 0.7;
+  }
+}

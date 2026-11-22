@@ -1,10 +1,32 @@
 .header {
+  /* 왼쪽 조각(홈의 목표 캐러셀)과 오른쪽 구간 이동이 이 높이를 같이 쓴다(높이가 서로 맞게). */
+  --period-row-height: 2.2rem;
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-3);
   margin-bottom: var(--space-5);
+}
+/* 왼쪽 조각(홈의 목표 캐러셀). 화살표(바깥)·이웃 글자·이름이 한 줄에 들어가게 요약 칸(16rem)보다 조금 넓다. */
+.leading {
+  flex: 0 1 18rem;
+  min-width: 12rem;
+}
+/* 구간 이동(← 라벨 →): 오른쪽에 붙는다. */
+.controls {
+  display: flex;
+  margin-left: auto;
+}
+.controls > * {
+  height: var(--period-row-height);
+}
+/* 날짜 라벨 팝업 안: 조회 단위 아래에 달력·목록이 온다. */
+.panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
 }
 .loading {
   composes: muted from "../../styles/shared.module.css";

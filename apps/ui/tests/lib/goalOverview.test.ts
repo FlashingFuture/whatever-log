@@ -6,6 +6,7 @@ import {
   goalProcessRows,
   goalSiteRows,
   goalTargets,
+  goalTargetsFromProgress,
 } from "../../src/lib/goalOverview.ts";
 
 const usage = (process: string, active: number) => ({
@@ -160,4 +161,44 @@ test("연결한 사이트의 대소문자만 다른 중복은 한 번만 담는�
     { browser: "chrome.exe", domain: "a.com" },
   ]);
   assert.deepEqual([...grouped], [["chrome.exe", ["A.com"]]]);
+});
+
+test("홈의 목표 칸은 연결한 프로세스는 사용량에서, 사이트는 진행 응답의 활성 시간으로 만든다", () => {
+  const targets = goalTargetsFromProgress(
+    {
+      processes: [{ process: "a.exe" }, { process: "none.exe" }],
+      sites: [{ browser: "chrome.exe", domain: "x.com", active_seconds: 40 }],
+    },
+    [
+      { ...usage("a.exe", 10), idle_seconds: 5, total_seconds: 20 },
+      usage("other.exe", 999),
+    ],
+  );
+  assert.deepEqual(
+    targets.map((target) =>
+      target.kind === "process"
+        ? [
+            target.process,
+            target.usage.active_seconds,
+            target.usage.idle_seconds,
+          ]
+        : [
+            `${target.browser}/${target.domain}`,
+            target.usage.active_seconds,
+            target.usage.total_seconds,
+          ],
+    ),
+    [
+      ["chrome.exe/x.com", 40, 40],
+      ["a.exe", 10, 5],
+      ["none.exe", 0, 0],
+    ],
+  );
+});
+
+test("연결한 것이 없으면 칸도 없다(다른 프로세스를 대신 보이지 않는다)", () => {
+  assert.deepEqual(
+    goalTargetsFromProgress({ processes: [], sites: [] }, [usage("a.exe", 5)]),
+    [],
+  );
 });

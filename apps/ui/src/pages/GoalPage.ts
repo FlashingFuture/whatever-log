@@ -10,16 +10,11 @@ import {
 import { createGoalManager } from "../components/goals/GoalManager";
 import { createGoalSettings } from "../components/goals/GoalSettings";
 import { createPeriodView } from "../components/period/PeriodView";
-import { createUsageColumn } from "../components/usage/ProcessColumn";
-import {
-  createProcessIcon,
-  createSiteIcon,
-} from "../components/usage/ProcessIcon";
+import { createGoalTargetColumn } from "../components/usage/GoalTargetColumn";
 import { createColumnChart } from "../components/usage/UsageChart";
 import { createUsageSummary } from "../components/usage/UsageSummary";
 import {
   domainsByBrowser,
-  type GoalTarget,
   goalProcessRows,
   goalSiteRows,
   goalTargets,
@@ -50,33 +45,6 @@ function describe(goal: Goal): string {
     formatWeekdays(goal.weekdays),
     links.length === 0 ? "연결된 프로세스 없음" : links.join(" · "),
   ].join(" · ");
-}
-
-/** 칸 하나. 사이트는 사이트 아이콘에 그 사이트를 연 브라우저 아이콘을 작게 겹쳐 붙이고, 누르면 그 브라우저의 상세로 간다. */
-function columnOf(target: GoalTarget, maxTotal: number): HTMLElement {
-  if (target.kind === "process") {
-    return createUsageColumn(
-      {
-        name: target.process,
-        fullName: target.process,
-        usage: target.usage,
-        icon: createProcessIcon(target.process),
-        route: { name: "process", process: target.process },
-      },
-      maxTotal,
-    );
-  }
-  return createUsageColumn(
-    {
-      name: target.domain,
-      fullName: `${target.domain} (${target.browser})`,
-      usage: target.usage,
-      icon: createSiteIcon(target.domain),
-      badge: createProcessIcon(target.browser),
-      route: { name: "process", process: target.browser },
-    },
-    maxTotal,
-  );
 }
 
 interface SiteResult {
@@ -211,7 +179,7 @@ export function mountGoalPage(
       const chart = document.createElement("div");
       chart.append(
         createColumnChart(
-          targets.map((target) => columnOf(target, maxTotal)),
+          targets.map((target) => createGoalTargetColumn(target, maxTotal)),
           "연결한 프로세스나 사이트가 없어요. ‘프로세스 연결 관리’에서 연결해 보세요.",
         ),
       );

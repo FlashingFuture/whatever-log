@@ -187,3 +187,43 @@ export function goalTargets(
     )
     .map(({ target }) => target);
 }
+
+interface LinkedProcess {
+  process: string;
+}
+
+interface ProgressSite {
+  browser: string;
+  domain: string;
+  active_seconds: number;
+}
+
+/** 목표 진행 응답(`/api/goals/progress`)의 한 목표에서 필요한 부분. */
+export interface GoalProgressLike {
+  processes: readonly LinkedProcess[];
+  sites: readonly ProgressSite[];
+}
+
+/**
+ * 홈에서 고른 목표의 칸들: 목표에 연결한 프로세스는 구간의 프로세스별 사용량(`byProcess`)에서 골라 활성·유휴·백그라운드를 그대로 쓰고,
+ * 연결한 사이트는 진행 응답의 활성 시간만 쓴다(사이트의 유휴 시간은 브라우저별 요청이 따로 필요한데, 홈은 목표를 넘길 때마다 요청하지 않는다 — 활성 시간만 보인다).
+ * 활성 시간이 긴 순서로 놓고, 기록 없는 연결 대상은 0으로 뒤에 붙는다(`goalTargets`).
+ */
+export function goalTargetsFromProgress(
+  goal: GoalProgressLike,
+  byProcess: readonly ProcessRowLike[],
+): GoalTarget[] {
+  return goalTargets(
+    goalProcessRows(
+      goal.processes.map((item) => item.process),
+      byProcess,
+    ),
+    goal.sites.map((site) => ({
+      browser: site.browser,
+      domain: site.domain,
+      active_seconds: site.active_seconds,
+      idle_seconds: 0,
+      total_seconds: site.active_seconds,
+    })),
+  );
+}

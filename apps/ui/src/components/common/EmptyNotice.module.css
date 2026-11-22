@@ -1,0 +1,14 @@
+.notice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+}
+.text {
+  margin: 0;
+  color: var(--color-text-muted);
+  word-break: keep-all;
+}

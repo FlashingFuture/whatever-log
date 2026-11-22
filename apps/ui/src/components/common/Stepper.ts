@@ -1,5 +1,6 @@
-import { createButton, createButtonGroup } from "./Button";
+import { createButton } from "./Button";
 import styles from "./Stepper.module.css";
+import { createTripleNav } from "./TripleNav";
 
 export interface StepperProps {
   label: string;
@@ -17,7 +18,8 @@ export interface StepperProps {
 
 /**
  * "← 라벨 →"를 테두리를 공유하는 한 덩어리로 그린다. 무엇을 넘기는지(일/주/월,
- * 연도, 달)는 모르고 라벨과 콜백만 받는다.
+ * 연도, 달)는 모르고 라벨과 콜백만 받는다. 단추 둘과 가운데 칸의 틀은 목표 캐러셀과 같은
+ * `TripleNav`(테두리 있는 쪽)를 쓴다.
  */
 export function createStepper(props: StepperProps): HTMLElement {
   let label: HTMLElement;
@@ -42,19 +44,24 @@ export function createStepper(props: StepperProps): HTMLElement {
     label.append(hint);
   }
 
-  return createButtonGroup([
-    createButton({
-      label: "←",
-      ariaLabel: "이전",
-      disabled: !props.canGoPrev,
-      onClick: props.onPrev,
-    }),
-    label,
-    createButton({
-      label: "→",
-      ariaLabel: "다음",
-      disabled: !props.canGoNext,
-      onClick: props.onNext,
-    }),
-  ]);
+  return createTripleNav({
+    center: label,
+    bordered: true,
+    onPrevious: props.onPrev,
+    onNext: props.onNext,
+    state: {
+      previous: {
+        hint: null,
+        ariaLabel: "이전",
+        title: "",
+        disabled: !props.canGoPrev,
+      },
+      next: {
+        hint: null,
+        ariaLabel: "다음",
+        title: "",
+        disabled: !props.canGoNext,
+      },
+    },
+  }).element;
 }
