@@ -5,6 +5,7 @@ import { createGoalManager } from "../components/goals/GoalManager";
 import { createPeriodView } from "../components/period/PeriodView";
 import { createScopedUsageChart } from "../components/usage/ScopedUsageChart";
 import { createUsageSummary } from "../components/usage/UsageSummary";
+import { isOnCarousel, todayText } from "../lib/goalPeriod";
 import { dayRange, settleSelection } from "../lib/goalSelection";
 import { syncNotice } from "../lib/syncNotice";
 import { navigate } from "../router/router";
@@ -57,13 +58,17 @@ export function mountUsagePage(
         // 다른 기기의 합계를 못 받아도(서버·네트워크) 이 PC의 값은 그대로 보여 준다 — "전체"만 "-"가 된다.
         fetchGoalTotals(from, to).catch(() => null),
       ]);
+      // 캐러셀에는 종료된 목표를 두지 않는다(기간이 끝난 목표는 관리 모달과 개요 화면에서 본다). 고른 목표가 그새 종료됐으면 목표 전체로 돌아간다.
+      const today = todayText();
+      const carouselGoals =
+        progress?.goals.filter((goal) => isOnCarousel(goal, today)) ?? null;
       // 목표 진행을 받았을 때만 선택을 정리한다. 조회가 실패했으면 이전 선택을 그대로 둔다(settleSelection).
-      const settled = settleSelection(selectedGoalId, progress?.goals ?? null);
+      const settled = settleSelection(selectedGoalId, carouselGoals);
       // 선택과 선택기의 목록은 **가장 최근에 시작한 조회**만 바꾼다. 낡은 조회는 이 화면을 만들지만 어차피 PeriodView가 버린다.
       if (loadId === latestLoad) {
         selectedGoalId = settled;
         if (progress !== null) {
-          carousel.update({ goals: progress.goals, selectedId: settled });
+          carousel.update({ goals: carouselGoals ?? [], selectedId: settled });
         }
       }
       const side = document.createElement("div");

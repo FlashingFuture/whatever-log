@@ -1,4 +1,5 @@
 import type { Goal } from "../../api";
+import { describePeriod, periodStatus, todayText } from "../../lib/goalPeriod";
 import { formatTarget, formatWeekdays } from "../../lib/goalText";
 import { createIconButton } from "../common/IconButton";
 import styles from "./GoalList.module.css";
@@ -19,8 +20,14 @@ function describe(goal: Goal): string {
   return [
     `하루 ${formatTarget(goal.daily_target_minutes)}`,
     formatWeekdays(goal.weekdays),
+    // 기간이 없으면 쓰지 않는다(대부분의 목표) — 있으면 "11월 10일 ~ 11월 30일 · 종료됨"처럼.
+    periodStatus(goal, todayText()) === "none"
+      ? ""
+      : describePeriod(goal, todayText()),
     links.length === 0 ? "연결된 프로세스 없음" : links.join(" · "),
-  ].join(" · ");
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 /**

@@ -25,13 +25,14 @@ from goals import (
     ProgressSummary,
     ReportSchedule,
     TopTarget,
-    compute_progress,
+    compute_progress_per_goal,
 )
 
 from common import api_error
 
-# 목표 입력의 모든 칸은 이 다섯 개뿐이다 — 모르는 칸이 있으면 오타나 다른 API의 본문일 수 있어 거부한다.
-GOAL_FIELDS = ("name", "daily_target_minutes", "weekdays", "processes", "sites")
+# 목표 입력의 모든 칸은 이 일곱 개뿐이다 — 모르는 칸이 있으면 오타나 다른 API의 본문일 수 있어 거부한다.
+# start_date·end_date는 목표의 기간이다(둘 다 비우면 기간 없음).
+GOAL_FIELDS = ("name", "daily_target_minutes", "weekdays", "processes", "sites", "start_date", "end_date")
 # 알림 규칙·보고서 일정 입력의 칸(docs/goal-management.md). 모르는 칸은 거부한다.
 ALERT_FIELDS = ("target_process", "deadline", "min_minutes", "weekdays", "enabled")
 SCHEDULE_FIELDS = ("enabled", "frequency", "weekday", "day_of_month", "send_time")
@@ -101,7 +102,7 @@ def reject_body(headers: Mapping[str, str]) -> None:
 
 
 def goal_fields(body: dict[str, Any]) -> dict[str, Any]:
-    """본문에서 목표 입력 다섯 칸을 꺼낸다. 모르는 칸이 있으면 BadRequest. 빠진 칸은 None으로 두어
+    """본문에서 목표 입력 칸(기간 두 칸 포함)을 꺼낸다. 모르는 칸이 있으면 BadRequest. 빠진 칸은 None으로 두어
     goals.validate_goal이 "형식이 틀렸다"고 칸별로 알리게 한다."""
     unknown = sorted(set(body) - set(GOAL_FIELDS))
     if unknown:
@@ -165,6 +166,8 @@ def goal_json(goal: Goal) -> dict[str, Any]:
         "weekdays": sorted(goal.weekdays),
         "processes": list(goal.processes),
         "sites": [{"browser": site.browser, "domain": site.domain} for site in goal.sites],
+        "start_date": None if goal.start_date is None else goal.start_date.isoformat(),
+        "end_date": None if goal.end_date is None else goal.end_date.isoformat(),
         "created_at": goal.created_at,
         "updated_at": goal.updated_at,
     }
@@ -203,11 +206,16 @@ def browsers_with_sites(goals: list[Goal]) -> list[str]:
     return list(seen.values())
 
 
+def _date_json(day: Any) -> str | None:
+    return None if day is None else day.isoformat()
+
+
 def progress_payload(
     goals: list[Goal],
     usage: RangeUsage,
     site_usage: Mapping[str, list[Any]] | None = None,
     targets: Mapping[int, int] | None = None,
+    windowed: Mapping[int, tuple[RangeUsage | None, Mapping[str, list[Any]]]] | None = None,
 ) -> dict[str, Any]:
     """구간의 사용량(usage_by_range 결과)과 목표들로 목표별 수행 시간과 요약을 만든다.
 
@@ -216,6 +224,9 @@ def progress_payload(
 
     targets는 목표 id → 구간의 목표량(분)이다(`goals.period_target_minutes`). 달성률(수행 시간 ÷ 목표량)의 분모라서 목표마다 `target_minutes`로
     싣고, 요약에는 그 합을 싣는다. 목표량을 모르면(주지 않음) 0이고, 0이면 화면은 달성률을 보이지 않는다.
+
+    windowed는 **기간이 있는 목표**의 목표 id → (그 목표의 기간 안에서만 잰 사용량, 사이트별 집계)다. 기간이 구간과 겹치지 않으면 사용량이 None(수행 시간 0).
+    기간이 있는 목표의 수행 시간은 기간 안의 날만 센다(목표량과 같은 규칙) — 이 목록에 없는 목표는 위의 전체 구간 사용량을 쓴다.
     """
     active = {row["process"]: row["active_seconds"] for row in usage["by_process"]}
     active_sites = {
@@ -223,9 +234,20 @@ def progress_payload(
         for browser, rows in (site_usage or {}).items()
         for row in rows
     }
+    def tables(goal: Goal) -> tuple[dict[str, float], dict[tuple[str, str], float]]:
+        """목표가 쓰는 활동 시간 표: 기간 창이 있으면 그 목표의 것, 없으면 전체 구간의 것."""
+        if windowed is None or goal.id not in windowed:
+            return active, active_sites
+        own_usage, own_sites = windowed[goal.id]
+        return (
+            {} if own_usage is None else {row["process"]: row["active_seconds"] for row in own_usage["by_process"]},
+            {(browser, row["domain"]): row["active_seconds"] for browser, rows in own_sites.items() for row in rows},
+        )
+
     progress: list[GoalProgress]
     summary: ProgressSummary
-    progress, summary = compute_progress(goals, active, active_sites)
+    progress, summary = compute_progress_per_goal(goals, tables)
+    by_id = {goal.id: goal for goal in goals}
     return {
         "start": usage["start"],
         "end": usage["end"],
@@ -237,6 +259,8 @@ def progress_payload(
                 "processes": [_process_time_json(time) for time in item.processes],
                 "sites": [_site_time_json(time) for time in item.sites],
                 "target_minutes": (targets or {}).get(item.goal_id, 0),
+                "start_date": _date_json(by_id[item.goal_id].start_date),
+                "end_date": _date_json(by_id[item.goal_id].end_date),
             }
             for item in progress
         ],

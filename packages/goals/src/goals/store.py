@@ -41,8 +41,9 @@ from goals.validation import (
 
 # 2: 연결 대상 종류에 `site`(브라우저의 사이트)를 더했다. 1에서 올라올 때 대상 테이블을 새 CHECK로 다시 만든다.
 # 3: 서버와의 연결 칸(remote_id 등)과 동기화 보조 테이블을 더했다(docs/sync-client.md). 기존 목표는 모두 `ask`다.
+# 5: 목표의 기간(start_date·end_date, 둘 다 NULL이면 기간 없음)을 더했다. 기존 목표는 모두 기간 없음이다.
 # 4: 알림 규칙(goal_alerts)·알린 기록(goal_alert_log)·보고서 일정(goal_report_schedules)을 더했다. 새 테이블뿐이라 옛 파일은 열 때 테이블이 추가된다.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # sync_meta의 키: 동기화를 켰는지, 연결한 계정의 이메일(계정이 바뀌면 연결을 끊는 데 쓴다).
 META_SYNC_ENABLED = "sync_enabled"
@@ -93,6 +94,9 @@ CREATE TABLE IF NOT EXISTS goals (
     weekdays INTEGER NOT NULL CHECK (typeof(weekdays) = 'integer' AND weekdays BETWEEN 1 AND 127),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    -- 기간(로컬 날짜 `YYYY-MM-DD`, 양끝 포함). 둘 다 NULL이면 기간 없음, 정하면 둘 다 있다(검증이 보장하고, 아래 CHECK가 마지막 방어선이다).
+    start_date TEXT CHECK (start_date IS NULL OR start_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+    end_date TEXT CHECK (end_date IS NULL OR end_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
     -- 서버와의 연결(docs/sync-design.md). 프로세스·사이트 연결은 서버와 무관하다.
     remote_id TEXT,
     remote_revision INTEGER,
@@ -198,6 +202,11 @@ def _integrity_errors(error: sqlite3.IntegrityError) -> list[FieldError]:
     raise error
 
 
+def _iso(day: date | None) -> str | None:
+    """저장용 날짜 글자(`YYYY-MM-DD`). 없으면 None(NULL)."""
+    return None if day is None else day.isoformat()
+
+
 def _weekday_mask(weekdays: frozenset[int]) -> int:
     """요일 집합(월=0 … 일=6)을 저장용 비트 마스크로."""
     return sum(1 << day for day in weekdays)
@@ -270,6 +279,8 @@ class GoalStore:
             self._migrate_1_to_2()
         if version in (1, 2):
             self._migrate_2_to_3()
+        if 1 <= version <= 4:
+            self._migrate_4_to_5()
         self._conn.executescript(_SCHEMA)
         self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -296,6 +307,18 @@ class GoalStore:
             existing = {row[1] for row in self._conn.execute("PRAGMA table_info(goals)")}
             for column, definition in columns.items():
                 if column not in existing:  # 이미 있으면(다시 실행된 마이그레이션) 건너뛴다
+                    self._conn.execute(f"ALTER TABLE goals ADD COLUMN {column} {definition}")
+
+    def _migrate_4_to_5(self) -> None:
+        """goals에 기간 칸을 더한다(기존 목표는 기간 없음). 한 트랜잭션이다."""
+        columns = {
+            "start_date": "TEXT CHECK (start_date IS NULL OR start_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')",
+            "end_date": "TEXT CHECK (end_date IS NULL OR end_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')",
+        }
+        with self._write():
+            existing = {row[1] for row in self._conn.execute("PRAGMA table_info(goals)")}
+            for column, definition in columns.items():
+                if column not in existing:
                     self._conn.execute(f"ALTER TABLE goals ADD COLUMN {column} {definition}")
 
     @contextmanager
@@ -333,14 +356,14 @@ class GoalStore:
         """모든 목표(만든 순서). 목표와 연결 대상을 한 문장으로 읽어, 다른 프로세스의 쓰기가 끼어도
         한쪽만 바뀐 결과를 보지 않는다."""
         rows = self._conn.execute(
-            "SELECT g.id, g.name, g.daily_target_minutes, g.weekdays, g.created_at, g.updated_at, t.kind, t.name "
+            "SELECT g.id, g.name, g.daily_target_minutes, g.weekdays, g.created_at, g.updated_at, g.start_date, g.end_date, t.kind, t.name "
             "FROM goals g LEFT JOIN goal_targets t ON t.goal_id = g.id "
             "ORDER BY g.id"
         ).fetchall()
         goals: dict[int, tuple[tuple, list[str], list[str]]] = {}
-        for goal_id, name, minutes, weekdays, created_at, updated_at, kind, target in rows:
+        for goal_id, name, minutes, weekdays, created_at, updated_at, start_date, end_date, kind, target in rows:
             _, processes, sites = goals.setdefault(
-                goal_id, ((goal_id, name, minutes, weekdays, created_at, updated_at), [], [])
+                goal_id, ((goal_id, name, minutes, weekdays, created_at, updated_at, start_date, end_date), [], [])
             )
             if kind == _KIND_PROCESS:
                 processes.append(target)
@@ -356,6 +379,8 @@ class GoalStore:
                 created_at=head[4],
                 updated_at=head[5],
                 sites=_sites_from_names(sites),
+                start_date=None if head[6] is None else date.fromisoformat(head[6]),
+                end_date=None if head[7] is None else date.fromisoformat(head[7]),
             )
             for head, processes, sites in goals.values()
         ]
@@ -373,11 +398,28 @@ class GoalStore:
         known_processes: Collection[str] | None = None,
         known_sites: Collection[tuple[str, str]] | None = None,
         known_browsers: Collection[str] | None = None,
+        start_date: Any = None,
+        end_date: Any = None,
+        today: date | None = None,
     ) -> Goal:
         """목표를 만든다. 입력 형식 오류와 다른 목표와의 충돌(같은 이름, 이미 연결된 프로세스, 개수 상한)을
-        한꺼번에 모아 GoalValidationError로 알린다 — 사용자가 한 번에 고칠 수 있게."""
+        한꺼번에 모아 GoalValidationError로 알린다 — 사용자가 한 번에 고칠 수 있게.
+
+        기간(start_date·end_date)을 정하면 today(이 PC의 로컬 날짜)가 필요하다 — 시작일·종료일이 오늘 이후인지 확인한다(없으면 ValueError, 호출부의 실수다).
+        """
+        self._require_today(start_date, end_date, today)
         spec, errors = self._validate(
-            name, daily_target_minutes, weekdays, processes, sites, known_processes, known_sites, known_browsers
+            name,
+            daily_target_minutes,
+            weekdays,
+            processes,
+            sites,
+            known_processes,
+            known_sites,
+            known_browsers,
+            start_date=start_date,
+            end_date=end_date,
+            today=today,
         )
         with self._write():
             errors += self._conflicts(name, processes, sites, spec, errors, exclude_id=None)
@@ -390,9 +432,19 @@ class GoalStore:
             # 동기화를 켠 뒤 만든 목표는 처음부터 서버와 맞출 목표다(켤 때 한 번 확인받았다).
             state = "sync" if self._get_meta(META_SYNC_ENABLED) == "1" else "ask"
             goal_id = self._conn.execute(
-                "INSERT INTO goals (name, name_key, daily_target_minutes, weekdays, created_at, updated_at, sync_state) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (spec.name, spec.name_key, spec.daily_target_minutes, _weekday_mask(spec.weekdays), now, now, state),
+                "INSERT INTO goals (name, name_key, daily_target_minutes, weekdays, created_at, updated_at, sync_state, "
+                "start_date, end_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    spec.name,
+                    spec.name_key,
+                    spec.daily_target_minutes,
+                    _weekday_mask(spec.weekdays),
+                    now,
+                    now,
+                    state,
+                    _iso(spec.start_date),
+                    _iso(spec.end_date),
+                ),
             ).lastrowid
             self._insert_targets(goal_id, spec)
             created = self.get(goal_id)  # 같은 트랜잭션 안에서 읽는다 — 방금 저장한 상태 그대로
@@ -411,17 +463,37 @@ class GoalStore:
         known_processes: Collection[str] | None = None,
         known_sites: Collection[tuple[str, str]] | None = None,
         known_browsers: Collection[str] | None = None,
+        start_date: Any = None,
+        end_date: Any = None,
+        today: date | None = None,
     ) -> Goal:
         """목표를 통째로 바꾼다(모든 칸이 필요하다 — 일부만 바꾸는 입력은 받지 않는다).
 
         없는 id면 GoalNotFoundError(입력 검사보다 먼저), 입력이 틀리거나 충돌하면 오류를 모아 GoalValidationError.
+        기간을 정하면 today가 필요하다. 지금 저장된 기간과 같은 값은 과거여도 그대로 둘 수 있다(이미 시작한 목표의 다른 칸을 고칠 수 있게).
         """
-        spec, errors = self._validate(
-            name, daily_target_minutes, weekdays, processes, sites, known_processes, known_sites, known_browsers
-        )
+        self._require_today(start_date, end_date, today)
         with self._write():
-            if self._conn.execute("SELECT 1 FROM goals WHERE id = ?", (goal_id,)).fetchone() is None:
+            row = self._conn.execute("SELECT start_date, end_date FROM goals WHERE id = ?", (goal_id,)).fetchone()
+            if row is None:
                 raise GoalNotFoundError(goal_id)
+            spec, errors = self._validate(
+                name,
+                daily_target_minutes,
+                weekdays,
+                processes,
+                sites,
+                known_processes,
+                known_sites,
+                known_browsers,
+                start_date=start_date,
+                end_date=end_date,
+                today=today,
+                current_period=(
+                    None if row[0] is None else date.fromisoformat(row[0]),
+                    None if row[1] is None else date.fromisoformat(row[1]),
+                ),
+            )
             errors += self._conflicts(name, processes, sites, spec, errors, exclude_id=goal_id)
             if errors or spec is None:
                 raise GoalValidationError(errors)
@@ -431,7 +503,7 @@ class GoalStore:
                 "UPDATE goals SET "
                 "dirty = CASE WHEN remote_id IS NOT NULL AND "
                 "(name != ? OR daily_target_minutes != ? OR weekdays != ?) THEN 1 ELSE dirty END, "
-                "name = ?, name_key = ?, daily_target_minutes = ?, weekdays = ?, updated_at = ? "
+                "name = ?, name_key = ?, daily_target_minutes = ?, weekdays = ?, start_date = ?, end_date = ?, updated_at = ? "
                 "WHERE id = ?",
                 (
                     spec.name,
@@ -441,6 +513,8 @@ class GoalStore:
                     spec.name_key,
                     spec.daily_target_minutes,
                     mask,
+                    _iso(spec.start_date),
+                    _iso(spec.end_date),
                     self._timestamp(),
                     goal_id,
                 ),
@@ -828,6 +902,14 @@ class GoalStore:
                 self._conn.execute("INSERT INTO sync_meta (key, value) VALUES (?, ?)", (META_DEVICE_ID, device_id))
 
     @staticmethod
+    def _require_today(start_date: Any, end_date: Any, today: date | None) -> None:
+        """기간을 정했는데 today를 주지 않으면 ValueError — 오늘 이후인지 확인할 수 없는 호출은 호출부의 실수다."""
+        if (start_date is not None or end_date is not None) and today is None:
+            raise ValueError("기간(start_date·end_date)을 정하려면 today(이 PC의 로컬 날짜)가 필요합니다.")
+        if today is not None and (not isinstance(today, date) or isinstance(today, datetime)):
+            raise ValueError("today는 날짜(date)여야 합니다.")
+
+    @staticmethod
     def _validate(
         name: Any,
         daily_target_minutes: Any,
@@ -837,6 +919,11 @@ class GoalStore:
         known_processes: Collection[str] | None,
         known_sites: Collection[tuple[str, str]] | None,
         known_browsers: Collection[str] | None,
+        *,
+        start_date: Any = None,
+        end_date: Any = None,
+        today: date | None = None,
+        current_period: tuple[date | None, date | None] = (None, None),
     ) -> tuple[GoalSpec | None, list[FieldError]]:
         """입력 형식 검증. 통과하면 (GoalSpec, []), 실패하면 (None, 오류들) — 충돌 검사와 합쳐 알리려고 예외 대신 돌려준다."""
         try:
@@ -850,6 +937,10 @@ class GoalStore:
                     known_processes=known_processes,
                     known_sites=known_sites,
                     known_browsers=known_browsers,
+                    start_date=start_date,
+                    end_date=end_date,
+                    today=today,
+                    current_period=current_period,
                 ),
                 [],
             )
@@ -982,7 +1073,7 @@ class GoalStore:
                 raise ValueError(f"{latest}까지 기록된 스냅샷이 있어 더 이른 날({day})은 바꿀 수 없습니다(지난 날은 확정).")
             self._conn.execute("DELETE FROM goal_snapshots WHERE day = ?", (day,))
             for goal in self.list_goals():
-                if today.weekday() not in goal.weekdays:
+                if not goal.applies_on(today):  # 요일이 아니거나 기간 밖이면 그날의 목표가 아니다
                     continue
                 self._conn.execute(
                     "INSERT INTO goal_snapshots (day, goal_id, name, daily_target_minutes, recorded_at) "

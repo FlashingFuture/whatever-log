@@ -19,6 +19,7 @@ import {
   goalSiteRows,
   goalTargets,
 } from "../lib/goalOverview";
+import { describePeriod, periodStatus, todayText } from "../lib/goalPeriod";
 import { dayRange } from "../lib/goalSelection";
 import { formatTarget, formatWeekdays } from "../lib/goalText";
 import { maxOf } from "../lib/stats";
@@ -43,8 +44,13 @@ function describe(goal: Goal): string {
   return [
     `하루 ${formatTarget(goal.daily_target_minutes)}`,
     formatWeekdays(goal.weekdays),
+    periodStatus(goal, todayText()) === "none"
+      ? ""
+      : describePeriod(goal, todayText()),
     links.length === 0 ? "연결된 프로세스 없음" : links.join(" · "),
-  ].join(" · ");
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 interface SiteResult {

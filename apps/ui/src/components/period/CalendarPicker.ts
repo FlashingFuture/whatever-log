@@ -17,6 +17,11 @@ export interface CalendarPickerProps {
   selected: Period;
   now: Date;
   onSelect: (period: Period) => void;
+  /**
+   * 고를 수 있는 날인가. 주지 않으면 지금까지처럼 **오늘까지**만 고를 수 있다(기록을 보는 달력). 미래를 골라야 하는 달력(목표 기간의 시작일·종료일)은
+   * 이 함수로 "언제부터 고를 수 있는지"를 정한다. 그러면 달을 넘기는 "다음" 단추도 제한 없이 켜 둔다.
+   */
+  isSelectable?: (day: Period) => boolean;
 }
 
 const ARROW_DAY_STEPS: Record<string, number> = {
@@ -31,6 +36,11 @@ export function createCalendarPicker(props: CalendarPickerProps): HTMLElement {
   const root = document.createElement("div");
   root.className = styles.picker;
   let month = periodContaining("month", props.selected.start);
+  const customRule = props.isSelectable !== undefined;
+  const selectable = (day: Period): boolean =>
+    props.isSelectable
+      ? props.isSelectable(day)
+      : isSelectablePeriod(day, props.now);
 
   function render(): void {
     const start = month.start;
@@ -38,7 +48,9 @@ export function createCalendarPicker(props: CalendarPickerProps): HTMLElement {
       label: `${start.getFullYear()}년 ${start.getMonth() + 1}월`,
       labelMinWidth: "9rem",
       canGoPrev: true,
-      canGoNext: isSelectablePeriod(shiftPeriod(month, 1), props.now),
+      // 기본 달력은 이번 달보다 뒤로 못 간다. 규칙을 직접 정한 달력(미래를 고르는 곳)은 달을 계속 넘길 수 있다.
+      canGoNext:
+        customRule || isSelectablePeriod(shiftPeriod(month, 1), props.now),
       onPrev: () => showMonth(shiftPeriod(month, -1), "이전"),
       onNext: () => showMonth(shiftPeriod(month, 1), "다음"),
     });
@@ -69,7 +81,7 @@ export function createCalendarPicker(props: CalendarPickerProps): HTMLElement {
     // 칸에는 숫자만 보이니, 스크린 리더에는 날짜 전체를 읽어준다.
     button.setAttribute("aria-label", formatPeriod(day));
     button.dataset.time = String(day.start.getTime());
-    button.disabled = !isSelectablePeriod(day, props.now);
+    button.disabled = !selectable(day);
     if (day.start.getMonth() !== month.start.getMonth()) {
       button.classList.add(styles.outside);
     }
@@ -116,7 +128,7 @@ export function createCalendarPicker(props: CalendarPickerProps): HTMLElement {
       new Date(Number(focused.dataset.time)),
     );
     const target = shiftPeriod(from, step);
-    if (!isSelectablePeriod(target, props.now)) {
+    if (!selectable(target)) {
       return;
     }
     if (target.start.getMonth() !== month.start.getMonth()) {

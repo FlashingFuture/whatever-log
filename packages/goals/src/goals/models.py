@@ -33,6 +33,23 @@ class Goal:
     created_at: str
     updated_at: str
     sites: tuple[SiteTarget, ...] = ()
+    # 목표의 기간(로컬 날짜, 양끝 포함). 둘 다 None이면 기간이 없는(무기한) 목표다 — 정하면 항상 둘 다 있다(검증이 보장한다).
+    start_date: date | None = None
+    end_date: date | None = None
+
+    def covers(self, day: date) -> bool:
+        """그날이 목표의 기간 안인가. 기간이 없으면 항상 True."""
+        if self.start_date is None or self.end_date is None:
+            return True
+        return self.start_date <= day <= self.end_date
+
+    def applies_on(self, day: date) -> bool:
+        """그날 이 목표가 적용되는가: 요일이 맞고 기간 안이다. 목표량(분모)과 수행 시간(분자) 모두 이 날들만 센다."""
+        return day.weekday() in self.weekdays and self.covers(day)
+
+    def ended_before(self, day: date) -> bool:
+        """기간이 정해져 있고 그날 이전에 끝났는가(종료됨). 기간이 없으면 끝나지 않는다."""
+        return self.end_date is not None and self.end_date < day
 
 
 # 목표의 서버 동기화 선택: ask(아직 안 물음) / sync(서버와 동기화) / local_only(사용자가 올리지 않기로 함).

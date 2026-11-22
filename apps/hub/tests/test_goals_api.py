@@ -179,6 +179,8 @@ def test_progress_sums_the_active_time_of_linked_processes(goals_server) -> None
             "processes": [{"process": "chrome.exe", "active_seconds": 15.0}],
             "sites": [],
             "target_minutes": 120,  # 그 시각이 걸친 하루(월~금 중 하루)의 목표량
+            "start_date": None,
+            "end_date": None,
         }
     ]
     assert payload["summary"] == {
@@ -447,6 +449,8 @@ def test_goal_fields_rejects_unknown_keys_and_fills_missing_ones_with_none() -> 
         "weekdays": None,
         "processes": None,
         "sites": None,
+        "start_date": None,
+        "end_date": None,
     }
     with pytest.raises(BadRequest):
         goal_fields({"name": "a", "extra": 1})

@@ -12,10 +12,13 @@
 - 한 프로세스(사이트)는 하나의 목표에만 연결돼 있고, 브라우저 전체와 그 안의 사이트는 함께 연결할 수
   없어서(저장소가 보장) 같은 시간이 두 번 세어지지 않는다.
 - 프로세스 이름은 대소문자를 구분하지 않고 맞춰 본다(process_key).
+- **기간이 있는 목표는 기간 안의 날만 센다**(목표량·수행 시간 모두): 입력으로 주는 활동 시간은 목표마다 그 목표의 기간과 구간의 교집합(`period_window`)에서 잰 것이어야 한다.
+  기간이 없으면 구간 전체다.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, time, timedelta
 
 from goals.models import Goal
 from goals.validation import process_key, site_key
@@ -69,12 +72,29 @@ class TopTarget:
     site: str | None = None
 
 
+PairOfMaps = tuple[Mapping[str, float], Mapping[tuple[str, str], float] | None]
+
+
+def period_window(goal: Goal, start: datetime, end: datetime) -> tuple[datetime, datetime] | None:
+    """구간 [start, end)와 목표의 기간(로컬 날짜, 양끝 포함)이 겹치는 부분. 기간이 없으면 구간 그대로, 겹치지 않으면 None.
+
+    기간의 경계는 이 PC의 로컬 시간대 자정이다(구간을 정하는 화면과 같은 시계). 돌려주는 시각은 start·end와 같은 시간대의 값이다.
+    """
+    if goal.start_date is None or goal.end_date is None:
+        return start, end
+    first = datetime.combine(goal.start_date, time.min).astimezone().astimezone(UTC)
+    after = datetime.combine(goal.end_date + timedelta(days=1), time.min).astimezone().astimezone(UTC)
+    window_start = max(start.astimezone(UTC), first)
+    window_end = min(end.astimezone(UTC), after)
+    return (window_start, window_end) if window_start < window_end else None
+
+
 def compute_progress(
     goals: Sequence[Goal],
     active_seconds_by_process: Mapping[str, float],
     active_seconds_by_site: Mapping[tuple[str, str], float] | None = None,
 ) -> tuple[list[GoalProgress], ProgressSummary]:
-    """목표들의 수행 시간과 전체 요약을 계산한다.
+    """목표들의 수행 시간과 전체 요약을 계산한다(모든 목표가 같은 활동 시간 표를 쓴다).
 
     active_seconds_by_process의 키는 기록된 프로세스 이름이다. 대소문자만 다른 이름이 따로 기록돼
     있으면(Windows 파일 이름은 대소문자를 구분하지 않는다) 같은 프로세스로 보고 합친다. 시간이 같은
@@ -82,21 +102,27 @@ def compute_progress(
 
     active_seconds_by_site의 키는 (브라우저 프로세스 이름, 도메인)이다. 사이트 연결이 없으면 생략한다.
     """
-    seconds_by_key: dict[str, float] = {}
-    for name, seconds in active_seconds_by_process.items():
-        key = process_key(name)
-        seconds_by_key[key] = seconds_by_key.get(key, 0.0) + seconds
+    return compute_progress_per_goal(goals, lambda _goal: (active_seconds_by_process, active_seconds_by_site))
 
-    site_seconds_by_key: dict[str, float] = {}
-    for (browser, domain), seconds in (active_seconds_by_site or {}).items():
-        key = site_key(browser, domain)
-        site_seconds_by_key[key] = site_seconds_by_key.get(key, 0.0) + seconds
 
+def compute_progress_per_goal(
+    goals: Sequence[Goal],
+    source: Callable[[Goal], PairOfMaps],
+) -> tuple[list[GoalProgress], ProgressSummary]:
+    """목표마다 **자기 활동 시간 표**로 수행 시간을 계산한다. 기간이 있는 목표는 기간 안에서만 잰 표를 받는다(`period_window`)."""
     progress: list[GoalProgress] = []
     for goal in goals:
+        by_process, by_site = source(goal)
+        seconds_by_key: dict[str, float] = {}
+        for name, seconds in by_process.items():
+            key = process_key(name)
+            seconds_by_key[key] = seconds_by_key.get(key, 0.0) + seconds
+        site_seconds_by_key: dict[str, float] = {}
+        for (browser, domain), seconds in (by_site or {}).items():
+            key = site_key(browser, domain)
+            site_seconds_by_key[key] = site_seconds_by_key.get(key, 0.0) + seconds
         times = tuple(
-            ProcessTime(process, seconds_by_key.get(process_key(process), 0.0))
-            for process in goal.processes
+            ProcessTime(process, seconds_by_key.get(process_key(process), 0.0)) for process in goal.processes
         )
         site_times = tuple(
             SiteTime(site.browser, site.domain, site_seconds_by_key.get(site_key(site.browser, site.domain), 0.0))
@@ -106,8 +132,7 @@ def compute_progress(
             GoalProgress(
                 goal_id=goal.id,
                 name=goal.name,
-                active_seconds=sum(time.active_seconds for time in times)
-                + sum(time.active_seconds for time in site_times),
+                active_seconds=sum(time.active_seconds for time in times) + sum(time.active_seconds for time in site_times),
                 processes=times,
                 sites=site_times,
             )

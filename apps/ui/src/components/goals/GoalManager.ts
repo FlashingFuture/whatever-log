@@ -79,6 +79,9 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
   // 연결을 저장하는 중인지. 저장이 끝나고 새 목록이 그려질 때까지 켜 둬서, 낡은 목록에서 연달아 누른 변경이
   // 서버의 최신 상태를 덮어쓰지 못하게 한다.
   let busy = false;
+  // 진행 중인 연결 저장(move). 수정 폼의 저장은 이것이 끝난 뒤에 보낸다 — 두 요청이 hub에서 순서가 뒤바뀌면 나중 저장이
+  // 앞의 저장을 되돌린다(폼은 열 때의 연결을, 연결 저장은 화면을 그릴 때의 기간을 담는다).
+  let pendingMove: Promise<void> | null = null;
   let destroyed = false;
 
   const modal = createModal({
@@ -161,7 +164,17 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
         onSubmit: async (input: GoalInput) => {
           // 저장 중에 다른 화면으로 옮겼다면(뒤로 가기, 닫기) 저장은 그대로 반영하되 화면은 바꾸지 않는다.
           if (goal) {
-            await updateGoal(goal.id, input);
+            // 폼은 연결(프로세스·사이트)을 고치지 않는다. 그새 끝난 연결 저장을 되돌리지 않게, 연결은 저장 직전의 최신 값을 쓴다.
+            await pendingMove;
+            const latest = (await fetchGoals()).find(
+              (candidate) => candidate.id === goal.id,
+            );
+            await updateGoal(
+              goal.id,
+              latest
+                ? { ...input, processes: latest.processes, sites: latest.sites }
+                : input,
+            );
             notifyChange();
             if (id === sceneId) {
               await back();
@@ -325,6 +338,23 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
     }
     busy = true;
     lockPicker();
+    const saving = saveLinks(goal, target, link);
+    pendingMove = saving;
+    try {
+      await saving;
+    } finally {
+      busy = false;
+      if (pendingMove === saving) {
+        pendingMove = null;
+      }
+    }
+  }
+
+  async function saveLinks(
+    goal: Goal,
+    target: LinkTarget,
+    link: boolean,
+  ): Promise<void> {
     const scene = sceneId;
     const scroll = readScroll(modal.body);
     let processes = goal.processes;
@@ -345,6 +375,9 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
         weekdays: goal.weekdays,
         processes,
         sites,
+        // 연결만 바꾸는 수정이라 기간은 지금 값을 그대로 보낸다(서버는 같은 값을 과거여도 받는다).
+        start_date: goal.start_date,
+        end_date: goal.end_date,
       });
       notifyChange();
       if (scene === sceneId) {
@@ -358,8 +391,6 @@ export function createGoalManager(props: GoalManagerProps): GoalManager {
           error: `저장하지 못했습니다: ${message(error)}`,
         });
       }
-    } finally {
-      busy = false;
     }
   }
 

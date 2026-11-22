@@ -80,6 +80,9 @@ export interface Goal {
   processes: string[];
   /** 연결된 브라우저 사이트(세부 페이지). 브라우저 전체와 그 안의 사이트는 함께 연결할 수 없다. */
   sites: SiteLink[];
+  /** 기간(이 PC의 로컬 날짜 `YYYY-MM-DD`, 양끝 포함). 둘 다 null이면 기간 없음(무기한). */
+  start_date: string | null;
+  end_date: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -94,6 +97,9 @@ export interface GoalInput {
   weekdays: number[];
   processes: string[];
   sites: SiteLink[];
+  /** 기간. 둘 다 null이면 기간 없음. 하나만 보내면 서버가 칸별로 알려 준다. */
+  start_date: string | null;
+  end_date: string | null;
 }
 
 export interface ProcessTime {
@@ -122,6 +128,9 @@ export interface GoalProgress {
   target_minutes: number;
   processes: ProcessTime[];
   sites: SiteTime[];
+  /** 목표의 기간(없으면 null) — 홈 캐러셀이 종료된 목표를 거르는 데 쓴다. */
+  start_date: string | null;
+  end_date: string | null;
 }
 
 /** 구간의 목표별 수행 시간과 요약. 계산(정의)은 서버(packages/goals)가 한다. */

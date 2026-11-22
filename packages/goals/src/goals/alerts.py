@@ -209,7 +209,7 @@ def due_alerts(
 ) -> list[DueAlert]:
     """지금(now, 이 PC의 시간대로 시간이 붙은 시각) 알려야 할 알림들.
 
-    알리는 조건은 모두 만족해야 한다: 켜져 있다 / 오늘이 적용 요일이다 / 마감 시각이 지났다 / 오늘 아직 알리지 않았다 / 규칙을 마감 시각 전에 만들었다 /
+    알리는 조건은 모두 만족해야 한다: 켜져 있다 / 목표의 기간 안이다(기간이 없으면 항상) / 오늘이 적용 요일이다 / 마감 시각이 지났다 / 오늘 아직 알리지 않았다 / 규칙을 마감 시각 전에 만들었다 /
     대상의 오늘 활성 시간이 최소 시간 미만이다. 목표가 지워졌거나 대상 프로세스를 목표에서 뺐다면(연결이 끊겼다) 건너뛴다.
 
     seconds_by_process는 기록된 프로세스 이름 → 오늘 활성 시간(초), goal_seconds는 목표 id → 오늘 목표 수행 시간(초, `goals.compute_progress`의
@@ -229,6 +229,8 @@ def due_alerts(
     for alert in alerts:
         goal = by_goal.get(alert.goal_id)
         if goal is None or not alert.enabled or alert.id in fired:
+            continue
+        if not goal.covers(today):  # 기간이 아직 시작하지 않았거나 이미 끝난 목표는 알리지 않는다
             continue
         if today.weekday() not in alert.weekdays:
             continue
