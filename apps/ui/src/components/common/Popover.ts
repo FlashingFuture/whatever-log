@@ -36,6 +36,9 @@ export function closePopoverFor(
  * anchor 아래에 content를 띄운다. 같은 anchor로 다시 부르면 닫는다(토글).
  * 바깥을 누르거나 Esc를 누르면 닫힌다.
  *
+ * anchor가 열린 모달(<dialog>) 안에 있으면 팝업도 그 dialog 안에 붙인다 — 모달은 top layer라 body에 붙인 팝업은
+ * 그 뒤에 가려지고 포커스도 모달 밖으로 나갈 수 없다. 위치는 화면(viewport) 기준이라 어느 쪽에 붙든 같다.
+ *
  * 처음 포커스는 content 안의 [data-autofocus] 요소로 간다(없으면 첫 번째로 누를
  * 수 있는 버튼). data-autofocus="center"면 스크롤 목록 가운데로 끌어온다 — 긴
  * 목록을 열었을 때 선택된 항목이 바로 보이게.
@@ -56,8 +59,8 @@ export function togglePopover(
   popover.setAttribute("role", "dialog");
   popover.setAttribute("aria-label", ariaLabel);
   popover.append(content);
-  document.body.append(popover);
-  placeBelow(popover, anchor);
+  (anchor.closest("dialog[open]") ?? document.body).append(popover);
+  place(popover, anchor);
   anchor.setAttribute("aria-expanded", "true");
 
   function onPointerDown(event: PointerEvent): void {
@@ -75,8 +78,9 @@ export function togglePopover(
     }
   }
 
-  function onResize(): void {
-    placeBelow(popover, anchor);
+  // 창 크기가 바뀌거나 anchor를 품은 영역(모달 본문 등)이 스크롤되면 따라 움직인다.
+  function onReposition(): void {
+    place(popover, anchor);
   }
 
   function close({ restoreFocus = false }: CloseOptions = {}): void {
@@ -86,7 +90,8 @@ export function togglePopover(
     active = null;
     document.removeEventListener("pointerdown", onPointerDown, true);
     document.removeEventListener("keydown", onKeyDown, true);
-    window.removeEventListener("resize", onResize);
+    window.removeEventListener("resize", onReposition);
+    document.removeEventListener("scroll", onReposition, true);
     popover.remove();
     anchor.setAttribute("aria-expanded", "false");
     if (restoreFocus && anchor.isConnected) {
@@ -96,25 +101,41 @@ export function togglePopover(
 
   document.addEventListener("pointerdown", onPointerDown, true);
   document.addEventListener("keydown", onKeyDown, true);
-  window.addEventListener("resize", onResize);
+  window.addEventListener("resize", onReposition);
+  document.addEventListener("scroll", onReposition, true);
   active = { anchor, element: popover, close };
 
   focusInitial(popover);
 }
 
-function placeBelow(popover: HTMLElement, anchor: HTMLElement): void {
+/**
+ * 팝업을 화면 안에 놓는다(위치는 viewport 기준, position: fixed). anchor 가운데 아래가 기본이고, 아래에 자리가 모자라고
+ * 위가 더 넓으면 anchor 위로 뒤집는다. 좌우·위아래 모두 화면 가장자리에서 margin만큼 안쪽으로 밀어 넣는다.
+ */
+function place(popover: HTMLElement, anchor: HTMLElement): void {
   const rect = anchor.getBoundingClientRect();
   const margin = 8;
-  const viewportRight = window.scrollX + document.documentElement.clientWidth;
-  // anchor 가운데 아래에 두되, 화면 밖으로 나가면 안쪽으로 밀어 넣는다.
-  const centered =
-    rect.left + window.scrollX + rect.width / 2 - popover.offsetWidth / 2;
+  const gap = 4;
+  const viewportWidth = document.documentElement.clientWidth;
+  const viewportHeight = document.documentElement.clientHeight;
+  const width = popover.offsetWidth;
+  const height = popover.offsetHeight;
+
+  const centered = rect.left + rect.width / 2 - width / 2;
   const left = Math.max(
-    window.scrollX + margin,
-    Math.min(centered, viewportRight - popover.offsetWidth - margin),
+    margin,
+    Math.min(centered, viewportWidth - width - margin),
   );
+
+  const below = rect.bottom + gap;
+  const spaceBelow = viewportHeight - below - margin;
+  const spaceAbove = rect.top - gap - margin;
+  const top =
+    height > spaceBelow && spaceAbove > spaceBelow
+      ? rect.top - gap - height
+      : below;
   popover.style.left = `${left}px`;
-  popover.style.top = `${rect.bottom + window.scrollY + 4}px`;
+  popover.style.top = `${Math.max(margin, Math.min(top, viewportHeight - height - margin))}px`;
 }
 
 function focusInitial(popover: HTMLElement): void {
