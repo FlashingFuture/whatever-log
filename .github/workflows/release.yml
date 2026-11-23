@@ -14,8 +14,9 @@ on:
       - "v*"
   workflow_dispatch:
 
+# 기본은 읽기 권한뿐이다. Release를 올리는 publish job만 쓰기 권한을 받는다.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   bundle:
@@ -23,13 +24,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          persist-credentials: false # 쓰기 토큰을 .git/config에 남기지 않는다(프로젝트 코드가 돈다). Release는 GH_TOKEN을 따로 넘긴다
+          persist-credentials: false # 토큰을 .git/config에 남기지 않는다(프로젝트 코드가 돈다)
 
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
 
-      - uses: astral-sh/setup-uv@v10.3.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
 
       # 운영 서버가 이 앱이 요구하는 API 계약을 갖췄는지 본다 — 서버를 먼저, 앱은 그다음(docs/deploy.md).
       # 태그(실제 출시)에서는 서버가 뒤처졌으면 멈춘다. 수동 실행(예행연습)에서는 알리기만 한다.
@@ -108,17 +109,45 @@ jobs:
           run uninstall
           [ "$(run status | grep -c '자동 시작 등록 안 됨')" -eq 2 ] || { echo "uninstall 뒤에도 자동 시작이 남아 있어요"; exit 1; }
 
+      # 설치 시험을 통과한 zip만 다음 job(Release 올리기)에 넘긴다.
+      - name: 번들 넘기기
+        if: github.ref_type == 'tag'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bundle
+          path: ${{ steps.build.outputs.archive }}
+          if-no-files-found: error
+          retention-days: 1
+
+    outputs:
+      sha256: ${{ steps.build.outputs.sha256 }}
+
+  # 저장소 쓰기 권한은 이 job에만 있다. 체크아웃·프로젝트 코드·서드파티 액션 없이 공식 아티팩트 내려받기와 gh만 쓴다 —
+  # 번들 job의 코드나 액션이 쓰기 토큰을 쥐지 않게.
+  publish:
+    needs: bundle
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bundle
+          path: dist
+
       - name: GitHub Release 올리기
         if: github.ref_type == 'tag'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          ARCHIVE: ${{ steps.build.outputs.archive }}
-          SHA256: ${{ steps.build.outputs.sha256 }}
+          SHA256: ${{ needs.bundle.outputs.sha256 }}
         run: |
+          archive="$(ls dist/*.zip)"
           flags=""
           if [[ "${GITHUB_REF_NAME}" == *-* ]]; then flags="--prerelease"; fi
-          gh release create "${GITHUB_REF_NAME}" "$ARCHIVE" $flags \
+          gh release create "${GITHUB_REF_NAME}" "$archive" $flags \
+            --repo "${GITHUB_REPOSITORY}" \
             --title "whatever.log ${GITHUB_REF_NAME}" \
             --generate-notes \
             --notes "설치: zip을 풀고 install.cmd를 실행하세요(uv·파이썬은 따로 필요 없어요). SHA-256: ${SHA256}"

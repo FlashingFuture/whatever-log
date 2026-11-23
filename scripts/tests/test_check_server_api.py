@@ -60,7 +60,26 @@ def test_the_deploy_waits_for_approval_and_migrates_before_deploying() -> None:
     assert workflow.index("pnpm test") < workflow.index("migrations apply DB --remote") < workflow.index("wrangler deploy")
     assert 'COMMIT_SHA:${GITHUB_SHA}' in workflow and "/version" in workflow
     assert "cancel-in-progress: false" in workflow  # 마이그레이션 도중에 끊지 않는다
-    assert workflow.count("actions/checkout@") == workflow.count("persist-credentials: false") == 1
+    assert workflow.count("actions/checkout@") == workflow.count("persist-credentials: false") == 2  # check·deploy job
+
+
+def test_the_checks_run_before_approval_without_the_environment_or_the_token() -> None:
+    """서버 검사와 "뒤로 가지 않는지"는 환경·토큰이 없는 check job이 승인 전에 하고, deploy는 그 뒤에만 승인 대기에 들어간다."""
+    workflow = DEPLOY.read_text(encoding="utf-8")
+    check = workflow[workflow.index("  check:") : workflow.index("  deploy:")]
+    deploy = workflow[workflow.index("  deploy:") :]
+
+    assert "environment:" not in check and "secrets." not in check
+    assert "pnpm test" in check and "운영보다 뒤로 가지 않는지 확인" in check
+    assert "needs: check" in deploy and "name: production" in deploy
+
+
+def test_an_unreadable_production_version_stops_the_deploy() -> None:
+    """운영 /version을 읽지 못했을 때(5xx·네트워크) 0으로 보고 통과시키지 않는다 — 404(없는 서버)만 0이다."""
+    workflow = DEPLOY.read_text(encoding="utf-8")
+
+    assert "|| echo '{}'" not in workflow.split("운영보다 뒤로 가지 않는지 확인")[1].split("- name:")[0]
+    assert "404)" in workflow and "*)" in workflow
 
 
 def test_the_release_checks_the_server_before_building() -> None:
@@ -97,10 +116,22 @@ def test_actions_that_see_the_deploy_token_are_pinned_to_a_commit() -> None:
     assert uses and all(re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", use) for use in uses)
 
 
-def test_the_release_checkout_does_not_keep_the_write_token() -> None:
+def test_the_release_checkout_does_not_keep_the_token() -> None:
     workflow = RELEASE.read_text(encoding="utf-8")
 
     assert workflow.count("actions/checkout@") == workflow.count("persist-credentials: false") == 1
+
+
+def test_only_the_publish_job_can_write_and_it_runs_no_project_code() -> None:
+    """번들 job(프로젝트 코드·서드파티 액션이 도는 곳)은 읽기 권한뿐이고, 쓰기 권한은 Release를 올리는 job에만 — 체크아웃 없이 gh만 쓴다."""
+    workflow = RELEASE.read_text(encoding="utf-8")
+    top = workflow[: workflow.index("jobs:")]
+    publish = workflow[workflow.index("  publish:") :]
+
+    assert "contents: read" in top and "contents: write" not in top
+    assert workflow.count("contents: write") == 1 and "contents: write" in publish
+    assert "actions/checkout" not in publish and "uv run" not in publish
+    assert re.search(r"astral-sh/setup-uv@[0-9a-f]{40}", workflow)  # 서드파티 액션은 커밋으로 고정
 
 
 def test_the_server_has_no_local_deploy_script() -> None:
