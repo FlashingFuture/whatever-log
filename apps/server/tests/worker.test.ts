@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import worker, { type Env } from "../src/index.ts";
+import { API_VERSION } from "../src/version.ts";
 import { createFakeD1 } from "./helpers/fakeD1.ts";
 import { CLIENT_ID, VALID_BODY } from "./helpers/googleFixtures.ts";
 
@@ -20,6 +21,29 @@ test("/health는 200이다", async () => {
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { ok: true });
+});
+
+test("/version은 API 계약 번호와 배포한 커밋을 알려 준다(커밋이 없으면 null)", async () => {
+  const local = await call(new Request("https://server.example/version"));
+  assert.equal(local.status, 200);
+  assert.deepEqual(await local.json(), { api: API_VERSION, commit: null });
+  assert.equal(local.headers.get("Cache-Control"), "no-store");
+
+  const deployed = await worker.fetch(
+    new Request("https://server.example/version"),
+    { ...env(), COMMIT_SHA: "abc123" },
+    {} as never,
+  );
+  assert.deepEqual(await deployed.json(), {
+    api: API_VERSION,
+    commit: "abc123",
+  });
+
+  const post = await call(
+    new Request("https://server.example/version", { method: "POST" }),
+  );
+  assert.equal(post.status, 405);
+  assert.equal(post.headers.get("Allow"), "GET");
 });
 
 test("/auth/google은 POST만 받는다", async () => {

@@ -39,9 +39,15 @@ SELECTOR_TEST = "scripts/tests/test_check.py"
 CROSS_CHECKS = {
     # 서버의 nameKey를 node로 실행해 goals의 name_key와 비교한다
     "apps/server/src/": ("packages/goals/tests/test_name_key_parity.py",),
-    # 번들 만들기·설치 스크립트·릴리스 워크플로·VERSION을 검사한다
+    # 서버의 API 계약 번호(version.ts)와 앱의 요구(cloud.compat)가 같은지 scripts/tests가 본다
+    "apps/server/src/version.ts": ("scripts/tests",),
+    "packages/cloud/src/cloud/compat.py": ("scripts/tests",),
+    # 번들 만들기·설치 스크립트·릴리스·배포 워크플로·VERSION을 검사한다
     "scripts/": ("scripts/tests",),
     ".github/workflows/release.yml": ("scripts/tests",),
+    ".github/workflows/deploy-server.yml": ("scripts/tests",),
+    # 마이그레이션이 추가만 하는지 scripts/tests/test_migrations.py가 본다
+    "apps/server/migrations/": ("scripts/tests",),
     "VERSION": ("scripts/tests",),
 }
 

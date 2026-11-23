@@ -5,12 +5,15 @@ import { errorResponse, jsonResponse } from "./http.ts";
 import { type MailEnv, resolveSender } from "./mail/config.ts";
 import { createMail } from "./mail/factory.ts";
 import { handleApi } from "./sync/api.ts";
+import { API_VERSION } from "./version.ts";
 
 /** Worker가 받는 환경: wrangler.toml의 [vars]·바인딩과 비밀 값(.dev.vars / wrangler secret). */
 export interface Env extends MailEnv {
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
   DB: Db;
+  /** 배포한 커밋(배포 워크플로가 `wrangler deploy --var COMMIT_SHA:…`로 넣는다). 로컬·직접 배포에서는 없다. */
+  COMMIT_SHA?: string;
 }
 
 // Worker 인스턴스가 살아 있는 동안 재사용되도록 모듈 수준에서 한 번만 만든다(Google 공개키를 1시간 캐시).
@@ -51,6 +54,15 @@ async function route(request: Request, env: Env): Promise<Response> {
   try {
     if (pathname === "/health") {
       return jsonResponse({ ok: true });
+    }
+    if (pathname === "/version") {
+      if (request.method !== "GET") {
+        return errorResponse(405, "method_not_allowed", "GET만 받습니다.", {
+          Allow: "GET",
+        });
+      }
+      // 공개 정보다: API 계약 번호와 배포한 커밋(저장소가 공개라 커밋은 비밀이 아니다). 운영 서버가 어느 코드인지 바로 확인하려는 것.
+      return jsonResponse({ api: API_VERSION, commit: env.COMMIT_SHA ?? null });
     }
     if (pathname === "/auth/google") {
       if (request.method !== "POST") {
