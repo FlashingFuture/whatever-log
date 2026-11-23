@@ -31,6 +31,10 @@ export const LIMITS = {
   testPerUserPerDay: 3,
   /** 서버 전체가 하루(UTC)에 보내는 메일의 상한(시험·확인·보고서 합계). */
   perDayTotal: 80,
+  /** 한 사용자에게 하루(UTC)에 보내는 보고서(보통 하루 한 통 — 응답을 확인하지 못해 다시 보내는 경우까지 두 통). */
+  reportPerUserPerDay: 2,
+  /** Cron 한 번에 보내는 보고서의 상한(무료 요금제의 실행 시간 안에서 끝나게). 남은 것은 다음 실행(10분 뒤)이 보낸다. */
+  reportsPerRun: 20,
   /** 한 사용자에게 하루(UTC)에 보내는 첫 신청 확인 메일(한 번뿐이지만, 응답을 확인하지 못한 재시도가 같은 날 겹치지 않게). */
   welcomePerUserPerDay: 1,
   /**
