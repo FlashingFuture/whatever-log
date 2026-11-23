@@ -97,8 +97,8 @@
 - Google 공개키(JWKS)는 Worker 인스턴스에서 1시간 캐시하고, 모르는 `kid`는 1분에 한 번만 다시 받는다.
 - 코드·토큰·비밀은 로그에 남기지 않는다.
 
-배포 전에 할 일: `wrangler d1 create whatever-log`로 만든 id를 `wrangler.toml`의 `database_id`에 넣고,
-`wrangler d1 migrations apply DB --remote`, `wrangler secret put GOOGLE_CLIENT_SECRET`, `wrangler deploy`.
+처음 한 번: `wrangler d1 create whatever-log`로 만든 id를 `wrangler.toml`의 `database_id`에 넣고 `wrangler secret put GOOGLE_CLIENT_SECRET`.
+마이그레이션과 배포는 `deploy-server` 워크플로가 한다(`docs/deploy.md`) — 로컬에서 `--remote`·`wrangler deploy`를 돌리지 않는다.
 로컬 확인은 `wrangler d1 migrations apply DB --local` 뒤 `wrangler dev`.
 
 ## 데스크톱 로그인 (packages/cloud)

@@ -70,7 +70,7 @@ PC(앱) ──▶ 서버(Workers) ──▶ 메일 서비스(Resend) ──▶ �
 
 1. Cloudflare Registrar에서 도메인을 산다(원가 판매, 연 $10 안팎).
 2. Resend에서 그 도메인을 추가하고, 알려 주는 **SPF·DKIM(·DMARC) DNS 레코드**를 Cloudflare DNS에 넣어 인증을 마친다. 발신 주소의 도메인이 서명 도메인과 같아야(정렬) 스팸함으로 가지 않는다.
-3. `wrangler.toml`의 `MAIL_FROM_DOMAIN`을 채우고 배포한다. 운영 키는 `wrangler secret put RESEND_API_KEY`, DB는 `wrangler d1 migrations apply DB --remote`.
+3. `wrangler.toml`의 `MAIL_FROM_DOMAIN`을 채우고 배포한다(`deploy-server` 워크플로가 마이그레이션과 함께 한다, `docs/deploy.md`). 운영 키는 `wrangler secret put RESEND_API_KEY`.
 4. 시험 메일을 다시 보내 메일 헤더의 `spf=pass dkim=pass dmarc=pass`를 확인한다.
 
 ## 비용 가드

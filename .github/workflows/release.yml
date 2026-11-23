@@ -5,6 +5,7 @@
 # 번들에는 파이썬이 들어 있어서 사용자 PC에 uv·파이썬이 필요 없다. 설치 시험은 그것을 확인하려고 PATH를 비운 채로 한다
 # (러너에는 uv·파이썬이 깔려 있어서, 그냥 돌리면 번들이 그것에 기대도 통과해 버린다).
 # Actions 화면에서 직접 실행(workflow_dispatch)하면 번들 만들기와 설치 시험까지만 하고 Release는 올리지 않는다 — 태그 전 예행연습용.
+# 시작할 때 운영 서버의 API 계약이 이 앱의 요구 이상인지 확인한다(서버가 뒤처진 채로 앱이 나가지 않게, docs/deploy.md).
 name: release
 
 on:
@@ -27,6 +28,15 @@ jobs:
           node-version: "24"
 
       - uses: astral-sh/setup-uv@v10.3.0
+
+      # 운영 서버가 이 앱이 요구하는 API 계약을 갖췄는지 본다 — 서버를 먼저, 앱은 그다음(docs/deploy.md).
+      # 태그(실제 출시)에서는 서버가 뒤처졌으면 멈춘다. 수동 실행(예행연습)에서는 알리기만 한다.
+      - name: 운영 서버 API 계약 확인
+        continue-on-error: ${{ github.ref_type != 'tag' }}
+        shell: bash
+        run: |
+          uv python install 3.14
+          uv run python scripts/check_server_api.py
 
       - name: 번들 만들기(태그가 VERSION과 같을 때만)
         id: build
