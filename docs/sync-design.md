@@ -37,10 +37,10 @@
 | 요청 | 설명 |
 | --- | --- |
 | `GET /goals` | 내 목표 전부(삭제 표시 포함). 목표는 최대 20개라 페이지가 없다 |
-| `PUT /goals/{id}` | 목표 만들기·수정. `{name, daily_target_minutes, weekdays, base_revision, start_date, end_date}`. 새 목표는 `base_revision: 0`, 수정은 현재 revision. 기간은 둘 다 `null`(기간 없음)이거나 둘 다 `YYYY-MM-DD`(시작 ≤ 종료). 기간 칸이 없는 수정은 서버의 기간을 그대로 둔다(이전 버전 호환). 같은 내용으로 처음 만드는 요청을 다시 보내도 200(재시도 안전). revision 불일치·삭제된 목표·이름 중복·20개 초과는 409 |
+| `PUT /goals/{id}` | 목표 만들기·수정. `{name, daily_target_minutes, weekdays, base_revision, start_date, end_date}`. 새 목표는 `base_revision: 0`, 수정은 현재 revision. 기간은 둘 다 `null`(기간 없음)이거나 둘 다 2000~2100년의 실제 날짜 `YYYY-MM-DD`(시작 ≤ 종료, `2026-02-30` 같은 없는 날은 400). 기간 칸이 없는 수정은 서버의 기간을 그대로 둔다(이전 버전 호환). 같은 내용으로 처음 만드는 요청을 다시 보내도 200(재시도 안전). revision 불일치·삭제된 목표·이름 중복·20개 초과는 409 |
 | `DELETE /goals/{id}` | 목표 삭제(그 목표의 달성 줄도 삭제). 이미 삭제됐으면 204 |
 | `PUT /progress` | `{device_id, entries: [{goal_id, day, minutes, target_minutes}]}` 최대 50개를 이 기기의 줄로 덮어쓴다. 없는(삭제된) 목표는 `ignored_goal_ids`로 돌려준다. 기기는 사용자당 10대까지 |
-| `POST /progress/remove` | `{device_id, entries: [{goal_id, day}]}` 최대 50개, 이 기기가 보낸 줄만 지운다(없는 줄은 넘어간다). 보낸 뒤에 목표에 들지 않게 된 날(기간·요일 변경)을 정리한다. `{removed}` |
+| `POST /progress/remove` | `{device_id, entries: [{goal_id, day}]}` 최대 50개, 이 기기가 보낸 줄만 지운다(없는 줄은 넘어간다). 보낸 뒤에 목표에 들지 않게 된 날(기간·요일 변경)을 정리한다: 다시 계산하는 최근 8일은 그날 줄이 없어졌으면, 그보다 오래된 날(최근 400일 안)은 지금 기간 밖이면 지운다. `{removed}`(실제로 지운 줄 수) |
 | `GET /progress?from=&to=` | 날짜 구간(최대 400일)의 목표·날짜별 합산: `{goal_id, day, minutes, target_minutes, percent, devices}` |
 | `GET /devices` | 달성도를 보낸 기기들: `{device_id, last_sent_at, rows}`(최근에 보낸 순). **이름은 없다** — 이름을 받으면 PC 이름 같은 새 개인 정보가 서버에 생긴다 |
 | `DELETE /devices/{device_id}` | 그 기기가 보낸 달성 줄을 모두 삭제 |

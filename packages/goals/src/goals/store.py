@@ -809,11 +809,30 @@ class GoalStore:
                 (remote_id, revision, goal_id),
             )
 
-    def mark_pushed(self, goal_id: int, revision: int, *, expect_generation: int | None = None) -> None:
-        """서버에 수정을 보냈다: 서버가 돌려준 revision을 적고 밀린 수정 표시를 지운다."""
+    def mark_pushed(
+        self, goal_id: int, revision: int, *, sent: Goal | None = None, expect_generation: int | None = None
+    ) -> None:
+        """서버에 수정을 보냈다: 서버가 돌려준 revision을 적고 밀린 수정 표시를 지운다.
+
+        sent(보낸 목표 값)를 주면 **지금 저장된 값이 보낸 값과 같을 때만** 표시를 지운다 — 응답을 기다리는 사이에 이 PC에서 다시 고쳤다면
+        그 수정은 아직 서버에 가지 않았으므로 표시를 남겨 다음 주기에 보낸다(revision은 서버의 최신으로 적는다). 비교는 서버가 아는 칸 전부다.
+        """
         with self._write(expect_generation):
+            if sent is None:
+                self._conn.execute("UPDATE goals SET remote_revision = ?, dirty = 0 WHERE id = ?", (revision, goal_id))
+                return
             self._conn.execute(
-                "UPDATE goals SET remote_revision = ?, dirty = 0 WHERE id = ?", (revision, goal_id)
+                "UPDATE goals SET remote_revision = ?, dirty = CASE WHEN name = ? AND daily_target_minutes = ? AND weekdays = ? "
+                "AND start_date IS ? AND end_date IS ? THEN 0 ELSE dirty END WHERE id = ?",
+                (
+                    revision,
+                    sent.name,
+                    sent.daily_target_minutes,
+                    _weekday_mask(frozenset(sent.weekdays)),
+                    _iso(sent.start_date),
+                    _iso(sent.end_date),
+                    goal_id,
+                ),
             )
 
     def unlink(self, goal_id: int, *, expect_generation: int | None = None) -> None:
@@ -836,8 +855,11 @@ class GoalStore:
         start_date: str | None = None,
         end_date: str | None = None,
         expect_generation: int | None = None,
-    ) -> None:
-        """서버의 값(이름·목표 시간·요일·기간)으로 이 목표를 맞춘다. 프로세스·사이트 연결은 그대로다.
+    ) -> bool:
+        """서버의 값(이름·목표 시간·요일·기간)으로 이 목표를 맞춘다. 프로세스·사이트 연결은 그대로다. 맞췄으면 True.
+
+        이 PC에서 고쳐 아직 서버에 보내지 않은 목표(dirty)면 **아무것도 바꾸지 않고 False** — 호출부가 연결 목록을 읽은 뒤에 사용자가 고쳤을
+        수 있다. 확인과 저장은 같은 트랜잭션이다. 이 PC의 수정은 다음 주기에 서버의 최신 revision 위로 올라간다.
 
         서버의 값이 이 PC의 규칙에 맞지 않거나(목표 시간·요일) 같은 이름의 다른 목표가 이미 있으면 그 칸을 짚어 GoalValidationError를
         올린다(이름은 목표마다 하나뿐이다). 검사는 저장 전에 하므로 아무것도 바뀌지 않는다.
@@ -849,6 +871,9 @@ class GoalStore:
         mask = _weekday_mask(frozenset(weekdays))
         with self._write(expect_generation):
             self._require_goal(goal_id)
+            (dirty,) = self._conn.execute("SELECT dirty FROM goals WHERE id = ?", (goal_id,)).fetchone()
+            if dirty:
+                return False
             try:
                 self._conn.execute(
                     "UPDATE goals SET name = ?, name_key = ?, daily_target_minutes = ?, weekdays = ?, start_date = ?, end_date = ?, "
@@ -857,6 +882,7 @@ class GoalStore:
                 )
             except sqlite3.IntegrityError as error:
                 raise GoalValidationError(_integrity_errors(error)) from None
+        return True
 
     def create_from_remote(
         self,

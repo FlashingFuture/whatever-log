@@ -18,9 +18,15 @@ from goals.store import GoalStore
 
 
 def goals_for_day(store: GoalStore, day: date, current: Sequence[Goal]) -> list[Goal]:
-    """그날 적용된 목표 설정. 스냅샷이 있으면 스냅샷, 없으면 지금 목표 중 그 요일에 적용되는 것."""
+    """그날 적용된 목표 설정. 스냅샷이 있으면 스냅샷, 없으면 지금 목표 중 그 요일에 적용되는 것.
+
+    기간은 **지금 목표의 기간**으로 판단한다 — 스냅샷이 있는 날이어도 지금 기간 밖이면 그 목표는 그날의 목표가 아니다(기간 밖의 날은 목표량과
+    달성 시간 모두에서 뺀다는 규칙이 스냅샷보다 우선한다. 스냅샷에는 기간이 없다). 지금 없는(지운) 목표의 스냅샷은 그대로 둔다.
+    """
     snapshots = store.snapshots(day)
     if snapshots:
+        by_id = {goal.id: goal for goal in current}
+        snapshots = [snap for snap in snapshots if snap.goal_id not in by_id or by_id[snap.goal_id].covers(day)]
         return [
             Goal(
                 id=snap.goal_id,

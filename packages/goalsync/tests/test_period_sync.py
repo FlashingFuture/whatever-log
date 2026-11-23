@@ -224,3 +224,52 @@ def test_nothing_is_removed_when_every_sent_day_still_counts(tmp_path, store, st
     report = _run(store, state, server, db)
 
     assert report.progress_removed == 0 and "remove_progress" not in server.calls
+
+
+def test_old_days_sent_at_first_link_are_removed_when_they_leave_the_period(tmp_path, store, state, server) -> None:
+    old = TODAY - timedelta(days=20)  # 다시 계산하는 최근 8일보다 오래됐다(처음 연결 때 한 달치로 보냈다)
+    db = make_recorder_db(tmp_path / "r.db", {old: [("Code.exe", 40)]})
+    goal = _linked(store, server, processes=["Code.exe"])
+    _enable(store)
+    _run(store, state, server, db)
+    device = state.device_id()
+    assert ("r-1", device, old.isoformat()) in server.progress
+
+    _update(store, goal, start=TODAY.isoformat(), end=(TODAY + timedelta(days=10)).isoformat())
+    _run(store, state, server, db)
+
+    assert ("r-1", device, old.isoformat()) not in server.progress
+    assert state.pushed("r-1", old.isoformat()) is None
+
+
+def test_old_days_still_inside_the_period_are_kept(tmp_path, store, state, server) -> None:
+    old = TODAY - timedelta(days=20)
+    db = make_recorder_db(tmp_path / "r.db", {old: [("Code.exe", 40)]})
+    goal = _linked(store, server, processes=["Code.exe"])
+    _enable(store)
+    _run(store, state, server, db)
+
+    # 요일만 바꿔 오래된 날의 요일이 빠져도 오래된 날은 다시 보지 않는다(지금 기간 밖일 때만 지운다).
+    _update(store, goal, weekdays=[(old.weekday() + 1) % 7])
+    _run(store, state, server, db)
+
+    assert ("r-1", state.device_id(), old.isoformat()) in server.progress
+
+
+def test_the_removed_count_is_what_the_server_actually_removed(tmp_path, store, state, server) -> None:
+    db = make_recorder_db(tmp_path / "r.db", {})
+    goal = _linked(store, server, processes=["Code.exe"])
+    _enable(store)
+    _run(store, state, server, db)
+    device = state.device_id()
+    yesterday = (TODAY - timedelta(days=1)).isoformat()
+    del server.progress[("r-1", device, yesterday)]  # 서버에는 이미 없다(다른 경로로 지워졌다)
+
+    # 처음 연결 때 보낸 지난날(한 달치)이 모두 기간 밖이 된다 — 서버에 실제로 남아 있던 줄만 센다.
+    on_server = [key for key in server.progress if key[1] == device and key[2] < TODAY.isoformat()]
+    _update(store, goal, start=TODAY.isoformat(), end=(TODAY + timedelta(days=3)).isoformat())
+    report = _run(store, state, server, db)
+
+    assert report.progress_removed == len(on_server) > 0
+    assert [key for key in server.progress if key[1] == device and key[2] < TODAY.isoformat()] == []
+    assert state.pushed("r-1", yesterday) is None  # 서버에 없던 줄도 보낸 기록에서는 지운다
