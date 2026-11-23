@@ -1,4 +1,5 @@
 import importlib.util
+import re
 from pathlib import Path
 
 import pytest
@@ -69,3 +70,41 @@ def test_the_release_checks_the_server_before_building() -> None:
     assert check < workflow.index("scripts/build_release.py")
     step = workflow[workflow.rindex("- name:", 0, check) : check]
     assert "continue-on-error: ${{ github.ref_type != 'tag' }}" in step  # 태그(출시)에서는 멈춘다
+
+
+def test_the_cloudflare_token_is_only_given_to_the_steps_that_deploy() -> None:
+    """토큰은 마이그레이션·배포 단계에만 — 의존성 설치 스크립트나 테스트 코드가 읽지 못하게."""
+    workflow = DEPLOY.read_text(encoding="utf-8")
+    first_use = workflow.index("secrets.CLOUDFLARE_API_TOKEN")
+
+    assert workflow.index("pnpm test") < first_use  # 그 전의 단계(설치·검사)에는 없다
+    assert workflow.count("secrets.CLOUDFLARE_API_TOKEN") == 2
+    assert "--filter server..." in workflow
+
+
+def test_the_deploy_refuses_to_go_back_to_an_older_contract_before_migrating() -> None:
+    workflow = DEPLOY.read_text(encoding="utf-8")
+
+    guard = workflow.index("운영보다 뒤로 가지 않는지 확인")
+    assert guard < workflow.index("migrations apply DB --remote")
+    assert "allow_downgrade" in workflow and "jq -e --arg c" in workflow
+
+
+def test_actions_that_see_the_deploy_token_are_pinned_to_a_commit() -> None:
+    workflow = DEPLOY.read_text(encoding="utf-8")
+    uses = re.findall(r"uses: (\S+)", workflow)
+
+    assert uses and all(re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", use) for use in uses)
+
+
+def test_the_release_checkout_does_not_keep_the_write_token() -> None:
+    workflow = RELEASE.read_text(encoding="utf-8")
+
+    assert workflow.count("actions/checkout@") == workflow.count("persist-credentials: false") == 1
+
+
+def test_the_server_has_no_local_deploy_script() -> None:
+    """로컬에서 운영에 배포하지 않는다(docs/deploy.md 규칙 4)."""
+    package = (ROOT / "apps" / "server" / "package.json").read_text(encoding="utf-8")
+
+    assert '"deploy"' not in package

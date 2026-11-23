@@ -22,6 +22,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false # 쓰기 토큰을 .git/config에 남기지 않는다(프로젝트 코드가 돈다). Release는 GH_TOKEN을 따로 넘긴다
 
       - uses: actions/setup-node@v7
         with:

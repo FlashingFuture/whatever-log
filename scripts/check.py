@@ -46,6 +46,8 @@ CROSS_CHECKS = {
     "scripts/": ("scripts/tests",),
     ".github/workflows/release.yml": ("scripts/tests",),
     ".github/workflows/deploy-server.yml": ("scripts/tests",),
+    # 마이그레이션이 추가만 하는지 scripts/tests/test_migrations.py가 본다
+    "apps/server/migrations/": ("scripts/tests",),
     "VERSION": ("scripts/tests",),
 }
 
