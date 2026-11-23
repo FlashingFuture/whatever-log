@@ -171,6 +171,7 @@ export async function putSubscription(
   user: MailUser,
   input: SubscriptionInput,
   now: Date,
+  retried = false,
 ): Promise<PutResult> {
   const goal = await db
     .prepare(
@@ -194,6 +195,8 @@ export async function putSubscription(
         "WHERE (?4 != 'daily' OR (SELECT COUNT(*) FROM mail_subscriptions WHERE status = 'active' AND frequency = 'daily' AND user_id != ?2) < ?10) " +
         "AND EXISTS (SELECT 1 FROM goals WHERE user_id = ?2 AND id = ?3 AND deleted_at IS NULL AND (end_date IS NULL OR end_date >= ?13)) " +
         "AND NOT EXISTS (SELECT 1 FROM mail_suppressions WHERE address_hash = ?12) " +
+        // 막힌 주소 확인은 가드가 읽은 주소로 했다 — 그사이 로그인이 주소를 바꿨으면 쓰지 않고 최신 주소로 다시 판단한다
+        "AND (SELECT email FROM users WHERE id = ?2) = ?14 " +
         "ON CONFLICT(user_id) DO UPDATE SET goal_id = excluded.goal_id, frequency = excluded.frequency, weekday = excluded.weekday, " +
         "day_of_month = excluded.day_of_month, send_time = excluded.send_time, timezone = excluded.timezone, status = 'active', " +
         "ended_reason = NULL, updated_at = excluded.updated_at " +
@@ -215,11 +218,14 @@ export async function putSubscription(
       input.replace ? 1 : 0,
       suppressed,
       today,
+      user.email,
     )
     .first<SubscriptionRow>();
   if (row) {
     return { ok: true, row, created: row.id === id };
   }
+  const moved = retried ? null : await changedUser(db, user);
+  if (moved) return putSubscription(db, moved, input, now, true);
   // 쓰지 않은 이유를 가린다(앞의 확인 뒤에 바뀐 것부터).
   if (await isSuppressed(db, user.email)) return suppressedRefusal();
   const live = await db
@@ -251,6 +257,17 @@ export async function putSubscription(
   );
 }
 
+/** 가드가 읽은 뒤 이 사용자의 주소가 바뀌었으면 최신 정보(다시 판단할 때 쓴다), 그대로면 null. */
+async function changedUser(db: Db, user: MailUser): Promise<MailUser | null> {
+  const latest = await db
+    .prepare("SELECT email FROM users WHERE id = ?")
+    .bind(user.id)
+    .first<{ email: string }>();
+  return latest && latest.email !== user.email
+    ? { ...user, email: latest.email }
+    : null;
+}
+
 export type StatusResult = { ok: true; row: SubscriptionRow } | Refusal;
 
 /** 켜고 끈다. 끝난 구독(ended)은 다시 신청해야 한다(PUT). 매일 구독을 다시 켤 때는 매일 상한을 확인한다. */
@@ -259,6 +276,7 @@ export async function setSubscriptionStatus(
   user: MailUser,
   status: "active" | "paused",
   now: Date,
+  retried = false,
 ): Promise<StatusResult> {
   const current = await findSubscription(db, user.id);
   if (!current) {
@@ -279,6 +297,7 @@ export async function setSubscriptionStatus(
         "AND (?1 = 'paused' OR frequency != 'daily' OR status = 'active' OR " +
         "(SELECT COUNT(*) FROM mail_subscriptions WHERE status = 'active' AND frequency = 'daily' AND user_id != ?3) < ?4) " +
         "AND (?1 = 'paused' OR NOT EXISTS (SELECT 1 FROM mail_suppressions WHERE address_hash = ?5)) " +
+        "AND (?1 = 'paused' OR (SELECT email FROM users WHERE id = ?3) = ?6) " +
         `RETURNING ${COLUMNS}`,
     )
     .bind(
@@ -287,9 +306,12 @@ export async function setSubscriptionStatus(
       user.id,
       LIMITS.dailySubscribers,
       await addressHash(user.email),
+      user.email,
     )
     .first<SubscriptionRow>();
   if (row) return { ok: true, row };
+  const moved = retried ? null : await changedUser(db, user);
+  if (moved) return setSubscriptionStatus(db, moved, status, now, true);
   // 바꾸지 않은 이유를 가린다(앞의 확인 뒤에 지워졌거나 끝났을 수 있다).
   const latest = await findSubscription(db, user.id);
   if (!latest) {

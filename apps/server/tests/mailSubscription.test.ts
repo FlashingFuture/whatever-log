@@ -1040,3 +1040,72 @@ test("막힌 주소의 구독은 웹훅 주소와 대소문자가 같으면(비A
     "ended",
   );
 });
+
+test("가드가 주소를 읽은 뒤 로그인이 주소를 막힌 주소로 바꿨으면 최신 주소로 다시 판단해 막는다", async () => {
+  const { subscribe, call, token, goal, db, sqlite } = await world();
+  await subscribe();
+  await call("PATCH", "/mail/subscription", {
+    token,
+    body: { status: "paused" },
+  });
+  const user = sqlite
+    .prepare("SELECT id, email, google_sub FROM users")
+    .get() as Json;
+  const stale = { id: user.id, email: user.email, googleSub: user.google_sub }; // 가드가 읽은 주소
+  // 그사이 같은 Google 계정의 로그인이 주소를 바꿨고, 새 주소는 이미 막혀 있다
+  sqlite
+    .prepare("UPDATE users SET email = 'moved@example.com' WHERE id = ?")
+    .run(user.id);
+  sqlite
+    .prepare(
+      "INSERT INTO mail_suppressions (address_hash, reason, created_at) VALUES (?, 'complained', 't')",
+    )
+    .run(await addressHash("moved@example.com"));
+
+  const resumed = await setSubscriptionStatus(
+    db as never,
+    stale,
+    "active",
+    new Date(),
+  );
+  assert.equal(!resumed.ok && resumed.code, "mail_suppressed");
+  const put = await putSubscription(
+    db as never,
+    stale,
+    {
+      goalId: goal,
+      frequency: "weekly",
+      weekday: 2,
+      dayOfMonth: null,
+      sendTime: "10:00",
+      timezone: "UTC",
+      replace: false,
+    },
+    new Date(),
+  );
+  assert.equal(!put.ok && put.code, "mail_suppressed");
+  assert.equal(statusOf(sqlite).status, "paused");
+});
+
+test("주소가 바뀌었어도 막히지 않은 주소면 최신 주소로 다시 판단해 그대로 된다", async () => {
+  const { subscribe, call, token, db, sqlite } = await world();
+  await subscribe();
+  await call("PATCH", "/mail/subscription", {
+    token,
+    body: { status: "paused" },
+  });
+  const user = sqlite
+    .prepare("SELECT id, email, google_sub FROM users")
+    .get() as Json;
+  sqlite
+    .prepare("UPDATE users SET email = 'moved@example.com' WHERE id = ?")
+    .run(user.id);
+
+  const resumed = await setSubscriptionStatus(
+    db as never,
+    { id: user.id, email: user.email, googleSub: user.google_sub },
+    "active",
+    new Date(),
+  );
+  assert.equal(resumed.ok && resumed.row.status, "active");
+});
