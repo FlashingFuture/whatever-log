@@ -6,5 +6,8 @@ GOOGLE_CLIENT_SECRET=
 RESEND_API_KEY=
 # 보고서 메일의 수신 거부 링크 서명 비밀(아무 긴 무작위 문자열, 예: `openssl rand -base64 32`). 비워 두면 확인 메일을 보내지 않는다.
 MAIL_LINK_SECRET=
+# 메일의 수신 거부 링크가 가리킬 주소. 비워 두면 wrangler.toml의 운영 주소가 쓰여, 로컬에서 받은 메일의 링크가 운영 서버로 간다.
+# `wrangler dev --port 8798`(docs/mail-design.md)로 띄운다면:
+SERVER_PUBLIC_URL=http://127.0.0.1:8798
 # Resend 웹훅(반송·스팸 신고) 서명 비밀(`whsec_…`). 비워 두면 웹훅이 503으로 답한다.
 RESEND_WEBHOOK_SECRET=

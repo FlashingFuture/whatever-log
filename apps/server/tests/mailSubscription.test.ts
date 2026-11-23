@@ -6,6 +6,10 @@ import { LIMITS } from "../src/mail/config.ts";
 import { signUnsubscribe, verifyUnsubscribe } from "../src/mail/links.ts";
 import type { MailMessage, SendResult } from "../src/mail/port.ts";
 import { userKey } from "../src/mail/quota.ts";
+import {
+  putSubscription,
+  setSubscriptionStatus,
+} from "../src/mail/subscriptions.ts";
 import { addressHash } from "../src/mail/suppression.ts";
 import { GOAL, type Json, setup, uuid } from "./helpers/syncFixtures.ts";
 
@@ -814,4 +818,135 @@ test("발송 기록은 확인 메일(welcome)도 받는다", () => {
       )
       .run("a".repeat(64)),
   );
+});
+
+// --- 확인과 저장 사이에 바뀌는 경우(한 문장 안에서 다시 본다) ---
+
+/** 목표 확인(SELECT end_date)만 "살아 있다"로 속이는 DB — 확인 뒤에 목표가 지워진 상황을 만든다. */
+function staleGoalCheck(db: never) {
+  const real = db as unknown as import("../src/db.ts").Db;
+  return {
+    ...real,
+    batch: real.batch.bind(real),
+    prepare(sql: string) {
+      if (sql.startsWith("SELECT end_date FROM goals")) {
+        const stub = {
+          bind: () => stub,
+          first: async () => ({ end_date: null }),
+          run: async () => ({ meta: { changes: 0 } }),
+          all: async () => ({ results: [] }),
+        };
+        return stub;
+      }
+      return real.prepare(sql);
+    },
+  } as import("../src/db.ts").Db;
+}
+
+test("확인 뒤에 목표가 지워졌으면 저장하지 않고 404이다", async () => {
+  const { call, token, goal, db, sqlite } = await world();
+  await call("DELETE", `/goals/${goal}`, { token });
+  const user = sqlite
+    .prepare("SELECT id, email, google_sub FROM users")
+    .get() as Json;
+
+  const result = await putSubscription(
+    staleGoalCheck(db as never),
+    { id: user.id, email: user.email, googleSub: user.google_sub },
+    {
+      goalId: goal,
+      frequency: "weekly",
+      weekday: 0,
+      dayOfMonth: null,
+      sendTime: "09:00",
+      timezone: "UTC",
+      replace: false,
+    },
+    new Date(),
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(!result.ok && result.code, "goal_not_found");
+  assert.equal(
+    (
+      sqlite
+        .prepare("SELECT COUNT(*) AS n FROM mail_subscriptions")
+        .get() as Json
+    ).n,
+    0,
+  );
+});
+
+test("가드 뒤에 주소가 막혔으면 신청·다시 켜기가 쓰지 않고 mail_suppressed이다", async () => {
+  const { subscribe, call, token, goal, db, sqlite } = await world();
+  await subscribe();
+  await call("PATCH", "/mail/subscription", {
+    token,
+    body: { status: "paused" },
+  });
+  const user = sqlite
+    .prepare("SELECT id, email, google_sub FROM users")
+    .get() as Json;
+  const mailUser = {
+    id: user.id,
+    email: user.email,
+    googleSub: user.google_sub,
+  };
+  // 가드를 통과한 뒤 반송 웹훅이 처리된 상황
+  sqlite
+    .prepare(
+      "INSERT INTO mail_suppressions (address_hash, reason, created_at) VALUES (?, 'bounced', 't')",
+    )
+    .run(await addressHash(user.email));
+
+  const resumed = await setSubscriptionStatus(
+    db as never,
+    mailUser,
+    "active",
+    new Date(),
+  );
+  assert.equal(!resumed.ok && resumed.code, "mail_suppressed");
+  const put = await putSubscription(
+    db as never,
+    mailUser,
+    {
+      goalId: goal,
+      frequency: "weekly",
+      weekday: 1,
+      dayOfMonth: null,
+      sendTime: "10:00",
+      timezone: "UTC",
+      replace: false,
+    },
+    new Date(),
+  );
+  assert.equal(!put.ok && put.code, "mail_suppressed");
+  assert.equal(statusOf(sqlite).status, "paused");
+});
+
+test("웹훅 본문이 64KiB를 넘으면 서명을 보기 전에 413이다(선언된 길이도, 흘려 보낸 본문도)", async () => {
+  const { publicCall } = await world();
+  const big = "x".repeat(64 * 1024 + 1);
+
+  const declared = await publicCall(
+    new Request(`${BASE}/mail/webhooks/resend`, { method: "POST", body: big }),
+  );
+  assert.equal(declared.status, 413);
+
+  const stream = new ReadableStream({
+    start(controller) {
+      for (let i = 0; i < 70; i++) {
+        controller.enqueue(new TextEncoder().encode("y".repeat(1024)));
+      }
+      controller.close();
+    },
+  });
+  const streamed = await publicCall(
+    new Request(`${BASE}/mail/webhooks/resend`, {
+      method: "POST",
+      body: stream,
+      duplex: "half",
+    } as RequestInit),
+  );
+  assert.equal(streamed.status, 413);
 });

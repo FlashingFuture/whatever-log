@@ -2,7 +2,7 @@ import type { Db } from "../db.ts";
 import { LIMITS } from "./config.ts";
 import type { Frequency, SubscriptionInput } from "./subscriptionInput.ts";
 import { todayIn } from "./subscriptionInput.ts";
-import { isSuppressed } from "./suppression.ts";
+import { addressHash, isSuppressed } from "./suppression.ts";
 
 export type SubscriptionStatus = "active" | "paused" | "ended";
 export type EndedReason =
@@ -55,8 +55,9 @@ export function view(row: SubscriptionRow): SubscriptionView {
   };
 }
 
-const SELECT =
-  "SELECT id, user_id, goal_id, frequency, weekday, day_of_month, send_time, timezone, status, ended_reason, created_at, updated_at FROM mail_subscriptions";
+const COLUMNS =
+  "id, user_id, goal_id, frequency, weekday, day_of_month, send_time, timezone, status, ended_reason, created_at, updated_at";
+const SELECT = `SELECT ${COLUMNS} FROM mail_subscriptions`;
 
 export function findSubscription(
   db: Db,
@@ -110,6 +111,20 @@ export function refusal(
   return { ok: false, status, code, message, current };
 }
 
+const suppressedRefusal = () =>
+  refusal(
+    409,
+    "mail_suppressed",
+    "이 주소로 보낸 메일이 반송됐거나 스팸으로 신고되어 보고서 메일을 보낼 수 없어요.",
+  );
+
+const goalNotFound = () =>
+  refusal(
+    404,
+    "goal_not_found",
+    "서버에 없는 목표예요. 목표를 동기화한 뒤 다시 시도해 주세요.",
+  );
+
 /**
  * 구독 핸들러를 감싸는 가드: 로그인한 사용자의 계정 정보를 읽고, 보내지 않을 주소(반송·신고)면 핸들러를 부르지 않고 거절한다. 읽기(GET)·끄기·지우기는
  * 막지 않도록 `blockSuppressed`로 고른다. 가드는 읽기 쉽게 하려는 것이고, "사용자당 하나"의 보장은 DB 제약(user_id UNIQUE)이 한다.
@@ -131,11 +146,7 @@ export function withSubscriptionGuard<T>(
       );
     }
     if (options.blockSuppressed && (await isSuppressed(db, row.email))) {
-      return refusal(
-        409,
-        "mail_suppressed",
-        "이 주소로 보낸 메일이 반송됐거나 스팸으로 신고되어 보고서 메일을 보낼 수 없어요.",
-      );
+      return suppressedRefusal();
     }
     return handler({ id: row.id, email: row.email, googleSub: row.google_sub });
   };
@@ -164,13 +175,7 @@ export async function putSubscription(
     )
     .bind(user.id, input.goalId)
     .first<{ end_date: string | null }>();
-  if (!goal) {
-    return refusal(
-      404,
-      "goal_not_found",
-      "서버에 없는 목표예요. 목표를 동기화한 뒤 다시 시도해 주세요.",
-    );
-  }
+  if (!goal) return goalNotFound();
   if (goal.end_date !== null && goal.end_date < todayIn(input.timezone, now)) {
     return refusal(
       409,
@@ -181,16 +186,22 @@ export async function putSubscription(
 
   const id = crypto.randomUUID();
   const stamp = now.toISOString();
-  const result = await db
+  const suppressed = await addressHash(user.email);
+  // 확인과 저장을 한 문장에서 한다: 목표가 살아 있고, 주소가 막히지 않았고, (매일이면) 상한 안일 때만 쓴다 — 위의 확인 뒤에 목표가 지워지거나
+  // 반송·신고가 와도 살아 있는 구독이 생기지 않는다. 쓴 행은 RETURNING으로 받는다(뒤이은 조회 사이에 지워질 수 있다).
+  const row = await db
     .prepare(
       "INSERT INTO mail_subscriptions (id, user_id, goal_id, frequency, weekday, day_of_month, send_time, timezone, status, ended_reason, created_at, updated_at) " +
         "SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'active', NULL, ?9, ?9 " +
-        "WHERE ?4 != 'daily' OR (SELECT COUNT(*) FROM mail_subscriptions WHERE status = 'active' AND frequency = 'daily' AND user_id != ?2) < ?10 " +
+        "WHERE (?4 != 'daily' OR (SELECT COUNT(*) FROM mail_subscriptions WHERE status = 'active' AND frequency = 'daily' AND user_id != ?2) < ?10) " +
+        "AND EXISTS (SELECT 1 FROM goals WHERE user_id = ?2 AND id = ?3 AND deleted_at IS NULL) " +
+        "AND NOT EXISTS (SELECT 1 FROM mail_suppressions WHERE address_hash = ?12) " +
         "ON CONFLICT(user_id) DO UPDATE SET goal_id = excluded.goal_id, frequency = excluded.frequency, weekday = excluded.weekday, " +
         "day_of_month = excluded.day_of_month, send_time = excluded.send_time, timezone = excluded.timezone, status = 'active', " +
         "ended_reason = NULL, updated_at = excluded.updated_at " +
         // 다른 목표의 살아 있는 구독은 replace일 때만 옮긴다
-        "WHERE mail_subscriptions.goal_id = excluded.goal_id OR mail_subscriptions.status = 'ended' OR ?11",
+        "WHERE mail_subscriptions.goal_id = excluded.goal_id OR mail_subscriptions.status = 'ended' OR ?11 " +
+        `RETURNING ${COLUMNS}`,
     )
     .bind(
       id,
@@ -204,23 +215,33 @@ export async function putSubscription(
       stamp,
       LIMITS.dailySubscribers,
       input.replace ? 1 : 0,
+      suppressed,
     )
-    .run();
-  const row = await findSubscription(db, user.id);
-  if (result.meta.changes > 0 && row) {
+    .first<SubscriptionRow>();
+  if (row) {
     return { ok: true, row, created: row.id === id };
   }
+  // 쓰지 않은 이유를 가린다(앞의 확인 뒤에 바뀐 것부터).
+  if (await isSuppressed(db, user.email)) return suppressedRefusal();
+  const live = await db
+    .prepare(
+      "SELECT 1 AS present FROM goals WHERE user_id = ? AND id = ? AND deleted_at IS NULL",
+    )
+    .bind(user.id, input.goalId)
+    .first();
+  if (!live) return goalNotFound();
+  const current = await findSubscription(db, user.id);
   if (
-    row &&
-    row.goal_id !== input.goalId &&
-    row.status !== "ended" &&
+    current &&
+    current.goal_id !== input.goalId &&
+    current.status !== "ended" &&
     !input.replace
   ) {
     return refusal(
       409,
       "subscription_exists",
       "이미 다른 목표의 보고서를 받고 있어요. 이 목표로 옮길까요?",
-      view(row),
+      view(current),
     );
   }
   return refusal(
@@ -251,26 +272,46 @@ export async function setSubscriptionStatus(
       view(current),
     );
   }
-  const result = await db
+  // 다시 켤 때는 막힌 주소가 아닌지도 같은 문장에서 본다(앞의 가드 뒤에 반송·신고가 와도 되살아나지 않게).
+  const row = await db
     .prepare(
       "UPDATE mail_subscriptions SET status = ?1, updated_at = ?2 WHERE user_id = ?3 AND status != 'ended' " +
         "AND (?1 = 'paused' OR frequency != 'daily' OR status = 'active' OR " +
-        "(SELECT COUNT(*) FROM mail_subscriptions WHERE status = 'active' AND frequency = 'daily' AND user_id != ?3) < ?4)",
+        "(SELECT COUNT(*) FROM mail_subscriptions WHERE status = 'active' AND frequency = 'daily' AND user_id != ?3) < ?4) " +
+        "AND (?1 = 'paused' OR NOT EXISTS (SELECT 1 FROM mail_suppressions WHERE address_hash = ?5)) " +
+        `RETURNING ${COLUMNS}`,
     )
-    .bind(status, now.toISOString(), user.id, LIMITS.dailySubscribers)
-    .run();
-  if (result.meta.changes === 0) {
+    .bind(
+      status,
+      now.toISOString(),
+      user.id,
+      LIMITS.dailySubscribers,
+      await addressHash(user.email),
+    )
+    .first<SubscriptionRow>();
+  if (row) return { ok: true, row };
+  // 바꾸지 않은 이유를 가린다(앞의 확인 뒤에 지워졌거나 끝났을 수 있다).
+  const latest = await findSubscription(db, user.id);
+  if (!latest) {
+    return refusal(404, "not_found", "신청한 보고서 메일이 없어요.");
+  }
+  if (latest.status === "ended") {
     return refusal(
       409,
-      "daily_full",
-      "지금은 매일 보고서를 더 받을 수 없어요. 매주나 매월로 바꿔 주세요.",
-      view(current),
+      "subscription_ended",
+      "끝난 구독이에요. 보고서를 다시 받으려면 새로 신청해 주세요.",
+      view(latest),
     );
   }
-  return {
-    ok: true,
-    row: (await findSubscription(db, user.id)) as SubscriptionRow,
-  };
+  if (status === "active" && (await isSuppressed(db, user.email))) {
+    return suppressedRefusal();
+  }
+  return refusal(
+    409,
+    "daily_full",
+    "지금은 매일 보고서를 더 받을 수 없어요. 매주나 매월로 바꿔 주세요.",
+    view(latest),
+  );
 }
 
 /** 구독을 지운다(사용자가 그만둠). 지울 것이 없으면 false. */
