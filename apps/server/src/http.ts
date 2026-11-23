@@ -30,6 +30,40 @@ export function errorResponse(
   return jsonResponse({ error: { code, message } }, status, headers);
 }
 
+/**
+ * 본문을 읽되 maxBytes를 넘으면 그 자리에서 읽기를 멈춘다(null). 누구나 보낼 수 있는 요청(서명·토큰 확인 전)도 있으므로, 큰 본문을 통째로 메모리에 올린 뒤에
+ * 거르지 않는다(Workers의 메모리는 동시 요청이 함께 쓴다). 선언된 길이가 크면 읽지 않고 거른다.
+ */
+export async function readLimited(
+  request: Request,
+  maxBytes: number,
+): Promise<Uint8Array | null> {
+  if (Number(request.headers.get("Content-Length") ?? "0") > maxBytes) {
+    return null;
+  }
+  if (!request.body) return new Uint8Array(0);
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
+}
+
 /** 요청 본문을 JSON으로 읽는다. 형식·크기가 맞지 않으면 그대로 돌려줄 오류 응답을 함께 준다. */
 const JSON_CONTENT_TYPE = /^application\/json\s*(;.*)?$/i;
 
@@ -54,7 +88,9 @@ export async function readJson(
       response: errorResponse(413, "invalid_request", "본문이 너무 큽니다."),
     };
   }
-  const raw = await request.arrayBuffer();
+  // 길이를 알리지 않는(chunked) 본문도 maxBytes에서 읽기를 멈춘다.
+  const raw =
+    (await readLimited(request, maxBytes)) ?? new Uint8Array(maxBytes + 1);
   if (raw.byteLength === 0 || raw.byteLength > maxBytes) {
     return {
       ok: false,

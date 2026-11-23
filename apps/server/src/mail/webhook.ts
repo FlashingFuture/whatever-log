@@ -1,5 +1,5 @@
 import type { Db } from "../db.ts";
-import { errorResponse, jsonResponse } from "../http.ts";
+import { errorResponse, jsonResponse, readLimited } from "../http.ts";
 import { type SuppressionReason, suppress } from "./suppression.ts";
 
 /**
@@ -58,40 +58,6 @@ export async function verifySvix(
     }
   }
   return false;
-}
-
-/**
- * 본문을 읽되 maxBytes를 넘으면 그 자리에서 읽기를 멈춘다(null). 서명 확인 전이라 누구나 보낼 수 있는 요청이므로, 큰 본문을 통째로 메모리에 올린 뒤에
- * 거르지 않는다(Workers의 메모리는 동시 요청이 함께 쓴다). 선언된 길이가 크면 읽지 않고 거른다.
- */
-export async function readLimited(
-  request: Request,
-  maxBytes: number,
-): Promise<Uint8Array | null> {
-  if (Number(request.headers.get("Content-Length") ?? "0") > maxBytes) {
-    return null;
-  }
-  if (!request.body) return new Uint8Array(0);
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel();
-      return null;
-    }
-    chunks.push(value);
-  }
-  const body = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return body;
 }
 
 /** `"이름 <a@b.c>"` 또는 `"a@b.c"`에서 주소만. */

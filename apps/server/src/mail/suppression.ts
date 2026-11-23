@@ -39,8 +39,9 @@ export async function suppress(
     db
       .prepare(
         "UPDATE mail_subscriptions SET status = 'ended', ended_reason = 'suppressed', updated_at = ? " +
-          "WHERE status != 'ended' AND user_id IN (SELECT id FROM users WHERE lower(email) = ?)",
+          // SQLite의 lower()는 ASCII만 바꾸므로, 웹훅이 준 주소 그대로와도 견준다(해시는 JS의 toLowerCase로 만든다 — 신청·다시 켜기는 해시로 막힌다).
+          "WHERE status != 'ended' AND user_id IN (SELECT id FROM users WHERE lower(email) = ? OR email = ?)",
       )
-      .bind(stamp, email.trim().toLowerCase()),
+      .bind(stamp, email.trim().toLowerCase(), email.trim()),
   ]);
 }

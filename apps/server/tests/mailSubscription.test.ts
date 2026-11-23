@@ -822,14 +822,16 @@ test("발송 기록은 확인 메일(welcome)도 받는다", () => {
 
 // --- 확인과 저장 사이에 바뀌는 경우(한 문장 안에서 다시 본다) ---
 
-/** 목표 확인(SELECT end_date)만 "살아 있다"로 속이는 DB — 확인 뒤에 목표가 지워진 상황을 만든다. */
+/** 처음 하는 목표 확인(SELECT end_date)만 "살아 있다"로 속이는 DB — 확인 뒤에 목표가 지워진(또는 기간이 줄어든) 상황을 만든다. */
 function staleGoalCheck(db: never) {
   const real = db as unknown as import("../src/db.ts").Db;
+  let stubbed = false;
   return {
     ...real,
     batch: real.batch.bind(real),
     prepare(sql: string) {
-      if (sql.startsWith("SELECT end_date FROM goals")) {
+      if (!stubbed && sql.startsWith("SELECT end_date FROM goals")) {
+        stubbed = true;
         const stub = {
           bind: () => stub,
           first: async () => ({ end_date: null }),
@@ -949,4 +951,92 @@ test("웹훅 본문이 64KiB를 넘으면 서명을 보기 전에 413이다(선�
     } as RequestInit),
   );
   assert.equal(streamed.status, 413);
+});
+
+test("확인 뒤에 다른 기기가 기간을 줄여 목표가 끝났으면 저장하지 않고 goal_ended이다", async () => {
+  const { goal, db, sqlite } = await world();
+  sqlite
+    .prepare(
+      "UPDATE goals SET start_date = '2026-01-01', end_date = '2026-01-31' WHERE id = ?",
+    )
+    .run(goal);
+  const user = sqlite
+    .prepare("SELECT id, email, google_sub FROM users")
+    .get() as Json;
+
+  const result = await putSubscription(
+    staleGoalCheck(db as never),
+    { id: user.id, email: user.email, googleSub: user.google_sub },
+    {
+      goalId: goal,
+      frequency: "weekly",
+      weekday: 0,
+      dayOfMonth: null,
+      sendTime: "09:00",
+      timezone: "UTC",
+      replace: false,
+    },
+    new Date("2026-11-06T03:00:00.000Z"),
+  );
+
+  assert.equal(!result.ok && result.code, "goal_ended");
+  assert.equal(
+    (
+      sqlite
+        .prepare("SELECT COUNT(*) AS n FROM mail_subscriptions")
+        .get() as Json
+    ).n,
+    0,
+  );
+});
+
+test("JSON 본문도 길이를 알리지 않으면 읽으면서 한도에서 멈춘다(413)", async () => {
+  const { readJson } = await import("../src/http.ts");
+  const stream = new ReadableStream({
+    start(controller) {
+      for (let i = 0; i < 4; i++) {
+        controller.enqueue(new TextEncoder().encode("z".repeat(512)));
+      }
+      controller.close();
+    },
+  });
+  const read = await readJson(
+    new Request("https://server.example/x", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: stream,
+      duplex: "half",
+    } as RequestInit),
+    1024,
+  );
+  assert.equal(read.ok, false);
+  assert.equal(!read.ok && read.response.status, 413);
+});
+
+test("막힌 주소의 구독은 웹훅 주소와 대소문자가 같으면(비ASCII 포함) 끝난다", async () => {
+  const fixture = setup();
+  const token = await fixture.signIn("sub-9", "Ärger@example.com");
+  const goal = uuid();
+  await fixture.call("PUT", `/goals/${goal}`, { token, body: GOAL });
+  await fixture.call("PUT", "/mail/subscription", {
+    token,
+    body: { goal_id: goal, ...SCHEDULE },
+  });
+  const { suppress } = await import("../src/mail/suppression.ts");
+
+  await suppress(
+    fixture.db as never,
+    "Ärger@example.com",
+    "bounced",
+    new Date(),
+  );
+
+  assert.equal(
+    (
+      fixture.sqlite
+        .prepare("SELECT status FROM mail_subscriptions")
+        .get() as Json
+    ).status,
+    "ended",
+  );
 });

@@ -118,6 +118,9 @@ const suppressedRefusal = () =>
     "이 주소로 보낸 메일이 반송됐거나 스팸으로 신고되어 보고서 메일을 보낼 수 없어요.",
   );
 
+const goalEnded = () =>
+  refusal(409, "goal_ended", "기간이 끝난 목표는 보고서를 받을 수 없어요.");
+
 const goalNotFound = () =>
   refusal(
     404,
@@ -176,25 +179,20 @@ export async function putSubscription(
     .bind(user.id, input.goalId)
     .first<{ end_date: string | null }>();
   if (!goal) return goalNotFound();
-  if (goal.end_date !== null && goal.end_date < todayIn(input.timezone, now)) {
-    return refusal(
-      409,
-      "goal_ended",
-      "기간이 끝난 목표는 보고서를 받을 수 없어요.",
-    );
-  }
+  const today = todayIn(input.timezone, now);
+  if (goal.end_date !== null && goal.end_date < today) return goalEnded();
 
   const id = crypto.randomUUID();
   const stamp = now.toISOString();
   const suppressed = await addressHash(user.email);
-  // 확인과 저장을 한 문장에서 한다: 목표가 살아 있고, 주소가 막히지 않았고, (매일이면) 상한 안일 때만 쓴다 — 위의 확인 뒤에 목표가 지워지거나
+  // 확인과 저장을 한 문장에서 한다: 목표가 살아 있고 기간이 끝나지 않았고(다른 기기가 그새 기간을 줄였을 수 있다), 주소가 막히지 않았고, (매일이면) 상한 안일 때만 쓴다 — 위의 확인 뒤에 목표가 지워지거나
   // 반송·신고가 와도 살아 있는 구독이 생기지 않는다. 쓴 행은 RETURNING으로 받는다(뒤이은 조회 사이에 지워질 수 있다).
   const row = await db
     .prepare(
       "INSERT INTO mail_subscriptions (id, user_id, goal_id, frequency, weekday, day_of_month, send_time, timezone, status, ended_reason, created_at, updated_at) " +
         "SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'active', NULL, ?9, ?9 " +
         "WHERE (?4 != 'daily' OR (SELECT COUNT(*) FROM mail_subscriptions WHERE status = 'active' AND frequency = 'daily' AND user_id != ?2) < ?10) " +
-        "AND EXISTS (SELECT 1 FROM goals WHERE user_id = ?2 AND id = ?3 AND deleted_at IS NULL) " +
+        "AND EXISTS (SELECT 1 FROM goals WHERE user_id = ?2 AND id = ?3 AND deleted_at IS NULL AND (end_date IS NULL OR end_date >= ?13)) " +
         "AND NOT EXISTS (SELECT 1 FROM mail_suppressions WHERE address_hash = ?12) " +
         "ON CONFLICT(user_id) DO UPDATE SET goal_id = excluded.goal_id, frequency = excluded.frequency, weekday = excluded.weekday, " +
         "day_of_month = excluded.day_of_month, send_time = excluded.send_time, timezone = excluded.timezone, status = 'active', " +
@@ -216,6 +214,7 @@ export async function putSubscription(
       LIMITS.dailySubscribers,
       input.replace ? 1 : 0,
       suppressed,
+      today,
     )
     .first<SubscriptionRow>();
   if (row) {
@@ -225,11 +224,12 @@ export async function putSubscription(
   if (await isSuppressed(db, user.email)) return suppressedRefusal();
   const live = await db
     .prepare(
-      "SELECT 1 AS present FROM goals WHERE user_id = ? AND id = ? AND deleted_at IS NULL",
+      "SELECT end_date FROM goals WHERE user_id = ? AND id = ? AND deleted_at IS NULL",
     )
     .bind(user.id, input.goalId)
-    .first();
+    .first<{ end_date: string | null }>();
   if (!live) return goalNotFound();
+  if (live.end_date !== null && live.end_date < today) return goalEnded();
   const current = await findSubscription(db, user.id);
   if (
     current &&
