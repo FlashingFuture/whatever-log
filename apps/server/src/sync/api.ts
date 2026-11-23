@@ -11,8 +11,13 @@ import {
   getProgress,
   listDevices,
   putProgress,
+  removeProgress,
 } from "./progress.ts";
-import { parsePutProgress, parseRange } from "./progressInput.ts";
+import {
+  parsePutProgress,
+  parseRange,
+  parseRemoveProgress,
+} from "./progressInput.ts";
 
 export interface ApiDeps {
   db: Db;
@@ -149,6 +154,28 @@ const ROUTES: { pattern: RegExp; route: Route }[] = [
         return jsonResponse({
           accepted: result.accepted,
           ignored_goal_ids: result.ignoredGoalIds,
+        });
+      },
+    },
+  },
+  {
+    pattern: /^\/progress\/remove$/,
+    route: {
+      methods: ["POST"],
+      async handle(request, _url, _params, caller, deps) {
+        const read = await readJson(request, PROGRESS_BODY_BYTES);
+        if (!read.ok) return read.response;
+        const parsed = parseRemoveProgress(read.body, deps.now());
+        if (!parsed.ok) {
+          return errorResponse(400, "invalid_request", parsed.message);
+        }
+        return jsonResponse({
+          removed: await removeProgress(
+            deps.db,
+            caller.userId,
+            parsed.deviceId,
+            parsed.entries,
+          ),
         });
       },
     },

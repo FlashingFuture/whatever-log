@@ -458,7 +458,7 @@ def _open_goals(path: Path):
 
 
 def _plan_json(plan) -> dict[str, Any]:
-    """계획을 화면용 JSON으로. 올라가는 값(이름·목표 시간·요일)만 담고, 프로세스·사이트·내부 id는 담지 않는다."""
+    """계획을 화면용 JSON으로. 올라가는 값(이름·목표 시간·요일·기간)만 담고, 프로세스·사이트·내부 id는 담지 않는다."""
     return {
         "email": plan.email,
         "enabled": plan.enabled,
@@ -471,6 +471,10 @@ def _plan_json(plan) -> dict[str, Any]:
                 "weekdays": list(item.weekdays),
                 "local_daily_target_minutes": item.local_daily_target_minutes,
                 "local_weekdays": None if item.local_weekdays is None else list(item.local_weekdays),
+                "start_date": item.start_date,
+                "end_date": item.end_date,
+                "local_start_date": item.local_start_date,
+                "local_end_date": item.local_end_date,
                 "declined": item.declined,
             }
             for item in plan.items

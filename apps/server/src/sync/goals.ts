@@ -11,6 +11,8 @@ interface GoalRow {
   revision: number;
   updated_at: string;
   deleted_at: string | null;
+  start_date: string | null;
+  end_date: string | null;
 }
 
 /** 응답에 담는 목표. 삭제된 목표는 다른 기기가 삭제를 알 수 있게 id·revision·삭제 표시만 준다. */
@@ -21,6 +23,9 @@ export type GoalView =
       name: string;
       daily_target_minutes: number;
       weekdays: number[];
+      /** 목표 기간(사용자의 로컬 날짜, 양끝 포함). 둘 다 null이면 기간 없음. */
+      start_date: string | null;
+      end_date: string | null;
       revision: number;
       updated_at: string;
     }
@@ -47,6 +52,8 @@ function view(row: GoalRow): GoalView {
         name: row.name,
         daily_target_minutes: row.daily_target_minutes,
         weekdays: weekdayList(row.weekdays),
+        start_date: row.start_date,
+        end_date: row.end_date,
         revision: row.revision,
         updated_at: row.updated_at,
       }
@@ -59,7 +66,13 @@ function view(row: GoalRow): GoalView {
 }
 
 const SELECT =
-  "SELECT id, name, daily_target_minutes, weekdays, revision, updated_at, deleted_at FROM goals";
+  "SELECT id, name, daily_target_minutes, weekdays, revision, updated_at, deleted_at, start_date, end_date FROM goals";
+
+/** 요청의 기간을 저장할 두 칸으로. 기간 칸이 없던 요청(undefined)은 호출부가 따로 다룬다. */
+const periodColumns = (
+  period: GoalInput["period"],
+): [string | null, string | null] =>
+  period ? [period.start, period.end] : [null, null];
 
 /** 30일이 지난 삭제 표시를 지운다. 목록을 읽거나 목표를 지울 때마다 하므로, 더 지울 목표가 없어도 정리된다. */
 async function purgeExpiredTombstones(
@@ -136,7 +149,11 @@ export async function putGoal(
         existing.revision === 1 &&
         existing.name === input.name &&
         existing.daily_target_minutes === input.dailyTargetMinutes &&
-        existing.weekdays === input.weekdays;
+        existing.weekdays === input.weekdays &&
+        // 기간 칸 없이 다시 보낸 요청(이전 버전)은 기간을 따지지 않는다 — 그 요청으로 만들어졌다면 기간은 비어 있다.
+        (input.period === undefined ||
+          (existing.start_date === periodColumns(input.period)[0] &&
+            existing.end_date === periodColumns(input.period)[1]));
       if (same) return { ok: true, status: 200, goal: view(existing) };
       return conflict(
         existing,
@@ -146,8 +163,8 @@ export async function putGoal(
     try {
       const result = await db
         .prepare(
-          "INSERT INTO goals (user_id, id, name, name_key, daily_target_minutes, weekdays, revision, created_at, updated_at) " +
-            "SELECT ?, ?, ?, ?, ?, ?, 1, ?, ? " +
+          "INSERT INTO goals (user_id, id, name, name_key, daily_target_minutes, weekdays, start_date, end_date, revision, created_at, updated_at) " +
+            "SELECT ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ? " +
             "WHERE (SELECT COUNT(*) FROM goals WHERE user_id = ? AND deleted_at IS NULL) < ?",
         )
         .bind(
@@ -157,6 +174,7 @@ export async function putGoal(
           input.nameKey,
           input.dailyTargetMinutes,
           input.weekdays,
+          ...periodColumns(input.period),
           stamp,
           stamp,
           userId,
@@ -200,9 +218,11 @@ export async function putGoal(
   try {
     const result = await db
       .prepare(
-        "UPDATE goals SET name = ?, name_key = ?, daily_target_minutes = ?, weekdays = ?, " +
-          "revision = revision + 1, updated_at = ? " +
-          "WHERE user_id = ? AND id = ? AND revision = ? AND deleted_at IS NULL",
+        "UPDATE goals SET name = ?1, name_key = ?2, daily_target_minutes = ?3, weekdays = ?4, " +
+          // 기간 칸이 없던 요청(?6 = 0)은 지금 기간을 그대로 둔다.
+          "start_date = CASE WHEN ?6 THEN ?7 ELSE start_date END, end_date = CASE WHEN ?6 THEN ?8 ELSE end_date END, " +
+          "revision = revision + 1, updated_at = ?5 " +
+          "WHERE user_id = ?9 AND id = ?10 AND revision = ?11 AND deleted_at IS NULL",
       )
       .bind(
         input.name,
@@ -210,6 +230,8 @@ export async function putGoal(
         input.dailyTargetMinutes,
         input.weekdays,
         stamp,
+        input.period === undefined ? 0 : 1,
+        ...periodColumns(input.period),
         userId,
         id,
         input.baseRevision,
@@ -250,7 +272,7 @@ export async function deleteGoal(
       .bind(userId, id),
     db
       .prepare(
-        "UPDATE goals SET name = '', name_key = '', deleted_at = ?, revision = revision + 1, updated_at = ? " +
+        "UPDATE goals SET name = '', name_key = '', start_date = NULL, end_date = NULL, deleted_at = ?, revision = revision + 1, updated_at = ? " +
           "WHERE user_id = ? AND id = ? AND deleted_at IS NULL",
       )
       .bind(stamp, stamp, userId, id),

@@ -277,3 +277,31 @@ def test_each_goal_is_computed_from_its_own_table() -> None:
     assert [item.active_seconds for item in progress] == [100.0, 7.0]  # 첫 목표의 표에 있는 b.exe는 첫 목표와 무관하다
     assert summary.active_seconds == 107.0
     assert summary.top is not None and summary.top.process == "a.exe"
+
+
+def test_a_snapshot_day_outside_the_current_period_is_not_that_goals_day(tmp_path) -> None:
+    """스냅샷이 있는 날이어도 지금 기간 밖이면 그날의 목표가 아니다(기간 밖의 날은 목표량·달성 시간에서 모두 뺀다)."""
+    from datetime import UTC, datetime
+
+    from goals import GoalStore, goals_for_day
+
+    day = date(2026, 11, 5)
+    clock = datetime(2026, 11, 5, 3, 0, tzinfo=UTC)
+    with GoalStore(tmp_path / "goals.db", now=lambda: clock) as store:
+        kept = store.create(name="계속", daily_target_minutes=30, weekdays=[0, 1, 2, 3, 4, 5, 6], processes=[])
+        moved = store.create(name="옮김", daily_target_minutes=60, weekdays=[0, 1, 2, 3, 4, 5, 6], processes=[])
+        store.snapshot_today(day)
+        store.update(
+            moved.id,
+            name="옮김",
+            daily_target_minutes=60,
+            weekdays=[0, 1, 2, 3, 4, 5, 6],
+            processes=[],
+            start_date="2026-11-06",
+            end_date="2026-11-30",
+            today=day,
+        )
+
+        ids = [goal.id for goal in goals_for_day(store, day, store.list_goals())]
+
+    assert ids == [kept.id]

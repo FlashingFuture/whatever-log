@@ -31,6 +31,7 @@ from goals.models import SYNC_STATES, Goal, GoalSnapshot, SiteTarget, SyncLink
 from goals.validation import (
     MAX_GOALS,
     GoalSpec,
+    check_period,
     name_key,
     process_key,
     site_key,
@@ -171,6 +172,15 @@ CREATE TABLE IF NOT EXISTS goal_report_schedules (
     CHECK ((frequency = 'monthly') = (day_of_month IS NOT NULL))
 );
 """
+
+
+def _remote_period(start_date: Any, end_date: Any, errors: list[FieldError]) -> tuple[str | None, str | None]:
+    """서버가 준 기간을 저장할 두 칸으로. 모양·순서는 이 PC의 규칙으로 확인하되, "지난 날로는 정할 수 없다"는 확인하지 않는다
+    (다른 기기에서 정한 기간이 이미 시작했거나 끝났을 수 있다 — 그것은 이 PC가 바꾸는 값이 아니다)."""
+    found: list[FieldError] = []
+    start, end = check_period(start_date, end_date, found)
+    errors += [FieldError(error.field, error.code, f"서버의 기간이 올바르지 않습니다: {error.message}") for error in found]
+    return _iso(start), _iso(end)
 
 
 def _remote_value_errors(daily_target_minutes: Any, weekdays: Any) -> list[FieldError]:
@@ -497,18 +507,21 @@ class GoalStore:
             errors += self._conflicts(name, processes, sites, spec, errors, exclude_id=goal_id)
             if errors or spec is None:
                 raise GoalValidationError(errors)
-            # 연결된 목표는 서버가 아는 칸이 바뀐 때만 dirty로 표시한다(프로세스 연결만 바꾼 수정은 서버와 무관하다).
+            # 연결된 목표는 서버가 아는 칸(이름·목표 시간·요일·기간)이 바뀐 때만 dirty로 표시한다(프로세스 연결만 바꾼 수정은 서버와 무관하다).
             mask = _weekday_mask(spec.weekdays)
             self._conn.execute(
                 "UPDATE goals SET "
                 "dirty = CASE WHEN remote_id IS NOT NULL AND "
-                "(name != ? OR daily_target_minutes != ? OR weekdays != ?) THEN 1 ELSE dirty END, "
+                "(name != ? OR daily_target_minutes != ? OR weekdays != ? OR start_date IS NOT ? OR end_date IS NOT ?) "
+                "THEN 1 ELSE dirty END, "
                 "name = ?, name_key = ?, daily_target_minutes = ?, weekdays = ?, start_date = ?, end_date = ?, updated_at = ? "
                 "WHERE id = ?",
                 (
                     spec.name,
                     spec.daily_target_minutes,
                     mask,
+                    _iso(spec.start_date),
+                    _iso(spec.end_date),
                     spec.name,
                     spec.name_key,
                     spec.daily_target_minutes,
@@ -796,11 +809,30 @@ class GoalStore:
                 (remote_id, revision, goal_id),
             )
 
-    def mark_pushed(self, goal_id: int, revision: int, *, expect_generation: int | None = None) -> None:
-        """서버에 수정을 보냈다: 서버가 돌려준 revision을 적고 밀린 수정 표시를 지운다."""
+    def mark_pushed(
+        self, goal_id: int, revision: int, *, sent: Goal | None = None, expect_generation: int | None = None
+    ) -> None:
+        """서버에 수정을 보냈다: 서버가 돌려준 revision을 적고 밀린 수정 표시를 지운다.
+
+        sent(보낸 목표 값)를 주면 **지금 저장된 값이 보낸 값과 같을 때만** 표시를 지운다 — 응답을 기다리는 사이에 이 PC에서 다시 고쳤다면
+        그 수정은 아직 서버에 가지 않았으므로 표시를 남겨 다음 주기에 보낸다(revision은 서버의 최신으로 적는다). 비교는 서버가 아는 칸 전부다.
+        """
         with self._write(expect_generation):
+            if sent is None:
+                self._conn.execute("UPDATE goals SET remote_revision = ?, dirty = 0 WHERE id = ?", (revision, goal_id))
+                return
             self._conn.execute(
-                "UPDATE goals SET remote_revision = ?, dirty = 0 WHERE id = ?", (revision, goal_id)
+                "UPDATE goals SET remote_revision = ?, dirty = CASE WHEN name = ? AND daily_target_minutes = ? AND weekdays = ? "
+                "AND start_date IS ? AND end_date IS ? THEN 0 ELSE dirty END WHERE id = ?",
+                (
+                    revision,
+                    sent.name,
+                    sent.daily_target_minutes,
+                    _weekday_mask(frozenset(sent.weekdays)),
+                    _iso(sent.start_date),
+                    _iso(sent.end_date),
+                    goal_id,
+                ),
             )
 
     def unlink(self, goal_id: int, *, expect_generation: int | None = None) -> None:
@@ -820,27 +852,37 @@ class GoalStore:
         daily_target_minutes: int,
         weekdays: Collection[int],
         revision: int,
+        start_date: str | None = None,
+        end_date: str | None = None,
         expect_generation: int | None = None,
-    ) -> None:
-        """서버의 값(이름·목표 시간·요일)으로 이 목표를 맞춘다. 프로세스·사이트 연결은 그대로다.
+    ) -> bool:
+        """서버의 값(이름·목표 시간·요일·기간)으로 이 목표를 맞춘다. 프로세스·사이트 연결은 그대로다. 맞췄으면 True.
+
+        이 PC에서 고쳐 아직 서버에 보내지 않은 목표(dirty)면 **아무것도 바꾸지 않고 False** — 호출부가 연결 목록을 읽은 뒤에 사용자가 고쳤을
+        수 있다. 확인과 저장은 같은 트랜잭션이다. 이 PC의 수정은 다음 주기에 서버의 최신 revision 위로 올라간다.
 
         서버의 값이 이 PC의 규칙에 맞지 않거나(목표 시간·요일) 같은 이름의 다른 목표가 이미 있으면 그 칸을 짚어 GoalValidationError를
         올린다(이름은 목표마다 하나뿐이다). 검사는 저장 전에 하므로 아무것도 바뀌지 않는다.
         """
         errors = _remote_value_errors(daily_target_minutes, weekdays)
+        start, end = _remote_period(start_date, end_date, errors)
         if errors:
             raise GoalValidationError(errors)
         mask = _weekday_mask(frozenset(weekdays))
         with self._write(expect_generation):
             self._require_goal(goal_id)
+            (dirty,) = self._conn.execute("SELECT dirty FROM goals WHERE id = ?", (goal_id,)).fetchone()
+            if dirty:
+                return False
             try:
                 self._conn.execute(
-                    "UPDATE goals SET name = ?, name_key = ?, daily_target_minutes = ?, weekdays = ?, "
+                    "UPDATE goals SET name = ?, name_key = ?, daily_target_minutes = ?, weekdays = ?, start_date = ?, end_date = ?, "
                     "remote_revision = ?, dirty = 0, updated_at = ? WHERE id = ?",
-                    (name, name_key(name), daily_target_minutes, mask, revision, self._timestamp(), goal_id),
+                    (name, name_key(name), daily_target_minutes, mask, start, end, revision, self._timestamp(), goal_id),
                 )
             except sqlite3.IntegrityError as error:
                 raise GoalValidationError(_integrity_errors(error)) from None
+        return True
 
     def create_from_remote(
         self,
@@ -850,11 +892,14 @@ class GoalStore:
         daily_target_minutes: int,
         weekdays: Collection[int],
         revision: int,
+        start_date: str | None = None,
+        end_date: str | None = None,
         expect_generation: int | None = None,
     ) -> Goal:
         """서버에만 있던 목표를 이 PC에 만든다(프로세스·사이트 연결은 비어 있다). 서버 값이 규칙에 맞지 않거나 이름이 겹치거나
         개수 상한을 넘으면 GoalValidationError."""
         errors = _remote_value_errors(daily_target_minutes, weekdays)
+        start, end = _remote_period(start_date, end_date, errors)
         if errors:
             raise GoalValidationError(errors)
         with self._write(expect_generation):
@@ -864,9 +909,9 @@ class GoalStore:
             now = self._timestamp()
             try:
                 goal_id = self._conn.execute(
-                    "INSERT INTO goals (name, name_key, daily_target_minutes, weekdays, created_at, updated_at, "
-                    "remote_id, remote_revision, sync_state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'sync')",
-                    (name, name_key(name), daily_target_minutes, _weekday_mask(frozenset(weekdays)), now, now, remote_id, revision),
+                    "INSERT INTO goals (name, name_key, daily_target_minutes, weekdays, start_date, end_date, created_at, updated_at, "
+                    "remote_id, remote_revision, sync_state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sync')",
+                    (name, name_key(name), daily_target_minutes, _weekday_mask(frozenset(weekdays)), start, end, now, now, remote_id, revision),
                 ).lastrowid
             except sqlite3.IntegrityError as error:
                 raise GoalValidationError(_integrity_errors(error)) from None

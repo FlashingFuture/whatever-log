@@ -205,6 +205,11 @@ export interface SyncItem {
   weekdays: number[];
   local_daily_target_minutes: number | null;
   local_weekdays: number[] | null;
+  /** 목표 기간(`YYYY-MM-DD`, 둘 다 null이면 기간 없음). merge에서는 서버의 기간이고, 이 PC의 기간은 local_*에 있다. */
+  start_date: string | null;
+  end_date: string | null;
+  local_start_date: string | null;
+  local_end_date: string | null;
   declined: boolean;
 }
 

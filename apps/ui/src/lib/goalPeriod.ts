@@ -47,7 +47,18 @@ export function formatDayText(text: string, now: Date = new Date()): string {
     : `${Number(year)}년 ${monthDay}`;
 }
 
-/** 기간을 한 줄로: 없으면 "기간 없음", 있으면 "11월 25일 ~ 12월 31일"에 상태("예정"·"종료됨")를 붙인다. */
+/** 기간의 날짜 범위만: 없으면 "기간 없음", 있으면 "11월 25일 ~ 12월 31일"(상태는 붙이지 않는다). */
+export function formatPeriodRange(
+  period: PeriodLike,
+  now: Date = new Date(),
+): string {
+  if (period.start_date === null || period.end_date === null) {
+    return "기간 없음";
+  }
+  return `${formatDayText(period.start_date, now)} ~ ${formatDayText(period.end_date, now)}`;
+}
+
+/** 기간을 한 줄로: 없으면 "기간 없음", 있으면 "11월 25일 ~ 12월 31일"에 상태("시작 전"·"종료됨")를 붙인다. */
 export function describePeriod(
   period: PeriodLike,
   today: string,
@@ -57,7 +68,7 @@ export function describePeriod(
   if (status === "none") {
     return "기간 없음";
   }
-  const range = `${formatDayText(period.start_date as string, now)} ~ ${formatDayText(period.end_date as string, now)}`;
+  const range = formatPeriodRange(period, now);
   if (status === "ended") {
     return `${range} · 종료됨`;
   }

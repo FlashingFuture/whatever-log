@@ -49,6 +49,8 @@ test("목표를 만들면 201이고 목록에 나온다", async () => {
     name: "공부",
     daily_target_minutes: 120,
     weekdays: [0, 1, 2, 3, 4],
+    start_date: null,
+    end_date: null,
     revision: 1,
     updated_at: "2026-11-06T03:00:00.000Z",
   });

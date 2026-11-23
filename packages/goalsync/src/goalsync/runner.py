@@ -8,19 +8,20 @@
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from cloud import GoalConflict, ProgressEntry, ServerError
 from goals import META_ACCOUNT_EMAIL, META_SYNC_ENABLED, GoalStore, GoalValidationError, StaleSyncError
 
 from goalsync.daily import day_entries, recent_days
-from goalsync.plan import ServerPort, ensure_account
+from goalsync.plan import ServerPort, ensure_account, goal_period
 from goalsync.state import SyncState
 
 NORMAL_DAYS = 8  # 오늘 + 지난 7일
 FIRST_DAYS = 30  # 연결한 직후에는 한 달치를 보낸다
 BATCH = 50  # 서버가 한 번에 받는 줄 수
+REMOVABLE_DAYS = 400  # 서버가 지우기 요청에서 받는 날짜 범위(오늘부터 거슬러). 그보다 오래된 줄은 건드리지 않는다
 
 
 class _GenerationGuard:
@@ -64,6 +65,8 @@ class SyncReport:
     pulled: int = 0
     unlinked: int = 0
     progress_sent: int = 0
+    # 보낸 뒤에 목표에 들지 않게 된 날(기간·요일을 바꿨다)이라 서버에서 지운 줄 수
+    progress_removed: int = 0
     problems: list[str] = field(default_factory=list)
 
 
@@ -121,6 +124,7 @@ def _upload_new_goals(store: GoalStore, server: ServerPort, report: SyncReport, 
         goal = store.get(link.goal_id)
         if goal is None:
             continue
+        start_date, end_date = goal_period(goal)
         try:
             created = server.put_goal(
                 new_id(),
@@ -128,6 +132,8 @@ def _upload_new_goals(store: GoalStore, server: ServerPort, report: SyncReport, 
                 daily_target_minutes=goal.daily_target_minutes,
                 weekdays=goal.weekdays,
                 base_revision=0,
+                start_date=start_date,
+                end_date=end_date,
             )
         except GoalConflict as conflict:
             if conflict.code == "duplicate_name":
@@ -150,6 +156,7 @@ def _push_edits(store: GoalStore, server: ServerPort, report: SyncReport) -> Non
         if goal is None:
             continue
         revision = link.remote_revision
+        start_date, end_date = goal_period(goal)
         for attempt in range(2):
             try:
                 pushed = server.put_goal(
@@ -158,6 +165,8 @@ def _push_edits(store: GoalStore, server: ServerPort, report: SyncReport) -> Non
                     daily_target_minutes=goal.daily_target_minutes,
                     weekdays=goal.weekdays,
                     base_revision=revision,
+                    start_date=start_date,
+                    end_date=end_date,
                 )
             except GoalConflict as conflict:
                 if conflict.code == "goal_deleted":
@@ -176,7 +185,7 @@ def _push_edits(store: GoalStore, server: ServerPort, report: SyncReport) -> Non
                 else:
                     report.problems.append(f"'{goal.name}': {error.message}")
                 break
-            store.mark_pushed(link.goal_id, pushed.revision)
+            store.mark_pushed(link.goal_id, pushed.revision, sent=goal)
             report.pushed += 1
             break
 
@@ -194,17 +203,21 @@ def _pull(store: GoalStore, state: SyncState, server: ServerPort, report: SyncRe
             report.unlinked += 1
         elif theirs.revision != link.remote_revision:
             try:
-                store.apply_remote(
+                applied = store.apply_remote(
                     link.goal_id,
                     name=theirs.name or "",
                     daily_target_minutes=theirs.daily_target_minutes or 0,
                     weekdays=theirs.weekdays,
                     revision=theirs.revision,
+                    start_date=theirs.start_date,
+                    end_date=theirs.end_date,
                 )
             except GoalValidationError as error:
                 report.problems.append(error.errors[0].message if error.errors else "서버의 변경을 반영하지 못했습니다.")
                 continue
-            report.pulled += 1
+            # 목록을 읽은 뒤 이 PC에서 고쳤다면 적용되지 않는다(그 수정은 다음 주기에 서버로 올라간다).
+            if applied:
+                report.pulled += 1
 
 
 def _push_progress(
@@ -215,7 +228,11 @@ def _push_progress(
     today: date,
     report: SyncReport,
 ) -> None:
-    """연결된 목표의 최근 며칠 달성 분을 계산해, 마지막으로 보낸 값과 다른 줄만 서버에 보낸다."""
+    """연결된 목표의 최근 며칠 달성 분을 계산해, 마지막으로 보낸 값과 다른 줄만 서버에 보낸다.
+
+    전에 보냈지만 이제 줄이 만들어지지 않는 날(기간 밖이 됐거나 적용 요일에서 빠졌고 시간도 없다)은 서버에서 그 줄을 지운다 — 그대로 두면
+    서버의 합계에 옛 달성 분과 목표량이 남는다. 지우는 것은 이 기기가 보낸 줄뿐이다(다른 기기의 줄은 그 기기가 정리한다).
+    """
     links = {link.goal_id: link for link in store.sync_links() if link.remote_id and link.state == "sync"}
     if not links or not recorder_db.exists():
         return
@@ -223,6 +240,29 @@ def _push_progress(
     window = recent_days(today, FIRST_DAYS if fresh else NORMAL_DAYS)
 
     entries = day_entries(store, recorder_db, window, only_goal_ids=set(links))
+    present = {(entry.goal_id, entry.day) for entry in entries}
+    recomputed = {day.isoformat() for day in window[-NORMAL_DAYS:]}
+    oldest = (today - timedelta(days=REMOVABLE_DAYS - 1)).isoformat()
+    stale: list[tuple[str, str]] = []
+    for goal_id, link in links.items():
+        assert link.remote_id is not None
+        goal = store.get(goal_id)
+        for text in state.pushed_days(link.remote_id):
+            if text in recomputed:
+                # 다시 계산한 날: 이번에 줄이 만들어지지 않았으면(기간 밖, 적용 요일에서 빠졌고 시간도 없음) 지운다.
+                gone = (goal_id, text) not in present
+            else:
+                # 다시 계산하지 않는 오래된 날: 지금 기간 밖이면 지운다(처음 연결 때 보낸 한 달치 등). 요일·시간은 다시 보지 않는다.
+                gone = goal is not None and oldest <= text and not goal.covers(date.fromisoformat(text))
+            if gone:
+                stale.append((link.remote_id, text))
+    for start in range(0, len(stale), BATCH):
+        chunk = stale[start : start + BATCH]
+        report.progress_removed += server.remove_progress(state.device_id(), chunk)
+        # 서버에 이미 없던 줄도 보낸 기록에서는 지운다(서버는 없는 줄을 넘어가고 센 수에 넣지 않는다).
+        for remote_id, day in chunk:
+            state.forget_day(remote_id, day)
+
     pending: list[tuple[str, str, int, int]] = []
     for entry in entries:
         remote_id = links[entry.goal_id].remote_id

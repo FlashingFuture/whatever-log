@@ -195,9 +195,8 @@ def test_unlink_keeps_the_goal_and_its_process_links_but_drops_the_server_id(sto
 def test_apply_remote_changes_only_the_shared_fields(store) -> None:
     goal = store.create(**_fields(processes=["Code.exe"]))
     store.link_remote(goal.id, "r-1", 1)
-    store.update(goal.id, **_fields(name="로컬 수정", processes=["Code.exe"]))
 
-    store.apply_remote(goal.id, name="서버 이름", daily_target_minutes=45, weekdays=[5, 6], revision=7)
+    assert store.apply_remote(goal.id, name="서버 이름", daily_target_minutes=45, weekdays=[5, 6], revision=7) is True
 
     updated = store.get(goal.id)
     assert (updated.name, updated.daily_target_minutes, updated.weekdays) == ("서버 이름", 45, frozenset({5, 6}))
@@ -359,3 +358,29 @@ def test_writes_with_the_current_generation_go_through(store) -> None:
     store.link_remote(goal.id, "r-new", 1, expect_generation=store.generation())
 
     assert _link(store, goal.id).remote_id == "r-new"
+
+
+def test_apply_remote_does_not_overwrite_a_local_edit_not_yet_pushed(store) -> None:
+    goal = store.create(**_fields(processes=["Code.exe"]))
+    store.link_remote(goal.id, "r-1", 1)
+    store.update(goal.id, **_fields(name="로컬 수정", processes=["Code.exe"]))  # 내려받기가 연결 목록을 읽은 뒤에 고쳤다
+
+    applied = store.apply_remote(goal.id, name="서버 이름", daily_target_minutes=45, weekdays=[5, 6], revision=7)
+
+    assert applied is False
+    assert store.get(goal.id).name == "로컬 수정"
+    assert _link(store, goal.id) == SyncLink(goal.id, "sync", "r-1", 1, True)  # 다음 주기에 올라간다
+
+
+def test_mark_pushed_keeps_the_dirty_mark_when_the_goal_changed_while_sending(store) -> None:
+    goal = store.create(**_fields(processes=["Code.exe"]))
+    store.link_remote(goal.id, "r-1", 1)
+    sent = store.update(goal.id, **_fields(name="보낸 값", processes=["Code.exe"]))
+    store.update(goal.id, **_fields(name="보내는 사이 고친 값", processes=["Code.exe"]))
+
+    store.mark_pushed(goal.id, 2, sent=sent)
+    assert _link(store, goal.id) == SyncLink(goal.id, "sync", "r-1", 2, True)
+
+    latest = store.get(goal.id)
+    store.mark_pushed(goal.id, 3, sent=latest)
+    assert _link(store, goal.id) == SyncLink(goal.id, "sync", "r-1", 3, False)

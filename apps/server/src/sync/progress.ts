@@ -1,5 +1,5 @@
 import type { Db } from "../db.ts";
-import type { ProgressEntry } from "./progressInput.ts";
+import type { ProgressEntry, ProgressKey } from "./progressInput.ts";
 
 /** 사용자당 달성도를 보낼 수 있는 기기 수. 쓰지 않는 기기는 `DELETE /devices/{id}`로 지운다. */
 export const MAX_DEVICES = 10;
@@ -99,6 +99,28 @@ export async function putProgress(
       entries.length - results.filter((r) => r.meta.changes === 0).length,
     ignoredGoalIds: [...ignored],
   };
+}
+
+/**
+ * 이 기기의 (목표, 날짜) 줄들을 지운다. 다른 기기의 줄은 건드리지 않는다. 없는 줄은 조용히 넘어간다(여러 번 보내도 같다).
+ * 지운 줄 수를 돌려준다.
+ */
+export async function removeProgress(
+  db: Db,
+  userId: number,
+  deviceId: string,
+  entries: ProgressKey[],
+): Promise<number> {
+  const results = await db.batch(
+    entries.map((entry) =>
+      db
+        .prepare(
+          "DELETE FROM progress WHERE user_id = ? AND device_id = ? AND goal_id = ? AND day = ?",
+        )
+        .bind(userId, deviceId, entry.goalId, entry.day),
+    ),
+  );
+  return results.reduce((sum, result) => sum + result.meta.changes, 0);
 }
 
 export interface DayProgress {

@@ -100,6 +100,14 @@ class SyncState:
         """이 서버 목표에 보낸 기록을 지운다(연결이 끊겼을 때)."""
         self._conn.execute("DELETE FROM pushed WHERE remote_id = ?", (remote_id,))
 
+    def pushed_days(self, remote_id: str) -> list[str]:
+        """이 서버 목표에 달성 줄을 보낸 날들(오래된 날부터)."""
+        return [row[0] for row in self._conn.execute("SELECT day FROM pushed WHERE remote_id = ? ORDER BY day", (remote_id,))]
+
+    def forget_day(self, remote_id: str, day: str) -> None:
+        """이 서버 목표의 그날 보낸 기록을 지운다(서버에서 그 줄을 지웠을 때)."""
+        self._conn.execute("DELETE FROM pushed WHERE remote_id = ? AND day = ?", (remote_id, day))
+
     def forget_all(self) -> None:
         """보낸 기록을 모두 지운다(계정이 바뀌었을 때)."""
         self._conn.execute("DELETE FROM pushed")

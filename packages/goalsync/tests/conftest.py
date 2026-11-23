@@ -27,8 +27,17 @@ class FakeServer:
         return [goal for goal in self.goals.values() if not goal.deleted]
 
     # --- 다른 기기의 행동을 흉내 내는 보조 ---
-    def add(self, goal_id: str, name: str, minutes: int = 60, weekdays=(0, 1, 2, 3, 4), revision: int = 1) -> RemoteGoal:
-        goal = RemoteGoal(goal_id, False, revision, "t", name, minutes, frozenset(weekdays))
+    def add(
+        self,
+        goal_id: str,
+        name: str,
+        minutes: int = 60,
+        weekdays=(0, 1, 2, 3, 4),
+        revision: int = 1,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> RemoteGoal:
+        goal = RemoteGoal(goal_id, False, revision, "t", name, minutes, frozenset(weekdays), start_date, end_date)
         self.goals[goal_id] = goal
         return goal
 
@@ -38,6 +47,8 @@ class FakeServer:
             "name": old.name,
             "daily_target_minutes": old.daily_target_minutes,
             "weekdays": old.weekdays,
+            "start_date": old.start_date,
+            "end_date": old.end_date,
             **changes,
         }
         self.goals[goal_id] = RemoteGoal(goal_id, False, old.revision + 1, "t", **values)
@@ -55,7 +66,15 @@ class FakeServer:
         return list(self.goals.values())
 
     def put_goal(
-        self, goal_id: str, *, name: str, daily_target_minutes: int, weekdays: Collection[int], base_revision: int
+        self,
+        goal_id: str,
+        *,
+        name: str,
+        daily_target_minutes: int,
+        weekdays: Collection[int],
+        base_revision: int,
+        start_date: str | None = None,
+        end_date: str | None = None,
     ) -> RemoteGoal:
         self._enter(f"put_goal:{base_revision}")
         existing = self.goals.get(goal_id)
@@ -81,7 +100,7 @@ class FakeServer:
             if clash:
                 raise GoalConflict("duplicate_name", "같은 이름의 목표가 이미 있습니다.", None)
             revision = existing.revision + 1
-        goal = RemoteGoal(goal_id, False, revision, "t", name, daily_target_minutes, frozenset(weekdays))
+        goal = RemoteGoal(goal_id, False, revision, "t", name, daily_target_minutes, frozenset(weekdays), start_date, end_date)
         self.goals[goal_id] = goal
         return goal
 
@@ -105,6 +124,14 @@ class FakeServer:
             self.progress[(entry.goal_id, device_id, entry.day)] = (entry.minutes, entry.target_minutes)
             accepted += 1
         return ProgressResult(accepted, tuple(ignored))
+
+    def remove_progress(self, device_id: str, keys) -> int:
+        self._enter("remove_progress")
+        removed = 0
+        for goal_id, day in keys:
+            if self.progress.pop((goal_id, device_id, day), None) is not None:
+                removed += 1
+        return removed
 
 
 @pytest.fixture

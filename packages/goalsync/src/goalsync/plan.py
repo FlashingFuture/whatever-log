@@ -5,11 +5,11 @@
 - merge: 이 PC와 같은 이름의 서버 목표가 있다 → 올리지 않고 그 서버 목표와 연결한다(목표 시간·요일은 서버 값).
 - download: 서버에만 있는 목표 → 이 PC에 연결 없는 목표로 가져온다.
 
-서버로 가는 것은 이름·목표 시간·요일뿐이다. 프로세스·사이트 연결은 어느 항목에서도 올라가지 않는다.
+서버로 가는 것은 이름·목표 시간·요일·기간뿐이다. 프로세스·사이트 연결은 어느 항목에서도 올라가지 않는다.
 """
 
 import uuid
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -30,9 +30,21 @@ class ServerPort(Protocol):
         ...
 
     def put_goal(
-        self, goal_id: str, *, name: str, daily_target_minutes: int, weekdays: Collection[int], base_revision: int
+        self,
+        goal_id: str,
+        *,
+        name: str,
+        daily_target_minutes: int,
+        weekdays: Collection[int],
+        base_revision: int,
+        start_date: str | None = None,
+        end_date: str | None = None,
     ) -> RemoteGoal:
-        """목표를 만들거나(base_revision 0) 고친다."""
+        """목표를 만들거나(base_revision 0) 고친다. 기간은 늘 함께 보낸다(None이면 기간 없음)."""
+        ...
+
+    def remove_progress(self, device_id: str, keys: Sequence[tuple[str, str]]) -> int:
+        """이 기기가 보냈던 (목표 id, 날짜) 줄들을 지운다."""
         ...
 
     def delete_goal(self, goal_id: str) -> bool:
@@ -42,9 +54,9 @@ class ServerPort(Protocol):
 
 @dataclass(frozen=True)
 class PlanItem:
-    """확인 창의 한 줄. key는 화면과 주고받는 안정된 이름이고, 올라가는 값(name·target·weekdays)을 그대로 보여 준다.
+    """확인 창의 한 줄. key는 화면과 주고받는 안정된 이름이고, 올라가는 값(name·target·weekdays·기간)을 그대로 보여 준다.
 
-    merge일 때만 local_*에 이 PC의 값이 있다(서버 값과 다르면 화면이 둘을 함께 보여 준다).
+    merge일 때만 local_*에 이 PC의 값이 있다(서버 값과 다르면 화면이 둘을 함께 보여 준다). 기간은 `YYYY-MM-DD` 글자이고 둘 다 None이면 기간 없음.
     declined는 사용자가 전에 "올리지 않기"를 골랐던 목표다(기본 선택을 끈다).
     """
 
@@ -60,6 +72,18 @@ class PlanItem:
     declined: bool = False
     # 계획을 만들 때 본 서버 revision(merge·download). 그 뒤 서버가 바뀌었다면 다음 주기의 내려받기가 맞춘다.
     remote_revision: int | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    local_start_date: str | None = None
+    local_end_date: str | None = None
+
+
+def goal_period(goal: Goal) -> tuple[str | None, str | None]:
+    """이 PC 목표의 기간을 서버로 보내는 글자로(`YYYY-MM-DD`, 기간이 없으면 둘 다 None)."""
+    return (
+        None if goal.start_date is None else goal.start_date.isoformat(),
+        None if goal.end_date is None else goal.end_date.isoformat(),
+    )
 
 
 @dataclass(frozen=True)
@@ -140,6 +164,10 @@ def build_plan(store: GoalStore, remote_goals: list[RemoteGoal], email: str | No
                     local_weekdays=tuple(sorted(goal.weekdays)),
                     declined=link.state == "local_only",
                     remote_revision=match.revision,
+                    start_date=match.start_date,
+                    end_date=match.end_date,
+                    local_start_date=goal_period(goal)[0],
+                    local_end_date=goal_period(goal)[1],
                 )
             )
         else:
@@ -152,6 +180,8 @@ def build_plan(store: GoalStore, remote_goals: list[RemoteGoal], email: str | No
                     weekdays=tuple(sorted(goal.weekdays)),
                     local_id=goal.id,
                     declined=link.state == "local_only",
+                    start_date=goal_period(goal)[0],
+                    end_date=goal_period(goal)[1],
                 )
             )
     for remote in free_remote.values():
@@ -164,6 +194,8 @@ def build_plan(store: GoalStore, remote_goals: list[RemoteGoal], email: str | No
                 weekdays=tuple(sorted(remote.weekdays)),
                 remote_id=remote.id,
                 remote_revision=remote.revision,
+                start_date=remote.start_date,
+                end_date=remote.end_date,
             )
         )
     return Plan(email=email, enabled=store.get_meta(META_SYNC_ENABLED) == "1", items=tuple(items))
@@ -232,6 +264,8 @@ def apply_choices(
                     daily_target_minutes=item.daily_target_minutes,
                     weekdays=item.weekdays,
                     revision=item.remote_revision or 0,
+                    start_date=item.start_date,
+                    end_date=item.end_date,
                 )
                 downloaded += 1
             except (ServerError, GoalValidationError) as error:
@@ -246,18 +280,21 @@ def _upload(store: GoalStore, server: ServerPort, item: PlanItem, remote_id: str
     goal: Goal | None = store.get(item.local_id)
     if goal is None:
         return
+    start_date, end_date = goal_period(goal)
     created = server.put_goal(
         remote_id,
         name=goal.name,
         daily_target_minutes=goal.daily_target_minutes,
         weekdays=goal.weekdays,
         base_revision=0,
+        start_date=start_date,
+        end_date=end_date,
     )
     store.link_remote(item.local_id, created.id, created.revision)
 
 
 def _merge(store: GoalStore, item: PlanItem) -> None:
-    """서버의 같은 이름 목표와 연결한다. 목표 시간·요일은 서버 값으로 맞추고 프로세스 연결은 그대로 둔다."""
+    """서버의 같은 이름 목표와 연결한다. 목표 시간·요일·기간은 서버 값으로 맞추고 프로세스 연결은 그대로 둔다."""
     assert item.local_id is not None and item.remote_id is not None
     revision = item.remote_revision or 0
     store.apply_remote(
@@ -266,5 +303,7 @@ def _merge(store: GoalStore, item: PlanItem) -> None:
         daily_target_minutes=item.daily_target_minutes,
         weekdays=item.weekdays,
         revision=revision,
+        start_date=item.start_date,
+        end_date=item.end_date,
     )
     store.link_remote(item.local_id, item.remote_id, revision)
