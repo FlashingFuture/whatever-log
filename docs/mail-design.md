@@ -79,7 +79,44 @@ PC(앱) ──▶ 서버(Workers) ──▶ 메일 서비스(Resend) ──▶ �
 - 수신자 고정 + 사용자별·서버 전체 한도(계정 삭제로 초기화되지 않는다) + 확실한 실패에서만 자리 반환이 폭주를 막는다.
 - 보고서 메일을 붙일 때는 한 사용자의 여러 목표를 **한 통으로 묶고**(다이제스트), 보낼 시각을 분산한다(하루 100통 한도).
 
-## 아직 없는 것 (다음 작업)
+## 보고서 메일 구독 (D)
 
-- 보고서 일정의 서버 저장과 Cron 발송, 메일 본문(집계값만 — `docs/data-handling.md`), 수신 거부(서명 토큰·`List-Unsubscribe`), 반송·신고 웹훅과 발송 정지 목록.
-- 이 PC의 앱에서 시험 메일을 요청하는 화면. 지금은 서버 API만 있다.
+결정의 근거는 `docs/goal-management.md`의 "D·E. 메일 구독". 여기서는 서버의 모양을 적는다. 발송(Cron)·보고서 본문·화면은 E다.
+
+| 주소 | 인증 | 하는 일 |
+| --- | --- | --- |
+| `GET /mail/subscription` | 토큰 | `{subscription \| null, daily_available}` |
+| `PUT /mail/subscription` | 토큰 | 신청·변경 `{goal_id, frequency, weekday, day_of_month, send_time, timezone, replace}` → `{subscription, created, welcome}` |
+| `PATCH /mail/subscription` | 토큰 | `{status: "active" \| "paused"}` 켜고 끄기 |
+| `DELETE /mail/subscription` | 토큰 | 그만두기(행을 지운다) |
+| `GET·POST /mail/unsubscribe?s=&t=` | 서명 | 메일의 수신 거부 링크. GET은 확인 페이지만, POST(원클릭 포함)가 끊는다 |
+| `POST /mail/webhooks/resend` | Svix 서명 | 반송·스팸 신고 → 보내지 않을 주소 |
+
+- **사용자당 하나**는 `mail_subscriptions.user_id UNIQUE`가 지킨다. 저장은 `INSERT … ON CONFLICT(user_id) DO UPDATE … WHERE`의 한 문장이고, 다른 목표를
+  구독 중이면 `replace`일 때만 옮긴다(아니면 409 `subscription_exists`와 지금 구독 — 화면이 "옮길까요?"를 묻는다). 가드(`withSubscriptionGuard`)는
+  계정을 읽고 보내지 않을 주소를 거르는 읽기 쉬운 껍데기이고, 보장은 DB가 한다.
+- **주기**: `daily`(전날) / `weekly`(지난 월~일, `weekday` 0=월…6=일) / `monthly`(지난달, `day_of_month` 1~28). `send_time`은 `HH:MM`, `timezone`은 IANA 이름.
+  맞지 않는 칸(매일에 요일 등)은 400이다.
+- **상태**: `active` / `paused`(사용자가 끔) / `ended`(`goal_deleted`·`goal_ended`·`unsubscribed`·`suppressed`). 목표를 지우면 같은 배치에서 `goal_deleted`로
+  끝난다. 끝난 구독은 다시 켤 수 없고 새로 신청한다. 기간이 이미 끝난 목표에는 신청할 수 없다(사용자 시간대의 오늘 기준). 기간 종료 처리(마지막 보고서
+  뒤 `goal_ended`)는 발송과 함께 E에서 한다.
+- **매일 상한**: 무료 요금제(`users.plan = 'free'`)에서 매일 구독자는 `LIMITS.dailySubscribers`(50)명까지다. 상한 확인은 저장과 같은 문장에서 한다.
+  이미 매일인 사용자가 시각만 바꾸는 것은 막지 않고, 꺼 둔 매일 구독을 다시 켤 때는 다시 확인한다.
+- **첫 신청 확인 메일**: 안내형. Google 계정당 한 번(`mail_welcomes`, 계정과 무관한 키 — 신청·해지·계정 삭제를 되풀이해도 다시 가지 않는다).
+  발송 한도(`mail_sends.kind = 'welcome'`, 서버 전체 하루 상한에 들어간다)를 거치고, 멱등 키는 `welcome-<구독 id>`다. 실패해도 구독은 저장되고 다음
+  신청·변경 때 다시 시도한다(접수됐을 수 있는 실패는 자리를 유지해 같은 날 다시 보내지 않는다). 결과는 응답의 `welcome`(`sent`·`already`·`suppressed`·
+  `not_configured`·`limited`·`failed`).
+- **수신 거부**: 메일마다 `List-Unsubscribe`(서명 링크)와 `List-Unsubscribe-Post: List-Unsubscribe=One-Click`을 단다. 링크의 서명은
+  HMAC-SHA256(`MAIL_LINK_SECRET`, `unsubscribe:<구독 id>`)이고 만료가 없다. GET은 확인 페이지만 보인다 — 메일 보안 검사기가 링크를 미리 열어도 끊기지 않게.
+- **반송·신고**: Resend 웹훅의 `email.bounced`(일시적 반송 제외)·`email.complained`가 오면 그 주소의 해시를 `mail_suppressions`에 넣고 그 주소를 쓰는
+  사용자의 구독을 `suppressed`로 끝낸다. 막힌 주소는 신청·다시 켜기를 409 `mail_suppressed`로 거절한다(조회·끄기·지우기는 된다). 계정을 지워도 남는다.
+- **설정(운영)**: `SERVER_PUBLIC_URL`(wrangler.toml), 비밀 `MAIL_LINK_SECRET`(긴 무작위 문자열)·`RESEND_WEBHOOK_SECRET`(Resend 대시보드 → Webhooks에서
+  `https://<서버>/mail/webhooks/resend`를 `email.bounced`·`email.complained`로 등록하면 주는 `whsec_…`). 링크 비밀이 없으면 구독은 되지만 확인 메일을
+  보내지 않고(`not_configured`), 웹훅 비밀이 없으면 웹훅은 503이다.
+- **로컬의 옛 일정(`goal_report_schedules`)**: 서버로 자동으로 옮기지 않는다. E에서 화면을 서버 구독으로 바꿀 때, 이 PC에 저장된 일정이 있으면 신청 폼을
+  그 값으로 채워 사용자가 한 번 확인해 신청하게 하고, 그 뒤 로컬 테이블을 비운다(사용자 몰래 서버로 보내는 값이 생기지 않게).
+
+## 아직 없는 것 (다음 작업, E)
+
+- Cron 발송(지금 보낼 구독 고르기, (구독, 구간) 중복 방지, 누락 따라잡기), 보고서 본문(집계값만 — `docs/data-handling.md`), 기간 종료 처리.
+- hub 중개와 화면(신청 폼, "옮길까요?", 상태·끝난 이유 표시, 시험 메일 요청). 지금은 서버 API만 있다.

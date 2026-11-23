@@ -1,7 +1,23 @@
 import type { Db } from "../db.ts";
 import { errorResponse, jsonResponse, readJson } from "../http.ts";
 import { MailConfigError } from "../mail/config.ts";
+import type { LinkConfig } from "../mail/links.ts";
+import {
+  parseStatusInput,
+  parseSubscriptionInput,
+} from "../mail/subscriptionInput.ts";
+import {
+  dailyAvailable,
+  deleteSubscription,
+  findSubscription,
+  putSubscription,
+  type Refusal,
+  setSubscriptionStatus,
+  view as subscriptionView,
+  withSubscriptionGuard,
+} from "../mail/subscriptions.ts";
 import { type MailDeps, sendTestMail } from "../mail/testMail.ts";
+import { sendWelcome } from "../mail/welcome.ts";
 import { deleteAccount, revokeToken } from "./account.ts";
 import { authenticate } from "./authenticate.ts";
 import { isUuid, parseGoalInput } from "./goalInput.ts";
@@ -26,7 +42,32 @@ export interface ApiDeps {
    * 메일 발송 준비(어댑터와 발신자). 설정이 없거나 틀리면 MailConfigError를 던지고, 주지 않으면(메일을 쓰지 않는 호출) 메일 주소는 "설정되지 않음"으로 답한다.
    * 요청마다 부르므로 가벼워야 한다 — 어댑터는 호출 사이에 상태를 갖지 않는다.
    */
-  mail?: () => MailDeps;
+  mail?: () => MailDeps & { links?: LinkConfig };
+}
+
+const SUBSCRIPTION_BODY_BYTES = 1024;
+
+const refused = (result: Refusal) =>
+  result.current
+    ? jsonResponse(
+        {
+          error: { code: result.code, message: result.message },
+          current: result.current,
+        },
+        result.status,
+      )
+    : errorResponse(result.status, result.code, result.message);
+
+/** 메일 설정을 읽는다. 없거나 틀리면 null(구독 저장은 그대로 하고 확인 메일만 미룬다 — 이유는 서버 로그에). */
+function mailOrNull(deps: ApiDeps): (MailDeps & { links?: LinkConfig }) | null {
+  if (!deps.mail) return null;
+  try {
+    return deps.mail();
+  } catch (error) {
+    if (!(error instanceof MailConfigError)) throw error;
+    console.warn(`mail config: ${error.message}`);
+    return null;
+  }
 }
 
 const GOAL_BODY_BYTES = 1024;
@@ -231,6 +272,88 @@ const ROUTES: { pattern: RegExp; route: Route }[] = [
         return result.ok
           ? jsonResponse({ sent: true, to: result.to, mode: result.mode })
           : errorResponse(result.status, result.code, result.message);
+      },
+    },
+  },
+  {
+    pattern: /^\/mail\/subscription$/,
+    route: {
+      methods: ["GET", "PUT", "PATCH", "DELETE"],
+      async handle(request, _url, _params, caller, deps) {
+        const now = deps.now();
+        if (request.method === "GET") {
+          const result = await withSubscriptionGuard(
+            async (user) => {
+              const row = await findSubscription(deps.db, user.id);
+              return {
+                subscription: row ? subscriptionView(row) : null,
+                daily_available: await dailyAvailable(deps.db, user.id),
+              };
+            },
+            { blockSuppressed: false },
+          )(deps.db, caller.userId);
+          return "ok" in result ? refused(result) : jsonResponse(result);
+        }
+        if (request.method === "DELETE") {
+          return (await deleteSubscription(deps.db, caller.userId))
+            ? noContent()
+            : errorResponse(404, "not_found", "신청한 보고서 메일이 없어요.");
+        }
+        const read = await readJson(request, SUBSCRIPTION_BODY_BYTES);
+        if (!read.ok) return read.response;
+        if (request.method === "PATCH") {
+          const parsed = parseStatusInput(read.body);
+          if (!parsed.ok) {
+            return errorResponse(400, "invalid_request", parsed.message);
+          }
+          // 끄기는 언제든 된다. 다시 켜기는 보내지 않을 주소면 막는다.
+          const result = await withSubscriptionGuard(
+            (user) => setSubscriptionStatus(deps.db, user, parsed.value, now),
+            { blockSuppressed: parsed.value === "active" },
+          )(deps.db, caller.userId);
+          return result.ok
+            ? jsonResponse({ subscription: subscriptionView(result.row) })
+            : refused(result);
+        }
+        const parsed = parseSubscriptionInput(read.body);
+        if (!parsed.ok) {
+          return errorResponse(400, "invalid_request", parsed.message);
+        }
+        const result = await withSubscriptionGuard(
+          async (user) => {
+            const saved = await putSubscription(
+              deps.db,
+              user,
+              parsed.value,
+              now,
+            );
+            if (!saved.ok) return saved;
+            const goal = await deps.db
+              .prepare("SELECT name FROM goals WHERE user_id = ? AND id = ?")
+              .bind(user.id, saved.row.goal_id)
+              .first<{ name: string }>();
+            const welcome = await sendWelcome(
+              deps.db,
+              user,
+              saved.row,
+              goal?.name ?? "",
+              mailOrNull(deps),
+              now,
+            );
+            return { ...saved, welcome };
+          },
+          { blockSuppressed: true },
+        )(deps.db, caller.userId);
+        return result.ok
+          ? jsonResponse(
+              {
+                subscription: subscriptionView(result.row),
+                created: result.created,
+                welcome: result.welcome,
+              },
+              result.created ? 201 : 200,
+            )
+          : refused(result);
       },
     },
   },

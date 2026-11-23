@@ -47,6 +47,9 @@ export function createResendMail(options: {
             subject: message.subject,
             text: message.text,
             ...(message.html === undefined ? {} : { html: message.html }),
+            ...(message.headers === undefined
+              ? {}
+              : { headers: message.headers }),
           }),
           signal: AbortSignal.timeout(TIMEOUT_MS),
         });

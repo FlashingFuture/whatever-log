@@ -61,5 +61,6 @@ flowchart LR
      제한하고, "Prevent self-review"를 켠다(혼자일 때 켜면 아무도 승인할 수 없다).
    - Environment secrets: `CLOUDFLARE_API_TOKEN`(위 토큰), `CLOUDFLARE_ACCOUNT_ID`(대시보드 오른쪽의 Account ID).
    비밀은 저장소 전체가 아니라 **환경 비밀**로 넣는다 — 승인된 배포 작업만 읽을 수 있다.
-3. **운영 비밀은 그대로 Cloudflare에** — `GOOGLE_CLIENT_SECRET`, `RESEND_API_KEY`는 지금처럼 `wrangler secret put`으로 Cloudflare에만 둔다. GitHub로 옮기지 않는다.
+3. **운영 비밀은 그대로 Cloudflare에** — `GOOGLE_CLIENT_SECRET`, `RESEND_API_KEY`, `MAIL_LINK_SECRET`(수신 거부 링크 서명), `RESEND_WEBHOOK_SECRET`(반송·신고 웹훅,
+   `docs/mail-design.md`)은 `wrangler secret put`으로 Cloudflare에만 둔다. GitHub로 옮기지 않는다.
 4. 첫 실행: Actions → deploy-server → Run workflow(main). 승인 → 끝나면 `/version`의 `commit`이 main의 커밋과 같은지 본다.

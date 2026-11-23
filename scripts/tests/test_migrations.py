@@ -12,6 +12,7 @@ MIGRATIONS = Path(__file__).resolve().parents[2] / "apps" / "server" / "migratio
 # 이 규칙 전에 있던 파일, 또는 이유가 있어 허용한 파일 → 이유
 ALLOWED = {
     "0004_mail_sends_by_account_hash.sql": "운영에 적용된 적 없는 0003의 시험 발송 기록 테이블을 바꿨다(규칙 전, docs/mail-design.md)",
+    "0006_mail_subscriptions.sql": "mail_sends.kind의 CHECK에 welcome을 더하려고 같은 칸의 새 테이블로 옮겼다(칸·의미는 그대로라 이전 Worker도 돈다)",
 }
 
 _DESTRUCTIVE = re.compile(r"\b(DROP\s+(TABLE|COLUMN|INDEX|VIEW|TRIGGER)|RENAME\s+(TO|COLUMN))\b", re.IGNORECASE)

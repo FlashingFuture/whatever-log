@@ -29,8 +29,15 @@ export const SANDBOX_SENDERS: Record<MailProvider, string> = {
 export const LIMITS = {
   /** 한 사용자가 하루(UTC)에 요청할 수 있는 시험 메일. */
   testPerUserPerDay: 3,
-  /** 서버 전체가 하루(UTC)에 보내는 메일의 상한(시험·보고서 합계). */
+  /** 서버 전체가 하루(UTC)에 보내는 메일의 상한(시험·확인·보고서 합계). */
   perDayTotal: 80,
+  /** 한 사용자에게 하루(UTC)에 보내는 첫 신청 확인 메일(한 번뿐이지만, 응답을 확인하지 못한 재시도가 같은 날 겹치지 않게). */
+  welcomePerUserPerDay: 1,
+  /**
+   * 무료 요금제에서 매일 보고서를 받을 수 있는 구독자 수. 매일 구독자가 이만큼이면 서버 전체 하루 상한의 대부분을 쓰므로, 더는 매일을 열지 않고
+   * 매주·매월만 받는다(docs/goal-management.md "매일 주기와 비용"). 사람이 많아지면 유료 요금제로 넓힌다.
+   */
+  dailySubscribers: 50,
 } as const;
 
 /** 서버가 설정에서 읽는 값. 비밀 키는 환경 변수 이름만 알고 값은 `wrangler secret`에서 온다. */
