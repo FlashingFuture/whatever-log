@@ -14,7 +14,9 @@ ALLOWED = {
     "0004_mail_sends_by_account_hash.sql": "운영에 적용된 적 없는 0003의 시험 발송 기록 테이블을 바꿨다(규칙 전, docs/mail-design.md)",
 }
 
-_DESTRUCTIVE = re.compile(r"\b(DROP\s+(TABLE|COLUMN|INDEX|VIEW|TRIGGER)|RENAME\s+(TO|COLUMN))\b", re.IGNORECASE)
+# DROP·RENAME은 대상과 관계없이 잡는다 — SQLite는 COLUMN을 생략할 수 있다(`ALTER TABLE t DROP b`, `ALTER TABLE t RENAME a TO b`).
+# 데이터를 지우는 DELETE FROM도 잡는다. 오탐이면 허용 목록에 이유와 함께 올린다.
+_DESTRUCTIVE = re.compile(r"\b(DROP|RENAME|DELETE\s+FROM)\b", re.IGNORECASE)
 
 
 def _statements(sql: str) -> str:
@@ -36,6 +38,10 @@ def test_the_check_catches_destructive_statements_but_not_comments() -> None:
     assert _DESTRUCTIVE.search(_statements("ALTER TABLE goals DROP COLUMN name;"))
     assert _DESTRUCTIVE.search(_statements("alter table goals rename to old_goals;"))
     assert _DESTRUCTIVE.search(_statements("DROP INDEX idx_x;"))
+    # COLUMN을 생략한 SQLite 문법도 잡는다
+    assert _DESTRUCTIVE.search(_statements("ALTER TABLE t RENAME a TO b;"))
+    assert _DESTRUCTIVE.search(_statements("ALTER TABLE t DROP b;"))
+    assert _DESTRUCTIVE.search(_statements("DELETE FROM goals WHERE 1;"))
     assert not _DESTRUCTIVE.search(_statements("-- DROP TABLE는 쓰지 않는다\nALTER TABLE goals ADD COLUMN x TEXT;"))
     assert not _DESTRUCTIVE.search(_statements("/* RENAME TO 금지 */ CREATE TABLE t (id INTEGER);"))
 

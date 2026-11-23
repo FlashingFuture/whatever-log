@@ -3,7 +3,8 @@
 #   브랜치를 고른다 — 병합 전에 서버를 먼저 올려야 할 때. 어느 브랜치·커밋이었는지 이 실행 기록에 남는다).
 # - `production` 환경의 승인자가 승인해야 시작한다(저장소 설정 → Environments). 언제·어느 커밋을·누가 승인해 배포했는지 그 환경의 기록에 남는다.
 #   CI와 동시에 돌므로 승인자는 같은 커밋의 ci가 녹색인지 보고 승인한다(이 작업도 서버 검사는 다시 돌린다).
-# - 순서: 검사 → 운영보다 API 계약이 뒤로 가지 않는지 → D1 마이그레이션(--remote) → Worker 배포 → /version이 이 커밋을 돌려주는지.
+# - 순서: [check — 승인 전] 서버 검사 → 운영보다 API 계약이 뒤로 가지 않는지 / [deploy — 승인 뒤] D1 마이그레이션(--remote) → Worker 배포 →
+#   /version이 이 커밋을 돌려주는지. check job에는 환경도 토큰도 없어서, 승인자는 빨간불을 승인 화면에서 먼저 본다.
 #   마이그레이션은 추가만 한다(배포 사이에 이전 Worker가 새 DB에서 돌아가야 한다).
 # - Cloudflare API 토큰은 마이그레이션·배포 두 단계에만 준다(의존성 설치 스크립트·테스트 코드가 읽지 못하게). 운영 비밀(Google 클라이언트 비밀,
 #   Resend 키)은 Cloudflare에만 있다.
@@ -34,14 +35,13 @@ concurrency:
   group: deploy-server
   cancel-in-progress: false
 
+env:
+  SERVER_URL: https://whatever-log-server.whateverlog.workers.dev
+
 jobs:
-  deploy:
+  # 승인 전에 도는 확인(환경·토큰 없음). 실패하면 deploy는 승인 대기에 들어가지 않는다.
+  check:
     runs-on: ubuntu-latest
-    environment:
-      name: production
-      url: https://whatever-log-server.whateverlog.workers.dev/version
-    env:
-      SERVER_URL: https://whatever-log-server.whateverlog.workers.dev
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -64,14 +64,24 @@ jobs:
           pnpm test
 
       # 브랜치를 먼저 배포한 뒤 main의 다른 변경이 자동 배포되면 운영이 낮은 API 계약으로 돌아갈 수 있다 — 승인 전에 멈춘다.
-      # 처음 배포(운영에 /version이 없음)는 0으로 본다.
+      # 운영의 /version을 읽지 못하면(5xx·네트워크) 통과시키지 않는다. /version이 없는 서버(404)만 0으로 본다.
+      # 한계: API 번호가 같은 채로 코드만 뒤로 가는 경우는 잡지 못한다(docs/deploy.md).
       - name: 운영보다 뒤로 가지 않는지 확인
         env:
           ALLOW_DOWNGRADE: ${{ inputs.allow_downgrade }}
         run: |
-          current_json="$(curl -fsS -A whatever-log-deploy-check "${SERVER_URL}/version" || echo '{}')"
-          current="$(echo "${current_json}" | jq -r '.api // 0')"
-          current_commit="$(echo "${current_json}" | jq -r '.commit // "알 수 없음"')"
+          code="$(curl -sS -o /tmp/version.json -w '%{http_code}' -A whatever-log-deploy-check "${SERVER_URL}/version")" || code=000
+          case "${code}" in
+            200)
+              current="$(jq -r '.api // 0' /tmp/version.json)"
+              current_commit="$(jq -r '.commit // "알 수 없음"' /tmp/version.json)" ;;
+            404)
+              current=0
+              current_commit="(/version 없음)" ;;
+            *)
+              echo "::error::운영 /version을 확인하지 못했습니다(HTTP ${code}). 잠시 뒤 다시 실행하세요."
+              exit 1 ;;
+          esac
           mine="$(sed -n 's/^export const API_VERSION = \([0-9]*\);.*/\1/p' apps/server/src/version.ts)"
           echo "운영: API ${current} (커밋 ${current_commit}) → 이 커밋: API ${mine} (${GITHUB_SHA})"
           if [ -z "${mine}" ]; then
@@ -81,6 +91,26 @@ jobs:
             echo "::error::운영 API ${current} > 이 커밋 ${mine}. 먼저 배포한 브랜치가 아직 main에 없을 수 있습니다. 의도한 되돌리기면 allow_downgrade로 직접 실행하세요."
             exit 1
           fi
+
+  deploy:
+    needs: check
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://whatever-log-server.whateverlog.workers.dev/version
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: 의존성
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile --filter server...
 
       - name: D1 마이그레이션(운영)
         working-directory: apps/server
