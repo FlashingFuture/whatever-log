@@ -4,6 +4,9 @@ import type { Db } from "./db.ts";
 import { errorResponse, jsonResponse } from "./http.ts";
 import { type MailEnv, resolveSender } from "./mail/config.ts";
 import { createMail } from "./mail/factory.ts";
+import type { LinkConfig } from "./mail/links.ts";
+import { handleUnsubscribe } from "./mail/unsubscribe.ts";
+import { handleResendWebhook } from "./mail/webhook.ts";
 import { handleApi } from "./sync/api.ts";
 import { API_VERSION } from "./version.ts";
 
@@ -14,6 +17,19 @@ export interface Env extends MailEnv {
   DB: Db;
   /** 배포한 커밋(배포 워크플로가 `wrangler deploy --var COMMIT_SHA:…`로 넣는다). 로컬·직접 배포에서는 없다. */
   COMMIT_SHA?: string;
+  /** 메일의 링크가 가리킬 이 서버의 공개 주소(wrangler.toml의 [vars]). */
+  SERVER_PUBLIC_URL?: string;
+  /** 수신 거부 링크의 서명 비밀(`wrangler secret put MAIL_LINK_SECRET`). 없으면 확인 메일을 보내지 않고 링크도 처리하지 않는다. */
+  MAIL_LINK_SECRET?: string;
+  /** Resend 웹훅의 서명 비밀(`whsec_…`, `wrangler secret put RESEND_WEBHOOK_SECRET`). */
+  RESEND_WEBHOOK_SECRET?: string;
+}
+
+/** 수신 거부 링크 설정. 비밀이나 공개 주소가 없으면 undefined(링크가 든 메일을 보내지 않는다). */
+export function linkConfig(env: Env): LinkConfig | undefined {
+  const secret = env.MAIL_LINK_SECRET?.trim();
+  const baseUrl = env.SERVER_PUBLIC_URL?.trim().replace(/\/+$/, "");
+  return secret && baseUrl ? { secret, baseUrl } : undefined;
 }
 
 // Worker 인스턴스가 살아 있는 동안 재사용되도록 모듈 수준에서 한 번만 만든다(Google 공개키를 1시간 캐시).
@@ -64,6 +80,20 @@ async function route(request: Request, env: Env): Promise<Response> {
       // 공개 정보다: API 계약 번호와 배포한 커밋(저장소가 공개라 커밋은 비밀이 아니다). 운영 서버가 어느 코드인지 바로 확인하려는 것.
       return jsonResponse({ api: API_VERSION, commit: env.COMMIT_SHA ?? null });
     }
+    if (pathname === "/mail/unsubscribe") {
+      return await handleUnsubscribe(request, new URL(request.url), {
+        db: env.DB,
+        secret: env.MAIL_LINK_SECRET?.trim() || undefined,
+        now: () => new Date(),
+      });
+    }
+    if (pathname === "/mail/webhooks/resend") {
+      return await handleResendWebhook(request, {
+        db: env.DB,
+        secret: env.RESEND_WEBHOOK_SECRET?.trim() || undefined,
+        now: () => new Date(),
+      });
+    }
     if (pathname === "/auth/google") {
       if (request.method !== "POST") {
         return errorResponse(405, "method_not_allowed", "POST만 받습니다.", {
@@ -86,6 +116,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       mail: () => ({
         port: createMail(env, (input, init) => fetch(input, init)),
         sender: resolveSender(env),
+        links: linkConfig(env),
       }),
     });
     return handled ?? errorResponse(404, "not_found", "없는 주소입니다.");

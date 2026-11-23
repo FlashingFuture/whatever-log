@@ -1,6 +1,7 @@
 import type { Db } from "../db.ts";
 import { LIMITS, type Sender } from "./config.ts";
 import type { MailPort } from "./port.ts";
+import { recordSent, releaseSend, reserveSend, userKey } from "./quota.ts";
 
 export interface MailDeps {
   port: MailPort;
@@ -38,22 +39,8 @@ const BODY_LINES = [
  * - **자리를 돌려주는 때:** 서비스가 **접수하지 않았음이 확실한** 실패(키 오류, 거절, 한도)만 자리를 돌려준다. `unavailable`(5xx·네트워크·시간 초과·접수 번호 없음)은
  *   서비스가 이미 접수했을 수 있어서 자리를 **유지한다** — 돌려주면 재시도가 새 멱등 키로 같은 메일을 한 번 더 보내 실제 발송이 한도를 넘을 수 있다.
  */
-/** 발송 기록을 이 기간(일)만 남긴다. 한도는 오늘 기록만 세므로 그 이상 보관할 이유가 없다 — 해시라도 필요 이상 오래 남기지 않는다. */
-export const RETENTION_DAYS = 2;
-
-/**
- * 계정과 무관한 사용자 키: Google 계정 고유 값(sub)의 SHA-256(16진 64자). 원문을 남기지 않고, 같은 Google 계정이면 삭제·재로그인 뒤에도 같다.
- * 접두사 `mail:`로 이 용도의 해시를 다른 곳의 해시와 구분한다.
- */
-export async function userKey(googleSub: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(`mail:${googleSub}`),
-  );
-  return [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
+// 사용자 키·발송 기록 보관 기간은 quota.ts가 갖는다(확인 메일·보고서와 같은 규칙). 예전 위치에서 가져다 쓰는 곳을 위해 다시 내보낸다.
+export { RETENTION_DAYS, userKey } from "./quota.ts";
 
 export async function sendTestMail(
   db: Db,
@@ -74,50 +61,24 @@ export async function sendTestMail(
     };
   }
 
-  const day = now.toISOString().slice(0, 10);
   const key = await userKey(user.google_sub);
-  const token = crypto.randomUUID();
-  // 오래된 기록을 지운다(오늘 이후만 한도에 쓰인다).
-  const oldest = new Date(now.getTime() - RETENTION_DAYS * 24 * 60 * 60 * 1000)
-    .toISOString()
-    .slice(0, 10);
-  await db
-    .prepare("DELETE FROM mail_sends WHERE sent_on < ?")
-    .bind(oldest)
-    .run();
-  const reserved = await db
-    .prepare(
-      `INSERT INTO mail_sends (user_key, kind, sent_on, token, created_at)
-       SELECT ?1, 'test', ?2, ?3, ?4
-       WHERE (SELECT COUNT(*) FROM mail_sends WHERE sent_on = ?2) < ?5
-         AND (SELECT COUNT(*) FROM mail_sends WHERE sent_on = ?2 AND user_key = ?1 AND kind = 'test') < ?6`,
-    )
-    .bind(
-      key,
-      day,
-      token,
-      now.toISOString(),
-      LIMITS.perDayTotal,
-      LIMITS.testPerUserPerDay,
-    )
-    .run();
-  if (reserved.meta.changes === 0) {
-    const mine = await db
-      .prepare(
-        "SELECT COUNT(*) AS n FROM mail_sends WHERE sent_on = ? AND user_key = ? AND kind = 'test'",
-      )
-      .bind(day, key)
-      .first<{ n: number }>();
-    const personal = (mine?.n ?? 0) >= LIMITS.testPerUserPerDay;
+  const reserved = await reserveSend(db, {
+    key,
+    kind: "test",
+    perUserPerDay: LIMITS.testPerUserPerDay,
+    now,
+  });
+  if (!reserved.ok) {
     return {
       ok: false,
       status: 429,
-      code: personal ? "daily_limit" : "service_daily_limit",
-      message: personal
+      code: reserved.personal ? "daily_limit" : "service_daily_limit",
+      message: reserved.personal
         ? `시험 메일은 하루에 ${LIMITS.testPerUserPerDay}통까지 보낼 수 있어요. 내일 다시 시도해 주세요.`
         : "오늘 서버가 보낼 수 있는 메일을 모두 보냈어요. 내일 다시 시도해 주세요.",
     };
   }
+  const { token } = reserved;
 
   const stamp = `보낸 시각: ${now.toISOString()}`;
   const result = await mail.port.send({
@@ -130,19 +91,13 @@ export async function sendTestMail(
   });
 
   if (result.ok) {
-    await db
-      .prepare("UPDATE mail_sends SET provider_id = ? WHERE token = ?")
-      .bind(result.id, token)
-      .run();
+    await recordSent(db, token, result.id);
     return { ok: true, mode: mail.sender.mode, to: maskEmail(user.email) };
   }
 
   // 접수되지 않았음이 확실한 실패만 자리를 돌려준다. unavailable은 접수됐을 수 있어 유지한다(위 설명).
   if (result.reason !== "unavailable") {
-    await db
-      .prepare("DELETE FROM mail_sends WHERE token = ?")
-      .bind(token)
-      .run();
+    await releaseSend(db, token);
   }
   switch (result.reason) {
     case "unauthorized":

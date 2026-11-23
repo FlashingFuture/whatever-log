@@ -1,4 +1,5 @@
 import type { Db } from "../db.ts";
+import { endForDeletedGoal } from "../mail/subscriptions.ts";
 import { type GoalInput, MAX_GOALS } from "./goalInput.ts";
 
 const TOMBSTONE_DAYS = 30;
@@ -252,7 +253,7 @@ export async function putGoal(
 }
 
 /**
- * 목표를 삭제한다: 이름을 지우고 삭제 표시만 남기며(다른 기기가 알 수 있게), 그 목표의 달성 줄은 바로 지운다.
+ * 목표를 삭제한다: 이름을 지우고 삭제 표시만 남기며(다른 기기가 알 수 있게), 그 목표의 달성 줄은 바로 지우고 보고서 메일 구독은 끝낸다.
  * 30일이 지난 삭제 표시도 함께 정리한다. 이미 삭제됐으면 true(여러 번 보내도 같다), 없는 목표면 false.
  */
 export async function deleteGoal(
@@ -270,6 +271,8 @@ export async function deleteGoal(
     db
       .prepare("DELETE FROM progress WHERE user_id = ? AND goal_id = ?")
       .bind(userId, id),
+    // 그 목표의 보고서 메일 구독은 끝난다(goal_deleted) — 화면이 이유를 알린다.
+    endForDeletedGoal(db, userId, id, stamp),
     db
       .prepare(
         "UPDATE goals SET name = '', name_key = '', start_date = NULL, end_date = NULL, deleted_at = ?, revision = revision + 1, updated_at = ? " +

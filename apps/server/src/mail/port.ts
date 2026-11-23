@@ -14,6 +14,8 @@ export interface MailMessage {
   html?: string;
   /** 같은 요청을 다시 보내도 한 번만 발송되게 하는 키(서비스가 지원할 때). */
   idempotencyKey?: string;
+  /** 메일 헤더(수신 거부 `List-Unsubscribe` 등). 호출부가 정한 값만 넣는다. */
+  headers?: Record<string, string>;
 }
 
 export type SendResult =
