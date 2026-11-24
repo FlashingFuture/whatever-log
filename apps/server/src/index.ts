@@ -2,7 +2,8 @@ import { handleGoogleLogin } from "./auth/handler.ts";
 import { createGoogleKeyProvider } from "./auth/jwks.ts";
 import type { Db } from "./db.ts";
 import { errorResponse, jsonResponse } from "./http.ts";
-import { type MailEnv, resolveSender } from "./mail/config.ts";
+import { MailConfigError, type MailEnv, resolveSender } from "./mail/config.ts";
+import { dispatchReports } from "./mail/dispatch.ts";
 import { createMail } from "./mail/factory.ts";
 import type { LinkConfig } from "./mail/links.ts";
 import { handleUnsubscribe } from "./mail/unsubscribe.ts";
@@ -63,7 +64,38 @@ export default {
     }
     return response;
   },
+
+  /** Cron(wrangler.toml의 [triggers])이 10분마다 부른다: 지금 보낼 보고서를 보낸다(docs/mail-design.md "보고서 발송"). */
+  async scheduled(
+    _controller: ScheduledController,
+    env: Env,
+    ctx: ExecutionContext,
+  ): Promise<void> {
+    ctx.waitUntil(runReports(env));
+  },
 } satisfies ExportedHandler<Env>;
+
+/** 보고서 발송 한 번. 메일 설정이 없거나 틀리면 보내지 않고 이유만 로그에 남긴다(값은 남기지 않는다). 결과는 개수만 남긴다. */
+export async function runReports(
+  env: Env,
+  now: Date = new Date(),
+): Promise<void> {
+  let mail: Parameters<typeof dispatchReports>[1] = null;
+  try {
+    mail = {
+      port: createMail(env, (input, init) => fetch(input, init)),
+      sender: resolveSender(env),
+      links: linkConfig(env),
+    };
+  } catch (error) {
+    if (!(error instanceof MailConfigError)) throw error;
+    console.warn(`mail config: ${error.message}`);
+  }
+  const summary = await dispatchReports(env.DB, mail, now);
+  if (summary.due > 0 || summary.notConfigured) {
+    console.log(`reports: ${JSON.stringify(summary)}`);
+  }
+}
 
 async function route(request: Request, env: Env): Promise<Response> {
   const { pathname } = new URL(request.url);
