@@ -74,11 +74,38 @@ class DeviceInfo:
 
 class GoalConflict(ServerError):
     """목표를 보냈지만 서버가 받지 않았다(409). code는 conflict·goal_deleted·duplicate_name·too_many_goals이고,
-    current는 서버에 있는 현재 값(없을 수 있다)이다."""
+    current는 서버에 있는 현재 값(없을 수 있다)이다. raw_current는 응답의 `current` 그대로다(목표가 아닌 409 — 메일 구독 — 가 해석한다)."""
 
-    def __init__(self, code: str, message: str, current: RemoteGoal | None) -> None:
+    def __init__(self, code: str, message: str, current: RemoteGoal | None, raw_current: Any = None) -> None:
         """서버가 준 오류 코드·메시지·현재 값을 담는다."""
         super().__init__(409, code, message)
+        self.current = current
+        self.raw_current = raw_current
+
+
+@dataclass(frozen=True)
+class MailSubscription:
+    """서버의 보고서 메일 구독(사용자당 하나). goal_id는 서버 목표 id다."""
+
+    goal_id: str
+    frequency: str
+    weekday: int | None
+    day_of_month: int | None
+    send_time: str
+    timezone: str
+    status: str
+    ended_reason: str | None
+    created_at: str
+    updated_at: str
+
+
+class MailRefused(ServerError):
+    """메일 구독 요청을 서버가 받지 않았다. code는 서버의 오류 코드(subscription_exists·daily_full·mail_suppressed·goal_not_found·goal_ended·
+    subscription_ended·not_found·daily_limit …), current는 그때 서버에 있는 구독(있으면)."""
+
+    def __init__(self, status: int, code: str, message: str, current: MailSubscription | None = None) -> None:
+        """상태·오류 코드·사용자용 메시지·지금 구독을 담는다."""
+        super().__init__(status, code, message)
         self.current = current
 
 
@@ -129,6 +156,38 @@ def _day_or_none(value: Any) -> str | None:
         raise ValueError("날짜 모양이 다릅니다.")
     date.fromisoformat(value)  # 2026-02-30 같은 없는 날짜는 ValueError
     return value
+
+
+_FREQUENCIES = {"daily", "weekly", "monthly"}
+_STATUSES = {"active", "paused", "ended"}
+
+
+def _int_or_none(value: Any) -> int | None:
+    return None if value is None else _int(value)
+
+
+def _parse_subscription(item: Any) -> MailSubscription:
+    """서버의 구독 JSON을 MailSubscription으로. 모양이 다르면 ValueError/KeyError/TypeError."""
+    strings = ("goal_id", "frequency", "send_time", "timezone", "status", "created_at", "updated_at")
+    if not all(isinstance(item[key], str) for key in strings):
+        raise ValueError("구독 모양이 다릅니다.")
+    if item["frequency"] not in _FREQUENCIES or item["status"] not in _STATUSES:
+        raise ValueError("구독 값이 다릅니다.")
+    reason = item["ended_reason"]
+    if reason is not None and not isinstance(reason, str):
+        raise ValueError("구독 모양이 다릅니다.")
+    return MailSubscription(
+        goal_id=item["goal_id"],
+        frequency=item["frequency"],
+        weekday=_int_or_none(item["weekday"]),
+        day_of_month=_int_or_none(item["day_of_month"]),
+        send_time=item["send_time"],
+        timezone=item["timezone"],
+        status=item["status"],
+        ended_reason=reason,
+        created_at=item["created_at"],
+        updated_at=item["updated_at"],
+    )
 
 
 def _parse_goal(item: Any) -> RemoteGoal:
@@ -206,7 +265,7 @@ class ServerApi:
                     current = _parse_goal(payload["current"])
                 except (KeyError, ValueError, TypeError):
                     current = None
-            return GoalConflict(code, message, current)
+            return GoalConflict(code, message, current, payload.get("current") if isinstance(payload, dict) else None)
         return ServerError(error.code, code, message)
 
     def list_goals(self) -> list[RemoteGoal]:
@@ -305,6 +364,101 @@ class ServerApi:
         )
         try:
             return _int(payload["removed"])
+        except (KeyError, ValueError, TypeError):
+            raise ServerError(0, "bad_response", "서버 응답을 이해하지 못했습니다.") from None
+
+    # --- 보고서 메일 구독(docs/mail-design.md) ---
+
+    def _mail_call(self, method: str, path: str, body: Any = None) -> tuple[int, Any]:
+        """메일 주소를 부른다. 서버가 받지 않으면(401·연결 실패 외) MailRefused로 바꾼다(409면 지금 구독을 함께)."""
+        try:
+            return self._call(method, path, body)
+        except GoalConflict as conflict:
+            current = None
+            if isinstance(conflict.raw_current, dict):
+                try:
+                    current = _parse_subscription(conflict.raw_current)
+                except (KeyError, ValueError, TypeError):
+                    current = None
+            raise MailRefused(409, conflict.code, conflict.message, current) from None
+        except NotAuthorized:
+            raise
+        except ServerError as error:
+            if error.status == 0:
+                raise
+            raise MailRefused(error.status, error.code, error.message) from None
+
+    def get_mail_subscription(self) -> tuple[MailSubscription | None, bool]:
+        """(내 구독 또는 None, 매일 구독을 더 받을 수 있는가)."""
+        _, payload = self._mail_call("GET", "/mail/subscription")
+        try:
+            raw = payload["subscription"]
+            available = payload["daily_available"]
+            if not isinstance(available, bool):
+                raise ValueError
+            return (None if raw is None else _parse_subscription(raw)), available
+        except (KeyError, ValueError, TypeError):
+            raise ServerError(0, "bad_response", "서버 응답을 이해하지 못했습니다.") from None
+
+    def put_mail_subscription(
+        self,
+        *,
+        goal_id: str,
+        frequency: str,
+        weekday: int | None,
+        day_of_month: int | None,
+        send_time: str,
+        timezone: str,
+        replace: bool,
+    ) -> tuple[MailSubscription, bool, str]:
+        """신청·변경. (구독, 새로 만들었나, 확인 메일 결과)를 돌려준다. 서버가 받지 않으면 MailRefused."""
+        _, payload = self._mail_call(
+            "PUT",
+            "/mail/subscription",
+            {
+                "goal_id": goal_id,
+                "frequency": frequency,
+                "weekday": weekday,
+                "day_of_month": day_of_month,
+                "send_time": send_time,
+                "timezone": timezone,
+                "replace": replace,
+            },
+        )
+        try:
+            created, welcome = payload["created"], payload["welcome"]
+            if not isinstance(created, bool) or not isinstance(welcome, str):
+                raise ValueError
+            return _parse_subscription(payload["subscription"]), created, welcome
+        except (KeyError, ValueError, TypeError):
+            raise ServerError(0, "bad_response", "서버 응답을 이해하지 못했습니다.") from None
+
+    def set_mail_subscription_status(self, status: str) -> MailSubscription:
+        """켜고 끈다(active·paused)."""
+        _, payload = self._mail_call("PATCH", "/mail/subscription", {"status": status})
+        try:
+            return _parse_subscription(payload["subscription"])
+        except (KeyError, ValueError, TypeError):
+            raise ServerError(0, "bad_response", "서버 응답을 이해하지 못했습니다.") from None
+
+    def delete_mail_subscription(self) -> bool:
+        """그만둔다. 신청한 것이 없었으면(404) False."""
+        try:
+            self._mail_call("DELETE", "/mail/subscription")
+        except MailRefused as refused:
+            if refused.status == 404:
+                return False
+            raise
+        return True
+
+    def send_test_mail(self) -> dict[str, str]:
+        """로그인한 계정의 주소로 시험 메일을 보낸다. 돌려주는 것은 가린 주소(`to`)와 발신 방식(`mode`)."""
+        _, payload = self._mail_call("POST", "/mail/test")
+        try:
+            to, mode = payload["to"], payload["mode"]
+            if not isinstance(to, str) or not isinstance(mode, str):
+                raise ValueError
+            return {"to": to, "mode": mode}
         except (KeyError, ValueError, TypeError):
             raise ServerError(0, "bad_response", "서버 응답을 이해하지 못했습니다.") from None
 

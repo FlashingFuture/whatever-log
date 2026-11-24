@@ -5,5 +5,6 @@
  *
  * 1: 로그인, 목표·달성도 동기화, 기기, 계정 삭제, 시험 메일
  * 2: 목표 기간(`start_date`·`end_date`), `POST /progress/remove`
+ * 3: 보고서 메일 구독(`GET·PUT·PATCH·DELETE /mail/subscription`) — 앱(hub)이 쓰기 시작했다
  */
-export const API_VERSION = 2;
+export const API_VERSION = 3;

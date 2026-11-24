@@ -151,6 +151,27 @@ Cloudflare Cron(`wrangler.toml`의 `[triggers] crons = ["*/10 * * * *"]`)이 10�
 - 결과는 개수만 로그에 남긴다(`reports: {...}`). 발송 기록은 90일 지나면 지운다.
 - 로컬 확인: `pnpm exec wrangler dev --port 8798 --test-scheduled` 뒤 `curl "http://127.0.0.1:8798/__scheduled?cron=*/10+*+*+*+*"`.
 
-## 아직 없는 것 (E2)
+## 앱에서 신청하기 (E2)
 
-- hub 중개와 화면(신청 폼, "옮길까요?", 상태·끝난 이유 표시, 로컬 옛 일정으로 폼 채우기, 시험 메일 요청). 그때 서버의 `API_VERSION`과 앱의 요구를 올린다.
+hub가 서버를 중개한다(`cloud_adapter`, 로그인한 세션의 토큰). 화면은 목표 개요 아래 "보고서 메일" 구역이다(`GoalSettings`).
+
+| hub 주소 | 서버 | 비고 |
+| --- | --- | --- |
+| `GET /api/mail/subscription` | `GET /mail/subscription` | 구독의 서버 목표 id를 **이 PC의 목표 id·이름**으로 바꿔 준다(이 PC에 없는 목표면 둘 다 null). 서버 id는 화면에 나가지 않는다 |
+| `PUT /api/mail/subscription` | `PUT /mail/subscription` | `goal_id`는 이 PC의 목표. 서버와 연결되지 않은 목표는 409 `goal_not_synced`. 성공하면 **그 목표의** 옛 일정을 지운다(실패해도 서버 저장은 성공으로 답한다) |
+| `POST /api/mail/subscription/status` | `PATCH /mail/subscription` | 켜고 끄기 |
+| `DELETE /api/mail/subscription?email=&session=` | `DELETE /mail/subscription` | 그만 받기. 구독을 읽었을 때의 로그인(GET이 돌려준 `email`·`session`)이 지금 로그인과 다르면 거절한다 |
+| `POST /api/mail/test` | `POST /mail/test` | 시험 메일 |
+
+- 서버가 받지 않은 요청은 서버의 상태·코드를 그대로 전한다(`subscription_exists`, `daily_full`, `mail_suppressed`, `goal_ended` …). 로그인 전이면 409
+  `invalid_request`(동기화와 같다).
+- 화면: 구독이 없으면 "보고서 받기", 이 목표의 구독이면 일정·상태와 수정·끄기/켜기·그만 받기·시험 메일, 다른 목표의 구독이면 "이 목표로 받기"(옮기기),
+  끝났으면 이유와 "다시 신청". 신청 중 `subscription_exists`가 오면(다른 PC에서 그새 신청) "옮길까요?"를 묻고 `replace`로 다시 보낸다.
+- **확인한 로그인**: 메일 구독의 모든 쓰기(신청·수정·옮기기·켜고 끄기·그만 받기)는 화면이 구독을 읽었을 때의 `email`·`session`(GET이 돌려준다)을 함께
+  보내고, 지금 로그인과 다르면 hub가 서버를 부르지 않고 거절한다 — 폼을 연 사이 다른 계정으로 바뀌었으면 그 계정의 구독을 만들거나 바꾸거나 되살리거나
+  지우지 않는다(기기 삭제·계정 삭제와 같은 규칙). 이 둘은 서버로 보내지 않는다. 시험 메일은 결과가 가벼워 확인하지 않는다.
+- 새로 신청하면 이 PC의 시간대(`Intl…resolvedOptions().timeZone`)를 보낸다. **고칠 때는 지금 구독의 시간대를 그대로 둔다** — 다른 시간대의 PC에서 저장해도
+  보내는 시각·구간이 바뀌지 않게. 시간대가 이 PC와 다르면 폼이 알리고 "이 PC의 시간대로 바꾸기"를 고를 수 있다(기본은 바꾸지 않음). 매일 상한이 차면 폼의 "매일"을 꺼 둔다(이미 이 목표를 매일 받고 있으면 그대로).
+- 이 PC에 저장해 둔 옛 일정이 있으면 신청 폼의 처음 값으로 쓰고, 그 목표를 신청하면 그 목표의 일정만 지운다(다른 목표의 옛 일정은 나중에 그 목표를
+  신청할 때 쓴다) — 사용자가 확인하기 전에는 서버로 아무것도 보내지 않는다.
+- 서버 `API_VERSION` 3, 앱의 `REQUIRED_SERVER_API` 3 — **서버를 먼저 배포**한다(`docs/deploy.md`).

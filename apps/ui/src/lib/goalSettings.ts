@@ -11,7 +11,7 @@ export interface AlertLike {
 }
 
 export interface ScheduleLike {
-  enabled: boolean;
+  enabled?: boolean;
   frequency: string;
   weekday: number | null;
   day_of_month: number | null;

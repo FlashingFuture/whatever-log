@@ -6,6 +6,7 @@ packages/cloud/tests/test_isolation.py가 검사한다.
 """
 
 import hashlib
+import logging
 import threading
 import time
 import webbrowser
@@ -21,6 +22,7 @@ from hub.account_service import (
     Identity,
     LoginProblem,
     LogoutProblem,
+    MailProblem,
     ProviderInfo,
     SyncProblem,
 )
@@ -34,6 +36,11 @@ META_DELETION_UNCERTAIN = "deletion_uncertain"
 # 다른 기기의 기록은 에이전트가 5분마다 올리므로 1분 늦는 것은 눈에 띄지 않는다.
 TOTALS_CACHE_SECONDS = 60.0
 _TOTALS_CACHE_MAX = 32
+
+
+logger = logging.getLogger(__name__)
+
+_LOGIN_CHANGED = "로그인한 계정이 바뀌었어요. 보고서 메일을 다시 열어 확인해 주세요."
 
 
 def _now() -> float:
@@ -135,6 +142,112 @@ class _CloudBackend:
         except ValueError:
             return False
         return self._revoke_quietly(server_url, session.token)
+
+    # --- 보고서 메일 구독(docs/mail-design.md) ---
+
+    def _mail(self, goals_db: Path, action):
+        """메일 구독 호출: 서버가 받지 않은 요청(MailRefused)은 MailProblem으로, 나머지(로그인·연결·응답)는 동기화와 같은 SyncProblem으로."""
+        cloud = self._cloud
+
+        def run():
+            try:
+                return action()
+            except cloud.MailRefused as refused:
+                raise MailProblem(refused.status, refused.code, refused.message) from None
+
+        return self._guard(run, goals_db)
+
+    def mail_subscription(self, goals_db: Path) -> dict[str, Any]:
+        """구독과 매일 구독 가능 여부. 목표는 이 PC의 id·이름으로 바꿔 준다(서버 id는 내보내지 않는다)."""
+
+        def run():
+            api, email, key = self._server()
+            subscription, daily_available = api.get_mail_subscription()
+            with _open_goals(goals_db) as store:
+                view = None if subscription is None else _subscription_json(subscription, store)
+            # email·session은 화면이 되돌려 보내는 "확인한 로그인"이다(옮기기·그만 받기 — 그사이 계정이 바뀌면 거절한다).
+            return {"subscription": view, "daily_available": daily_available, "email": email, "session": key}
+
+        return self._mail(goals_db, run)
+
+    def put_mail_subscription(self, goals_db: Path, request: dict[str, Any]) -> dict[str, Any]:
+        """신청·변경. 이 PC의 목표가 서버와 연결돼 있어야 한다(아니면 goal_not_synced). 성공하면 이 PC의 옛 보고서 일정을 비운다 —
+        이제 일정의 원본은 서버다(docs/mail-design.md "로컬의 옛 일정")."""
+
+        def run():
+            api, email, key = self._server()
+            if not self._same_login(email, key, request["email"], request["session"]):
+                # 폼을 연 뒤 다른 계정으로 바뀌었으면 그 계정의 구독을 만들거나 바꾸거나 옮기지 않는다(시간대도 덮어쓰게 된다).
+                raise SyncProblem(_LOGIN_CHANGED)
+            with _open_goals(goals_db) as store:
+                goal = store.get(request["goal_id"])
+                link = next((item for item in store.sync_links() if item.goal_id == request["goal_id"]), None)
+            if goal is None:
+                raise MailProblem(404, "goal_not_found", "없는 목표예요.")
+            if link is None or link.remote_id is None or link.state != "sync":
+                raise MailProblem(
+                    409,
+                    "goal_not_synced",
+                    "이 목표는 아직 서버와 동기화되지 않았어요. 상단의 '목표 동기화'에서 이 목표를 서버에 올린 뒤 신청해 주세요.",
+                )
+            subscription, created, welcome = api.put_mail_subscription(
+                goal_id=link.remote_id,
+                frequency=request["frequency"],
+                weekday=request["weekday"],
+                day_of_month=request["day_of_month"],
+                send_time=request["send_time"],
+                timezone=request["timezone"],
+                replace=request["replace"],
+            )
+            # 서버에는 저장됐다 — 이 PC의 정리(그 목표의 옛 일정 지우기)가 실패해도 성공으로 답한다(다시 누르면 같은 값으로 저장될 뿐이다).
+            try:
+                with _open_goals(goals_db) as store:
+                    if store.report_schedule(request["goal_id"]) is not None:
+                        store.delete_report_schedule(request["goal_id"])
+            except Exception as error:  # noqa: BLE001 — 로컬 정리의 어떤 실패도 서버 저장의 성공을 뒤집지 않는다
+                logger.warning("옛 보고서 일정을 지우지 못했습니다: %s", type(error).__name__)
+            try:
+                with _open_goals(goals_db) as store:
+                    view = _subscription_json(subscription, store)
+            except Exception as error:  # noqa: BLE001
+                logger.warning("구독의 목표 이름을 읽지 못했습니다: %s", type(error).__name__)
+                view = _subscription_json(subscription, None)
+            return {"subscription": view, "created": created, "welcome": welcome}
+
+        return self._mail(goals_db, run)
+
+    def set_mail_status(self, goals_db: Path, request: dict[str, Any]) -> dict[str, Any]:
+        """켜고 끈다. 확인한 로그인과 지금 로그인이 다르면 거절한다(다른 계정이 꺼 둔 구독을 되살리지 않게)."""
+
+        def run():
+            api, email, key = self._server()
+            if not self._same_login(email, key, request["email"], request["session"]):
+                raise SyncProblem(_LOGIN_CHANGED)
+            subscription = api.set_mail_subscription_status(request["status"])
+            with _open_goals(goals_db) as store:
+                return {"subscription": _subscription_json(subscription, store)}
+
+        return self._mail(goals_db, run)
+
+    def delete_mail_subscription(self, goals_db: Path, confirmed_email: str | None, confirmed_session: str | None) -> bool:
+        """그만둔다. 구독을 본 로그인과 지금 로그인이 다르면 거절한다(계정 A의 화면에서 누른 해지가 B의 구독을 지우지 않게)."""
+
+        def run():
+            api, email, key = self._server()
+            if not self._same_login(email, key, confirmed_email, confirmed_session):
+                raise SyncProblem(_LOGIN_CHANGED)
+            return api.delete_mail_subscription()
+
+        return self._mail(goals_db, run)
+
+    def send_test_mail(self, goals_db: Path) -> dict[str, str]:
+        """시험 메일(로그인한 계정의 주소로만)."""
+
+        def run():
+            api, _, _ = self._server()
+            return api.send_test_mail()
+
+        return self._mail(goals_db, run)
 
     # --- 목표 동기화 확인 창(docs/sync-client.md) ---
 
@@ -448,6 +561,24 @@ class _CloudBackend:
                 store.set_meta(META_DELETION_UNCERTAIN, key)
         except Exception:
             pass
+
+
+def _subscription_json(subscription, store) -> dict[str, Any]:
+    """서버의 구독을 화면용으로: 서버 목표 id 대신 **이 PC의 목표 id·이름**(이 PC에 연결된 목표가 없으면 둘 다 null — 다른 PC에서 신청했다)."""
+    link = None if store is None else next((item for item in store.sync_links() if item.remote_id == subscription.goal_id), None)
+    goal = store.get(link.goal_id) if link is not None else None
+    return {
+        "goal_id": None if goal is None else goal.id,
+        "goal_name": None if goal is None else goal.name,
+        "frequency": subscription.frequency,
+        "weekday": subscription.weekday,
+        "day_of_month": subscription.day_of_month,
+        "send_time": subscription.send_time,
+        "timezone": subscription.timezone,
+        "status": subscription.status,
+        "ended_reason": subscription.ended_reason,
+        "updated_at": subscription.updated_at,
+    }
 
 
 def _open_goals(path: Path):

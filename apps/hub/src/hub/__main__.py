@@ -56,10 +56,12 @@ from hub.account_service import (
     AccountUnavailable,
     LoginInProgress,
     LogoutProblem,
+    MailProblem,
     SyncBusy,
     SyncProblem,
     UnknownProvider,
 )
+from hub.mail_service import status_request, subscription_request
 from hub.cloud_adapter import create_cloud_port
 from hub.external_links import LINK_FAILED, LINK_OPENED, open_link
 from hub.goals_service import (
@@ -403,6 +405,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._apply_sync()
         elif path == "/api/account/delete":
             self._delete_account()
+        elif path == "/api/mail/subscription/status":
+            self._set_mail_status()
+        elif path == "/api/mail/test":
+            self._send_test_mail()
         else:
             self._send_json(404, api_error.error_body(api_error.NOT_FOUND, "not found"))
 
@@ -419,6 +425,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._write_alert(int(goal_id), int(alert_id))
         elif _SCHEDULE_PATH.fullmatch(path):
             self._write_schedule(int(_SCHEDULE_PATH.fullmatch(path).group(1)))
+        elif path == "/api/mail/subscription":
+            self._put_mail_subscription()
         else:
             self._send_json(404, api_error.error_body(api_error.NOT_FOUND, "not found"))
 
@@ -439,6 +447,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._cancel_login()
         elif _DEVICE_PATH.fullmatch(path):
             self._delete_device(_DEVICE_PATH.fullmatch(path).group(1), urlparse(self.path).query)
+        elif path == "/api/mail/subscription":
+            self._delete_mail_subscription(urlparse(self.path).query)
         else:
             self._send_json(404, api_error.error_body(api_error.NOT_FOUND, "not found"))
 
@@ -468,6 +478,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._get_sync_status()
         elif parsed.path == "/api/devices":
             self._get_devices()
+        elif parsed.path == "/api/mail/subscription":
+            self._get_mail_subscription()
         elif parsed.path == "/api/goals/progress":
             self._get_goal_progress(parsed.query)
         elif parsed.path == "/api/goals/all-devices":
@@ -848,6 +860,84 @@ class _Handler(BaseHTTPRequestHandler):
             200,
             {**payload, "sync_enabled": self._sync_enabled(), "deletion_uncertain": False, "state_known": bool(payload), **result},
         )
+
+    # --- 보고서 메일 구독(서버가 보낸다 — docs/mail-design.md) ---
+
+    def _mail_request(self, call, *, write: bool, parse=None) -> None:
+        """메일 구독 요청의 공통 처리: 쓰기는 출처 확인·본문 읽기, 실패는 종류별 응답(서버가 받지 않음 → 그 상태·코드, 로그인·연결 → 동기화와 같게)."""
+        argument = None
+        if write:
+            try:
+                check_write_origin(self.headers.get("Origin"), self.allowed_origins)
+                if parse is not None:
+                    argument = parse(read_json_object(self.headers, self.rfile))
+            except BadRequest as error:
+                self._send_bad_request(error)
+                return
+        try:
+            result = call(argument)
+        except AccountUnavailable:
+            self._send_account_unavailable()
+            return
+        except MailProblem as problem:
+            self._send_json(problem.status, {"error": {"code": problem.code, "message": problem.message}})
+            return
+        except SyncProblem as problem:
+            self._send_sync_problem(problem)
+            return
+        if result is None:
+            self._send_empty(204)
+            return
+        self._send_json(200, result)
+
+    def _get_mail_subscription(self) -> None:
+        """GET /api/mail/subscription — 보고서 메일 구독(목표는 이 PC의 id·이름)과 매일 구독 가능 여부."""
+        self._mail_request(lambda _: self.account.mail_subscription(self.goals_db_path), write=False)
+
+    def _put_mail_subscription(self) -> None:
+        """PUT /api/mail/subscription — 신청·변경. 다른 목표를 구독 중이면 409 subscription_exists(replace로 옮긴다)."""
+        self._mail_request(
+            lambda request: self.account.put_mail_subscription(self.goals_db_path, request),
+            write=True,
+            parse=subscription_request,
+        )
+
+    def _set_mail_status(self) -> None:
+        """POST /api/mail/subscription/status {"status": "active" | "paused"} — 켜고 끈다."""
+        self._mail_request(
+            lambda request: self.account.set_mail_status(self.goals_db_path, request),
+            write=True,
+            parse=status_request,
+        )
+
+    def _delete_mail_subscription(self, query: str) -> None:
+        """DELETE /api/mail/subscription?email=…&session=… — 그만둔다(신청한 것이 없어도 204). email·session은 구독을 읽었을 때의 로그인이고,
+        지금 로그인과 다르면 거절한다(기기 삭제와 같은 규칙)."""
+        values = parse_qs(query, keep_blank_values=True)
+        emails, sessions = values.get("email", []), values.get("session", [])
+        if (
+            set(values) - {"email", "session"}
+            or len(emails) != 1
+            or len(sessions) != 1
+            or len(emails[0]) > MAX_EMAIL_LENGTH
+            or not 0 < len(sessions[0]) <= MAX_SESSION_KEY_LENGTH
+        ):
+            self._send_json(
+                400,
+                api_error.error_body(api_error.INVALID_REQUEST, "email과 session을 하나씩만 쿼리로 보내야 합니다."),
+            )
+            return
+        confirmed = emails[0] or None
+
+        def run(_):
+            self.account.delete_mail_subscription(self.goals_db_path, confirmed, sessions[0])
+            return None
+
+        self._mail_request(run, write=True)
+
+    def _send_test_mail(self) -> None:
+        """POST /api/mail/test — 로그인한 계정의 주소로 시험 메일을 보낸다."""
+        self._mail_request(lambda _: self.account.send_test_mail(self.goals_db_path), write=True)
 
     def _send_account_unavailable(self) -> None:
         """계정 기능을 쓸 수 없는 환경(cloud 없음)의 요청에 503."""
