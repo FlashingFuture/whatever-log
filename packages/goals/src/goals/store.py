@@ -738,6 +738,11 @@ class GoalStore:
         assert saved is not None
         return saved
 
+    def clear_report_schedules(self) -> int:
+        """이 PC의 보고서 일정을 모두 지운다(서버 구독으로 옮긴 뒤 — docs/mail-design.md). 지운 수를 돌려준다."""
+        with self._write():
+            return self._conn.execute("DELETE FROM goal_report_schedules").rowcount
+
     def delete_report_schedule(self, goal_id: int) -> None:
         """목표의 보고서 일정을 지운다. 일정이 없으면 GoalNotFoundError."""
         with self._write():

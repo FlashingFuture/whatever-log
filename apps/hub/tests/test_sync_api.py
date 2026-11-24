@@ -8,7 +8,7 @@ import keyring
 import keyring.backend
 import keyring.errors
 import pytest
-from cloud import GoalConflict, ProgressResult, RemoteGoal, ServerUnreachable
+from cloud import GoalConflict, MailRefused, MailSubscription, ProgressResult, RemoteGoal, ServerUnreachable
 from goals import META_SYNC_ENABLED, GoalStore
 
 from hub.__main__ import _Handler
@@ -94,6 +94,51 @@ class FakeApi:
     def put_progress(self, device_id, entries):
         return ProgressResult(0, ())
 
+    # --- 보고서 메일 구독 ---
+    mail: MailSubscription | None = None
+    mail_daily = True
+    mail_refuse: MailRefused | None = None
+    mail_puts: list[dict] = []
+    test_mails = 0
+
+    def _mail_fail(self):
+        if FakeApi.fail:
+            raise FakeApi.fail
+        if FakeApi.mail_refuse:
+            raise FakeApi.mail_refuse
+
+    def get_mail_subscription(self):
+        self._mail_fail()
+        return FakeApi.mail, FakeApi.mail_daily
+
+    def put_mail_subscription(self, **fields):
+        self._mail_fail()
+        FakeApi.mail_puts.append(fields)
+        created = FakeApi.mail is None
+        FakeApi.mail = MailSubscription(
+            fields["goal_id"], fields["frequency"], fields["weekday"], fields["day_of_month"],
+            fields["send_time"], fields["timezone"], "active", None, "t", "t",
+        )
+        return FakeApi.mail, created, "sent"
+
+    def set_mail_subscription_status(self, status):
+        self._mail_fail()
+        old = FakeApi.mail
+        FakeApi.mail = MailSubscription(
+            old.goal_id, old.frequency, old.weekday, old.day_of_month, old.send_time, old.timezone, status, None, "t", "t"
+        )
+        return FakeApi.mail
+
+    def delete_mail_subscription(self):
+        self._mail_fail()
+        existed, FakeApi.mail = FakeApi.mail is not None, None
+        return existed
+
+    def send_test_mail(self):
+        self._mail_fail()
+        FakeApi.test_mails += 1
+        return {"to": "a***@example.com", "mode": "domain"}
+
     def remove_progress(self, device_id, keys):
         return 0
 
@@ -118,6 +163,7 @@ def sync_server(tmp_path, monkeypatch):
     FakeApi.goals, FakeApi.fail, FakeApi.created, FakeApi.tokens, FakeApi.calls = {}, None, [], [], []
     FakeApi.devices, FakeApi.deleted_devices, FakeApi.account_deleted = [], [], False
     FakeApi.days, FakeApi.progress_requests = [], []
+    FakeApi.mail, FakeApi.mail_daily, FakeApi.mail_refuse, FakeApi.mail_puts, FakeApi.test_mails = None, True, None, [], 0
     monkeypatch.setattr(cloud, "ServerApi", FakeApi)
 
     goals_db = tmp_path / "goals.db"
@@ -1465,3 +1511,118 @@ def test_different_ranges_do_not_wait_for_each_other(sync_server, monkeypatch) -
     slow.join()
 
     assert waited < 0.8
+
+
+
+# --- 보고서 메일 구독(hub가 서버에 중개한다) ---
+
+MAIL_REMOTE = "00000000-0000-4000-8000-0000000000aa"
+MAIL_SCHEDULE = {"frequency": "weekly", "weekday": 0, "day_of_month": None, "send_time": "09:00", "timezone": "Asia/Seoul"}
+
+
+def _mail_goal(goals_db, name="공부", remote=MAIL_REMOTE):
+    goal = _local_goal(goals_db, name)
+    with GoalStore(goals_db) as store:
+        store.link_remote(goal.id, remote, 1)
+    return goal
+
+
+def test_the_subscription_is_shown_with_this_pcs_goal_not_the_server_id(sync_server) -> None:
+    port, goals_db, _ = sync_server
+    goal = _mail_goal(goals_db)
+    FakeApi.mail = MailSubscription(MAIL_REMOTE, "weekly", 0, None, "09:00", "Asia/Seoul", "active", None, "t", "t")
+
+    status, body = call(port, "GET", "/api/mail/subscription")
+
+    assert status == 200
+    assert body["subscription"]["goal_id"] == goal.id and body["subscription"]["goal_name"] == "공부"
+    assert MAIL_REMOTE not in json.dumps(body)  # 서버 목표 id는 화면에 나가지 않는다
+    assert body["daily_available"] is True
+
+
+def test_a_subscription_for_a_goal_this_pc_does_not_have_shows_no_goal(sync_server) -> None:
+    port, _, _ = sync_server
+    FakeApi.mail = MailSubscription(MAIL_REMOTE, "daily", None, None, "09:00", "UTC", "paused", None, "t", "t")
+
+    _, body = call(port, "GET", "/api/mail/subscription")
+
+    assert (body["subscription"]["goal_id"], body["subscription"]["goal_name"]) == (None, None)
+
+
+def test_subscribing_sends_the_server_goal_and_clears_the_old_local_schedule(sync_server) -> None:
+    port, goals_db, _ = sync_server
+    goal = _mail_goal(goals_db)
+    with GoalStore(goals_db) as store:
+        store.set_report_schedule(goal.id, enabled=True, frequency="weekly", weekday=0, day_of_month=None, send_time="09:00")
+
+    status, body = call(port, "PUT", "/api/mail/subscription", {"goal_id": goal.id, **MAIL_SCHEDULE, "replace": False})
+
+    assert status == 200 and body["created"] is True and body["welcome"] == "sent"
+    assert body["subscription"]["goal_id"] == goal.id
+    assert FakeApi.mail_puts == [{"goal_id": MAIL_REMOTE, **MAIL_SCHEDULE, "replace": False}]
+    with GoalStore(goals_db) as store:
+        assert store.report_schedule(goal.id) is None  # 이제 일정의 원본은 서버다
+
+
+def test_a_goal_that_is_not_synced_cannot_be_subscribed(sync_server) -> None:
+    port, goals_db, _ = sync_server
+    goal = _local_goal(goals_db)
+
+    status, body = call(port, "PUT", "/api/mail/subscription", {"goal_id": goal.id, **MAIL_SCHEDULE})
+
+    assert status == 409 and body["error"]["code"] == "goal_not_synced"
+    assert FakeApi.mail_puts == []
+
+
+def test_the_servers_refusals_pass_through_with_their_code(sync_server) -> None:
+    port, goals_db, _ = sync_server
+    goal = _mail_goal(goals_db)
+    FakeApi.mail_refuse = MailRefused(409, "subscription_exists", "이미 다른 목표의 보고서를 받고 있어요.")
+
+    status, body = call(port, "PUT", "/api/mail/subscription", {"goal_id": goal.id, **MAIL_SCHEDULE})
+
+    assert status == 409
+    assert body["error"] == {"code": "subscription_exists", "message": "이미 다른 목표의 보고서를 받고 있어요."}
+
+
+def test_status_delete_and_test_mail_are_forwarded(sync_server) -> None:
+    port, goals_db, _ = sync_server
+    _mail_goal(goals_db)
+    FakeApi.mail = MailSubscription(MAIL_REMOTE, "weekly", 0, None, "09:00", "Asia/Seoul", "active", None, "t", "t")
+
+    status, body = call(port, "POST", "/api/mail/subscription/status", {"status": "paused"})
+    assert status == 200 and body["subscription"]["status"] == "paused"
+    assert call(port, "POST", "/api/mail/test", {})[1] == {"to": "a***@example.com", "mode": "domain"}
+    assert call(port, "DELETE", "/api/mail/subscription")[0] == 204
+    assert FakeApi.mail is None and FakeApi.test_mails == 1
+
+
+def test_mail_requests_need_sign_in_and_the_apps_origin(sync_server) -> None:
+    port, goals_db, backend = sync_server
+    goal = _mail_goal(goals_db)
+    assert call(port, "PUT", "/api/mail/subscription", {"goal_id": goal.id, **MAIL_SCHEDULE}, origin="http://evil.example")[0] == 403
+    assert call(port, "POST", "/api/mail/test", {}, origin=None)[0] == 403
+    backend.items.clear()  # 로그아웃
+    status, body = call(port, "GET", "/api/mail/subscription")
+    assert status == 409 and body["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"goal_id": "1", **MAIL_SCHEDULE},
+        {"goal_id": 1, **MAIL_SCHEDULE, "frequency": "hourly"},
+        {"goal_id": 1, **MAIL_SCHEDULE, "replace": "yes"},
+        {"goal_id": 1, **MAIL_SCHEDULE, "email": "x@example.com"},
+        {"goal_id": 1, **MAIL_SCHEDULE, "weekday": "월"},
+    ],
+)
+def test_a_malformed_subscription_request_is_refused_before_the_server(sync_server, body) -> None:
+    port, _, _ = sync_server
+    assert call(port, "PUT", "/api/mail/subscription", body)[0] == 400
+    assert FakeApi.mail_puts == []
+
+
+def test_a_bad_status_request_is_refused(sync_server) -> None:
+    port, _, _ = sync_server
+    assert call(port, "POST", "/api/mail/subscription/status", {"status": "ended"})[0] == 400

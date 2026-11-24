@@ -33,6 +33,13 @@ export {
 } from "./goals";
 export { iconUrl, siteIconUrl } from "./icons";
 export {
+  deleteMailSubscription,
+  fetchMailSubscription,
+  saveMailSubscription,
+  sendTestMail,
+  setMailSubscriptionStatus,
+} from "./mail";
+export {
   applySync,
   deleteAccount,
   deleteDevice,
@@ -57,6 +64,11 @@ export type {
   GoalTotals,
   LoginProvider,
   LogoutResponse,
+  MailScheduleFields,
+  MailSubscriptionInput,
+  MailSubscriptionSaved,
+  MailSubscriptionState,
+  MailSubscriptionView,
   ProcessSeries,
   ProcessTime,
   ProcessUsage,
@@ -72,6 +84,8 @@ export type {
   SyncPlan,
   SyncResult,
   SyncStatus,
+  TestMailResult,
   TopTarget,
+  WelcomeOutcome,
 } from "./types";
 export { fetchProcessUsage, fetchSiteUsage, fetchUsage } from "./usage";

@@ -57,7 +57,7 @@ class _Server:
                 self.end_headers()
                 self.wfile.write(raw)
 
-            do_GET = do_PUT = do_DELETE = do_POST = _handle
+            do_GET = do_PUT = do_DELETE = do_POST = do_PATCH = _handle
 
             def log_message(self, format: str, *args: object) -> None:  # noqa: A002
                 pass
@@ -321,3 +321,84 @@ def test_delete_account_failures_are_raised_not_swallowed(serve) -> None:
         ServerApi(serve(500, {"error": {"code": "internal_error", "message": "x"}}).url, TOKEN).delete_account()
     with pytest.raises(ServerUnreachable):
         ServerApi("http://127.0.0.1:9", TOKEN).delete_account()
+
+
+# --- 보고서 메일 구독 ---
+
+SUBSCRIPTION = {
+    "goal_id": "00000000-0000-4000-8000-000000000001",
+    "frequency": "weekly",
+    "weekday": 0,
+    "day_of_month": None,
+    "send_time": "09:00",
+    "timezone": "Asia/Seoul",
+    "status": "active",
+    "ended_reason": None,
+    "created_at": "t",
+    "updated_at": "t",
+}
+
+
+def test_the_mail_subscription_is_read_and_sent_in_the_wire_format(serve) -> None:
+    from cloud.api import MailSubscription
+
+    server = serve(200, {"subscription": SUBSCRIPTION, "daily_available": False})
+    subscription, daily = ServerApi(server.url, TOKEN).get_mail_subscription()
+    assert isinstance(subscription, MailSubscription) and subscription.weekday == 0 and daily is False
+
+    put = serve(201, {"subscription": SUBSCRIPTION, "created": True, "welcome": "sent"})
+    saved, created, welcome = ServerApi(put.url, TOKEN).put_mail_subscription(
+        goal_id=SUBSCRIPTION["goal_id"], frequency="weekly", weekday=0, day_of_month=None,
+        send_time="09:00", timezone="Asia/Seoul", replace=True,
+    )
+    (request,) = put.requests
+    assert (request["method"], request["path"]) == ("PUT", "/mail/subscription")
+    assert request["body"] == {
+        "goal_id": SUBSCRIPTION["goal_id"], "frequency": "weekly", "weekday": 0, "day_of_month": None,
+        "send_time": "09:00", "timezone": "Asia/Seoul", "replace": True,
+    }
+    assert (saved.status, created, welcome) == ("active", True, "sent")
+
+
+def test_a_refused_subscription_carries_the_servers_code_and_current_subscription(serve) -> None:
+    from cloud.api import MailRefused
+
+    server = serve(409, {"error": {"code": "subscription_exists", "message": "옮길까요?"}, "current": SUBSCRIPTION})
+    with pytest.raises(MailRefused) as refused:
+        ServerApi(server.url, TOKEN).put_mail_subscription(
+            goal_id="g", frequency="daily", weekday=None, day_of_month=None, send_time="09:00", timezone="UTC", replace=False
+        )
+    assert (refused.value.status, refused.value.code) == (409, "subscription_exists")
+    assert refused.value.current is not None and refused.value.current.goal_id == SUBSCRIPTION["goal_id"]
+
+    limited = serve(429, {"error": {"code": "daily_limit", "message": "내일 다시"}})
+    with pytest.raises(MailRefused) as refused:
+        ServerApi(limited.url, TOKEN).send_test_mail()
+    assert (refused.value.status, refused.value.code, refused.value.current) == (429, "daily_limit", None)
+
+
+def test_mail_status_delete_and_test_mail(serve) -> None:
+    status = serve(200, {"subscription": {**SUBSCRIPTION, "status": "paused"}})
+    assert ServerApi(status.url, TOKEN).set_mail_subscription_status("paused").status == "paused"
+    assert status.requests[0]["path"] == "/mail/subscription" and status.requests[0]["method"] == "PATCH"
+
+    assert ServerApi(serve(204).url, TOKEN).delete_mail_subscription() is True
+    assert ServerApi(serve(404, {"error": {"code": "not_found", "message": "x"}}).url, TOKEN).delete_mail_subscription() is False
+
+    sent = serve(200, {"sent": True, "to": "a***@example.com", "mode": "domain"})
+    assert ServerApi(sent.url, TOKEN).send_test_mail() == {"to": "a***@example.com", "mode": "domain"}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"subscription": {**SUBSCRIPTION, "frequency": "hourly"}, "daily_available": True},
+        {"subscription": {**SUBSCRIPTION, "weekday": "0"}, "daily_available": True},
+        {"subscription": None, "daily_available": "yes"},
+        {"subscription": {k: v for k, v in SUBSCRIPTION.items() if k != "timezone"}, "daily_available": True},
+    ],
+)
+def test_a_mail_response_with_the_wrong_shape_is_rejected(serve, body) -> None:
+    with pytest.raises(ServerError) as raised:
+        ServerApi(serve(200, body).url, TOKEN).get_mail_subscription()
+    assert raised.value.code == "bad_response"

@@ -308,6 +308,66 @@ export interface ReportSchedule {
   updated_at: string;
 }
 
+/** 보고서 메일 구독의 주기 칸(신청 폼과 같은 모양). weekday는 매주일 때만(월=0 … 일=6), day_of_month는 매월일 때만(1~28). */
+export interface MailScheduleFields {
+  frequency: "daily" | "weekly" | "monthly";
+  weekday: number | null;
+  day_of_month: number | null;
+  /** `HH:MM`(시간대 기준) */
+  send_time: string;
+}
+
+/** 서버의 보고서 메일 구독(사용자당 하나). goal_id·goal_name은 이 PC의 목표(이 PC에 없는 목표면 null — 다른 PC에서 신청했다). */
+export interface MailSubscriptionView extends MailScheduleFields {
+  goal_id: number | null;
+  goal_name: string | null;
+  timezone: string;
+  status: "active" | "paused" | "ended";
+  ended_reason:
+    | "goal_deleted"
+    | "goal_ended"
+    | "unsubscribed"
+    | "suppressed"
+    | null;
+  updated_at: string;
+}
+
+export interface MailSubscriptionState {
+  subscription: MailSubscriptionView | null;
+  /** 매일 보고서를 더 신청할 수 있는가(무료 요금제의 매일 구독자 상한). */
+  daily_available: boolean;
+  email: string | null;
+}
+
+export interface MailSubscriptionInput extends MailScheduleFields {
+  /** 이 PC의 목표 id. */
+  goal_id: number;
+  timezone: string;
+  /** 다른 목표를 구독 중이면 이 목표로 옮긴다. */
+  replace: boolean;
+}
+
+/** 첫 신청 확인 메일의 결과(서버). */
+export type WelcomeOutcome =
+  | "sent"
+  | "already"
+  | "suppressed"
+  | "not_configured"
+  | "limited"
+  | "failed";
+
+export interface MailSubscriptionSaved {
+  subscription: MailSubscriptionView;
+  created: boolean;
+  welcome: WelcomeOutcome | string;
+}
+
+export interface TestMailResult {
+  /** 가린 주소(예: p***@example.com). */
+  to: string;
+  mode: string;
+}
+
 export interface ReportScheduleInput {
   enabled: boolean;
   frequency: string;

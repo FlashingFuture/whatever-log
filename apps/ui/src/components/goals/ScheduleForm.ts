@@ -1,20 +1,20 @@
-import type { ReportSchedule, ReportScheduleInput } from "../../api";
+import type { MailScheduleFields } from "../../api";
 import { WEEKDAY_LABELS } from "../../lib/goalText";
+import type { ScheduleFieldsLike } from "../../lib/mailSubscription";
 import { createFormKit, createSelect } from "./formKit";
 import styles from "./GoalForm.module.css";
 
 export interface ScheduleFormProps {
-  /** 지금 저장된 일정(없으면 null — 새로 만든다). */
-  schedule: ReportSchedule | null;
-  onSubmit: (input: ReportScheduleInput) => Promise<void>;
+  /** 처음 값(이 목표의 구독, 없으면 이 PC에 저장해 둔 옛 일정, 없으면 기본 — lib/mailSubscription의 initialFields). */
+  initial: ScheduleFieldsLike;
+  /** 매일을 고를 수 있는가(무료 요금제의 매일 구독자 상한). 못 고르면 매일을 꺼 두고 이유를 보인다. */
+  allowDaily: boolean;
+  /** 보낼 시각의 시간대(이 PC의 시간대 — 보이기만 한다). */
+  timezone: string;
+  submitLabel: string;
+  onSubmit: (fields: MailScheduleFields) => Promise<void>;
   onCancel: () => void;
 }
-
-const FREQUENCIES = [
-  { value: "daily", label: "매일" },
-  { value: "weekly", label: "매주" },
-  { value: "monthly", label: "매달" },
-] as const;
 
 /** 매달 일자는 28일까지(서버 규칙 — 29~31일은 없는 달이 있다). */
 const DAYS_OF_MONTH = Array.from({ length: 28 }, (_, index) => ({
@@ -23,41 +23,49 @@ const DAYS_OF_MONTH = Array.from({ length: 28 }, (_, index) => ({
 }));
 
 /**
- * 보고서 메일 일정 폼: 켜짐, 주기(매일·매주·매달), 요일(매주일 때) 또는 일자(매달일 때), 보낼 시각. 고른 주기에 맞지 않는 칸은 숨기고 보내지도 않는다.
- * 값의 규칙은 서버가 검증한다. 여기서 저장하는 것은 **설정**이고, 실제 메일 발송은 서버가 연결되면 붙는다.
+ * 보고서 메일 일정 폼: 주기(매일·매주·매달), 요일(매주일 때) 또는 일자(매달일 때), 보낼 시각. 고른 주기에 맞지 않는 칸은 숨기고 보내지도 않는다.
+ * 켜고 끄기는 폼 밖(구역의 버튼)에서 한다. 값의 규칙은 서버가 검증한다.
  */
 export function createScheduleForm(props: ScheduleFormProps): HTMLElement {
   const kit = createFormKit("schedule-form");
-  const current = props.schedule;
-
-  const enabled = document.createElement("input");
-  enabled.type = "checkbox";
-  enabled.checked = current?.enabled ?? true;
-  const enabledLabel = document.createElement("label");
-  enabledLabel.append(enabled, " 이 일정으로 보고서 보내기");
+  const initial = props.initial;
 
   const frequency = createSelect(
-    FREQUENCIES,
-    current?.frequency ?? "weekly",
+    [
+      {
+        value: "daily",
+        label: props.allowDaily ? "매일" : "매일 (지금은 신청할 수 없어요)",
+      },
+      { value: "weekly", label: "매주" },
+      { value: "monthly", label: "매달" },
+    ],
+    !props.allowDaily && initial.frequency === "daily"
+      ? "weekly"
+      : initial.frequency,
     styles.input,
   );
+  const daily = frequency.querySelector<HTMLOptionElement>(
+    'option[value="daily"]',
+  );
+  if (daily && !props.allowDaily) daily.disabled = true;
+
   const weekday = createSelect(
     WEEKDAY_LABELS.map((label, index) => ({
       value: String(index),
       label: `${label}요일`,
     })),
-    String(current?.weekday ?? 0),
+    String(initial.weekday ?? 0),
     styles.input,
   );
   const dayOfMonth = createSelect(
     DAYS_OF_MONTH,
-    String(current?.day_of_month ?? 1),
+    String(initial.day_of_month ?? 1),
     styles.input,
   );
   const sendTime = document.createElement("input");
   sendTime.type = "time";
   sendTime.className = styles.input;
-  sendTime.value = current?.send_time ?? "09:00";
+  sendTime.value = initial.send_time;
 
   const weekdayField = kit.field("weekday", "요일", weekday);
   const dayField = kit.field("day_of_month", "일자", dayOfMonth);
@@ -68,24 +76,27 @@ export function createScheduleForm(props: ScheduleFormProps): HTMLElement {
   frequency.addEventListener("change", syncVisibleFields);
   syncVisibleFields();
 
+  const zone = document.createElement("p");
+  zone.className = styles.hint;
+  zone.textContent = `보낼 시각은 이 PC의 시간대(${props.timezone}) 기준이에요. 매일은 전날, 매주는 지난주(월~일), 매달은 지난달의 달성도를 보내요.`;
+
   kit.form.append(
-    kit.field("enabled", "켜짐", enabledLabel),
     kit.field("frequency", "주기", frequency),
     weekdayField,
     dayField,
     kit.field("send_time", "보낼 시각", sendTime),
-    kit.actions("저장", props.onCancel),
+    zone,
+    kit.actions(props.submitLabel, props.onCancel),
   );
 
   kit.form.addEventListener("submit", (event) => {
     event.preventDefault();
+    const chosen = frequency.value as MailScheduleFields["frequency"];
     kit.submit(() =>
       props.onSubmit({
-        enabled: enabled.checked,
-        frequency: frequency.value,
-        weekday: frequency.value === "weekly" ? Number(weekday.value) : null,
-        day_of_month:
-          frequency.value === "monthly" ? Number(dayOfMonth.value) : null,
+        frequency: chosen,
+        weekday: chosen === "weekly" ? Number(weekday.value) : null,
+        day_of_month: chosen === "monthly" ? Number(dayOfMonth.value) : null,
         send_time: sendTime.value,
       }),
     );

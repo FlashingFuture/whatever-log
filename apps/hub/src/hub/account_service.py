@@ -65,6 +65,18 @@ class SyncProblem(Exception):
         self.uncertain = uncertain
 
 
+class MailProblem(Exception):
+    """서버가 메일 구독 요청을 받지 않았다. status·code는 서버의 것(subscription_exists·daily_full·mail_suppressed·goal_ended …)이고
+    hub가 정한 것(goal_not_synced)도 있다. message는 사용자에게 그대로 보여 줄 수 있는 문장이다."""
+
+    def __init__(self, status: int, code: str, message: str) -> None:
+        """상태·오류 코드·사용자용 메시지를 담는다."""
+        super().__init__(message)
+        self.status = status
+        self.code = code
+        self.message = message
+
+
 class SyncBusy(Exception):
     """이미 다른 동기화 적용이 진행 중이다."""
 
@@ -138,6 +150,26 @@ class CloudPort(Protocol):
     def delete_account(self, goals_db: Path, email: str | None, session: str | None) -> dict[str, Any]:
         """서버의 계정과 데이터를 지우고, 성공한 뒤에만 이 PC의 로그인·동기화 연결을 정리한다. email·session(확인한 로그인)이 지금
         로그인과 다르면 아무것도 하지 않고 SyncProblem. 서버에서 지우지 못했다면 이 PC는 건드리지 않는다."""
+        ...
+
+    def mail_subscription(self, goals_db: Path) -> dict[str, Any]:
+        """보고서 메일 구독(없으면 null)과 매일 구독 가능 여부. 구독의 목표는 이 PC의 목표 id·이름으로 바꿔 준다. 로그인·서버 문제는 SyncProblem."""
+        ...
+
+    def put_mail_subscription(self, goals_db: Path, request: dict[str, Any]) -> dict[str, Any]:
+        """신청·변경(request의 goal_id는 이 PC의 목표 id). 서버가 받지 않으면 MailProblem. 성공하면 이 PC의 옛 보고서 일정을 비운다."""
+        ...
+
+    def set_mail_status(self, goals_db: Path, status: str) -> dict[str, Any]:
+        """켜고 끈다(active·paused). 서버가 받지 않으면 MailProblem."""
+        ...
+
+    def delete_mail_subscription(self, goals_db: Path) -> bool:
+        """그만둔다. 신청한 것이 없었으면 False."""
+        ...
+
+    def send_test_mail(self, goals_db: Path) -> dict[str, str]:
+        """로그인한 계정의 주소로 시험 메일을 보낸다. 서버가 받지 않으면(한도 등) MailProblem."""
         ...
 
 
@@ -283,6 +315,28 @@ class AccountService:
     def goal_totals(self, goals_db: Path, start_day: str, end_day: str) -> dict[str, Any]:
         """목표별 모든 기기의 합계. 계정 기능이 없으면 AccountUnavailable(호출부가 "이 PC의 값만"으로 처리한다)."""
         return self._get_port().goal_totals(goals_db, start_day, end_day)
+
+    # --- 보고서 메일 구독(서버가 보낸다 — docs/mail-design.md) ---
+
+    def mail_subscription(self, goals_db: Path) -> dict[str, Any]:
+        """구독 조회. 계정 기능이 없으면 AccountUnavailable."""
+        return self._get_port().mail_subscription(goals_db)
+
+    def put_mail_subscription(self, goals_db: Path, request: dict[str, Any]) -> dict[str, Any]:
+        """신청·변경."""
+        return self._get_port().put_mail_subscription(goals_db, request)
+
+    def set_mail_status(self, goals_db: Path, status: str) -> dict[str, Any]:
+        """켜고 끄기."""
+        return self._get_port().set_mail_status(goals_db, status)
+
+    def delete_mail_subscription(self, goals_db: Path) -> bool:
+        """그만두기."""
+        return self._get_port().delete_mail_subscription(goals_db)
+
+    def send_test_mail(self, goals_db: Path) -> dict[str, str]:
+        """시험 메일."""
+        return self._get_port().send_test_mail(goals_db)
 
     def list_devices(self, goals_db: Path, sync_db: Path) -> dict[str, Any]:
         """기기 목록(서버). 계정 기능이 없으면 AccountUnavailable."""

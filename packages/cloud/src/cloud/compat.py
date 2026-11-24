@@ -7,4 +7,4 @@
 새 앱이 서버의 새 칸·새 주소에 기대게 되면 서버의 `API_VERSION`을 올리고, 이 값도 같이 올린다.
 """
 
-REQUIRED_SERVER_API = 2
+REQUIRED_SERVER_API = 3
