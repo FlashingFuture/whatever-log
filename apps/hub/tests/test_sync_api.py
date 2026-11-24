@@ -1593,7 +1593,9 @@ def test_status_delete_and_test_mail_are_forwarded(sync_server) -> None:
     status, body = call(port, "POST", "/api/mail/subscription/status", {"status": "paused"})
     assert status == 200 and body["subscription"]["status"] == "paused"
     assert call(port, "POST", "/api/mail/test", {})[1] == {"to": "a***@example.com", "mode": "domain"}
-    assert call(port, "DELETE", "/api/mail/subscription")[0] == 204
+    login = call(port, "GET", "/api/mail/subscription")[1]
+    query = f"?email={login['email']}&session={login['session']}"
+    assert call(port, "DELETE", f"/api/mail/subscription{query}")[0] == 204
     assert FakeApi.mail is None and FakeApi.test_mails == 1
 
 
@@ -1613,7 +1615,7 @@ def test_mail_requests_need_sign_in_and_the_apps_origin(sync_server) -> None:
         {"goal_id": "1", **MAIL_SCHEDULE},
         {"goal_id": 1, **MAIL_SCHEDULE, "frequency": "hourly"},
         {"goal_id": 1, **MAIL_SCHEDULE, "replace": "yes"},
-        {"goal_id": 1, **MAIL_SCHEDULE, "email": "x@example.com"},
+        {"goal_id": 1, **MAIL_SCHEDULE, "to": "x@example.com"},  # 받을 주소는 서버가 아는 계정 주소뿐이다
         {"goal_id": 1, **MAIL_SCHEDULE, "weekday": "월"},
     ],
 )
@@ -1626,3 +1628,33 @@ def test_a_malformed_subscription_request_is_refused_before_the_server(sync_serv
 def test_a_bad_status_request_is_refused(sync_server) -> None:
     port, _, _ = sync_server
     assert call(port, "POST", "/api/mail/subscription/status", {"status": "ended"})[0] == 400
+
+
+
+def test_stopping_needs_the_login_that_saw_the_subscription(sync_server) -> None:
+    """확인 창을 연 뒤 다른 계정으로 바뀌었으면 그 계정의 구독을 지우지 않는다(기기 삭제와 같은 규칙)."""
+    port, goals_db, _ = sync_server
+    _mail_goal(goals_db)
+    FakeApi.mail = MailSubscription(MAIL_REMOTE, "weekly", 0, None, "09:00", "Asia/Seoul", "active", None, "t", "t")
+    login = call(port, "GET", "/api/mail/subscription")[1]
+    assert login["session"]
+
+    assert call(port, "DELETE", "/api/mail/subscription")[0] == 400  # 확인한 로그인 없이
+    status, _ = call(port, "DELETE", f"/api/mail/subscription?email={login['email']}&session=someone-else")
+    assert status == 503
+    assert FakeApi.mail is not None  # 지우지 않았다
+
+
+def test_moving_needs_the_login_that_saw_the_other_subscription(sync_server) -> None:
+    port, goals_db, _ = sync_server
+    goal = _mail_goal(goals_db)
+    login = call(port, "GET", "/api/mail/subscription")[1]
+    move = {"goal_id": goal.id, **MAIL_SCHEDULE, "replace": True}
+
+    assert call(port, "PUT", "/api/mail/subscription", move)[0] == 400  # 확인한 로그인 없이
+    assert call(port, "PUT", "/api/mail/subscription", {**move, "email": login["email"], "session": "someone-else"})[0] == 503
+    assert FakeApi.mail_puts == []
+
+    status, _ = call(port, "PUT", "/api/mail/subscription", {**move, "email": login["email"], "session": login["session"]})
+    assert status == 200 and FakeApi.mail_puts[0]["replace"] is True
+    assert "session" not in FakeApi.mail_puts[0] and "email" not in FakeApi.mail_puts[0]  # 서버로는 보내지 않는다

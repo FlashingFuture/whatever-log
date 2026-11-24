@@ -9,7 +9,8 @@ from common import api_error
 from hub.goals_service import BadRequest
 
 FREQUENCIES = ("daily", "weekly", "monthly")
-_FIELDS = {"goal_id", "frequency", "weekday", "day_of_month", "send_time", "timezone", "replace"}
+_FIELDS = {"goal_id", "frequency", "weekday", "day_of_month", "send_time", "timezone", "replace", "email", "session"}
+MAX_CONFIRM_LENGTH = 320
 
 
 def _int(value: Any) -> bool:
@@ -39,6 +40,14 @@ def subscription_request(body: dict[str, Any]) -> dict[str, Any]:
     replace = body.get("replace", False)
     if not isinstance(replace, bool):
         raise BadRequest(400, api_error.INVALID_REQUEST, "replace는 true 또는 false여야 합니다.")
+    # 옮기기(다른 목표의 구독을 끝낸다)는 화면이 확인한 로그인(구독을 읽었을 때의 email·session)을 함께 보낸다 — 그사이 계정이 바뀌었으면 hub가 거절한다.
+    email, session = body.get("email"), body.get("session")
+    if replace and (
+        not isinstance(session, str)
+        or not 0 < len(session) <= MAX_CONFIRM_LENGTH
+        or (email is not None and (not isinstance(email, str) or len(email) > MAX_CONFIRM_LENGTH))
+    ):
+        raise BadRequest(400, api_error.INVALID_REQUEST, "옮기려면 확인한 로그인(email·session)을 함께 보내야 합니다.")
     return {
         "goal_id": goal_id,
         "frequency": frequency,
@@ -47,6 +56,8 @@ def subscription_request(body: dict[str, Any]) -> dict[str, Any]:
         "send_time": send_time,
         "timezone": timezone,
         "replace": replace,
+        "email": email or None,
+        "session": session if replace else None,
     }
 
 

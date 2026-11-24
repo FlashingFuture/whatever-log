@@ -155,11 +155,12 @@ class _CloudBackend:
         """구독과 매일 구독 가능 여부. 목표는 이 PC의 id·이름으로 바꿔 준다(서버 id는 내보내지 않는다)."""
 
         def run():
-            api, email, _ = self._server()
+            api, email, key = self._server()
             subscription, daily_available = api.get_mail_subscription()
             with _open_goals(goals_db) as store:
                 view = None if subscription is None else _subscription_json(subscription, store)
-            return {"subscription": view, "daily_available": daily_available, "email": email}
+            # email·session은 화면이 되돌려 보내는 "확인한 로그인"이다(옮기기·그만 받기 — 그사이 계정이 바뀌면 거절한다).
+            return {"subscription": view, "daily_available": daily_available, "email": email, "session": key}
 
         return self._mail(goals_db, run)
 
@@ -168,7 +169,10 @@ class _CloudBackend:
         이제 일정의 원본은 서버다(docs/mail-design.md "로컬의 옛 일정")."""
 
         def run():
-            api, _, _ = self._server()
+            api, email, key = self._server()
+            if request["replace"] and not self._same_login(email, key, request["email"], request["session"]):
+                # 옮기기는 지금 구독(다른 목표)을 끝낸다 — 확인 창을 연 뒤 다른 계정으로 바뀌었으면 그 계정의 구독을 옮기지 않는다.
+                raise SyncProblem("로그인한 계정이 바뀌었어요. 보고서 메일을 다시 열어 확인해 주세요.")
             with _open_goals(goals_db) as store:
                 goal = store.get(request["goal_id"])
                 link = next((item for item in store.sync_links() if item.goal_id == request["goal_id"]), None)
@@ -207,11 +211,13 @@ class _CloudBackend:
 
         return self._mail(goals_db, run)
 
-    def delete_mail_subscription(self, goals_db: Path) -> bool:
-        """그만둔다."""
+    def delete_mail_subscription(self, goals_db: Path, confirmed_email: str | None, confirmed_session: str | None) -> bool:
+        """그만둔다. 구독을 본 로그인과 지금 로그인이 다르면 거절한다(계정 A의 화면에서 누른 해지가 B의 구독을 지우지 않게)."""
 
         def run():
-            api, _, _ = self._server()
+            api, email, key = self._server()
+            if not self._same_login(email, key, confirmed_email, confirmed_session):
+                raise SyncProblem("로그인한 계정이 바뀌었어요. 보고서 메일을 다시 열어 확인해 주세요.")
             return api.delete_mail_subscription()
 
         return self._mail(goals_db, run)

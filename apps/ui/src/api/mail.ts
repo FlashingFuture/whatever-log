@@ -42,11 +42,14 @@ export async function setMailSubscriptionStatus(
   return response.subscription;
 }
 
-/** 그만 받는다(신청한 것이 없어도 성공). */
-export async function deleteMailSubscription(): Promise<void> {
+/** 그만 받는다(신청한 것이 없어도 성공). email·session은 구독을 읽었을 때의 로그인이고, 지금 로그인과 다르면 hub가 거절한다. */
+export async function deleteMailSubscription(
+  email: string | null,
+  session: string | null,
+): Promise<void> {
   await sendJson(
     "DELETE",
-    "/api/mail/subscription",
+    `/api/mail/subscription?${new URLSearchParams({ email: email ?? "", session: session ?? "" })}`,
     undefined,
     SHORT_REQUEST_TIMEOUT_MS,
   );

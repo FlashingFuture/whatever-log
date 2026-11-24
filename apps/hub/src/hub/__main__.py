@@ -448,7 +448,7 @@ class _Handler(BaseHTTPRequestHandler):
         elif _DEVICE_PATH.fullmatch(path):
             self._delete_device(_DEVICE_PATH.fullmatch(path).group(1), urlparse(self.path).query)
         elif path == "/api/mail/subscription":
-            self._delete_mail_subscription()
+            self._delete_mail_subscription(urlparse(self.path).query)
         else:
             self._send_json(404, api_error.error_body(api_error.NOT_FOUND, "not found"))
 
@@ -910,11 +910,27 @@ class _Handler(BaseHTTPRequestHandler):
             parse=status_request,
         )
 
-    def _delete_mail_subscription(self) -> None:
-        """DELETE /api/mail/subscription — 그만둔다(신청한 것이 없어도 204)."""
+    def _delete_mail_subscription(self, query: str) -> None:
+        """DELETE /api/mail/subscription?email=…&session=… — 그만둔다(신청한 것이 없어도 204). email·session은 구독을 읽었을 때의 로그인이고,
+        지금 로그인과 다르면 거절한다(기기 삭제와 같은 규칙)."""
+        values = parse_qs(query, keep_blank_values=True)
+        emails, sessions = values.get("email", []), values.get("session", [])
+        if (
+            set(values) - {"email", "session"}
+            or len(emails) != 1
+            or len(sessions) != 1
+            or len(emails[0]) > MAX_EMAIL_LENGTH
+            or not 0 < len(sessions[0]) <= MAX_SESSION_KEY_LENGTH
+        ):
+            self._send_json(
+                400,
+                api_error.error_body(api_error.INVALID_REQUEST, "email과 session을 하나씩만 쿼리로 보내야 합니다."),
+            )
+            return
+        confirmed = emails[0] or None
 
         def run(_):
-            self.account.delete_mail_subscription(self.goals_db_path)
+            self.account.delete_mail_subscription(self.goals_db_path, confirmed, sessions[0])
             return None
 
         self._mail_request(run, write=True)

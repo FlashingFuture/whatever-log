@@ -304,7 +304,7 @@ export function createGoalSettings(goalId: number): GoalSettings {
             icon: "trash",
             label: "보고서 그만 받기",
             tone: "danger",
-            onClick: showStopMail,
+            onClick: () => showStopMail(mail.state),
           }),
         );
       }
@@ -414,15 +414,17 @@ export function createGoalSettings(goalId: number): GoalSettings {
         onSubmit: async (fields) => {
           const startedScene = scene;
           try {
-            await subscribe(fields, replace, startedScene);
+            await subscribe(fields, replace, state, startedScene);
           } catch (error) {
-            // 그사이 다른 목표를 신청했다(다른 PC 등) — 옮길지 묻는다.
+            // 그사이 다른 목표를 신청했다(다른 PC 등) — 옮길지 묻는다. 단, 이 신청 장면이 아직 그대로일 때만(취소하고 다른 폼을 열었으면 그 폼을 덮지 않는다).
             if (
               error instanceof ApiError &&
               error.code === "subscription_exists" &&
               !replace
             ) {
-              showMoveMail(fields);
+              if (scene === startedScene && !destroyed) {
+                showMoveMail(fields, state);
+              }
               return;
             }
             throw error;
@@ -435,6 +437,7 @@ export function createGoalSettings(goalId: number): GoalSettings {
   async function subscribe(
     fields: MailScheduleFields,
     replace: boolean,
+    state: MailSubscriptionState,
     startedScene: number,
   ): Promise<void> {
     const saved = await saveMailSubscription({
@@ -442,12 +445,17 @@ export function createGoalSettings(goalId: number): GoalSettings {
       goal_id: goalId,
       timezone: localZone(),
       replace,
+      // 옮기기는 이 화면을 그린 로그인을 함께 보낸다(그사이 계정이 바뀌었으면 hub가 거절한다)
+      ...(replace ? { email: state.email, session: state.session } : {}),
     });
     mailNotice = savedText(saved.created, saved.welcome);
     await done(startedScene);
   }
 
-  function showMoveMail(fields: MailScheduleFields): void {
+  function showMoveMail(
+    fields: MailScheduleFields,
+    state: MailSubscriptionState,
+  ): void {
     showConfirm({
       title: "보고서 옮기기",
       question: "다른 목표의 보고서를 받고 있어요. 이 목표로 옮길까요?",
@@ -461,20 +469,22 @@ export function createGoalSettings(goalId: number): GoalSettings {
           goal_id: goalId,
           timezone: localZone(),
           replace: true,
+          email: state.email,
+          session: state.session,
         });
         mailNotice = savedText(saved.created, saved.welcome);
       },
     });
   }
 
-  function showStopMail(): void {
+  function showStopMail(state: MailSubscriptionState): void {
     showConfirm({
       title: "보고서 그만 받기",
       question: "보고서 메일을 그만 받으시겠습니까?",
       detail: "다시 받으려면 새로 신청하면 돼요. 잠시 쉬려면 '끄기'를 쓰세요.",
       confirmLabel: "그만 받기",
       onConfirm: async () => {
-        await deleteMailSubscription();
+        await deleteMailSubscription(state.email, state.session);
         mailNotice = "보고서 메일을 그만 받아요.";
       },
     });

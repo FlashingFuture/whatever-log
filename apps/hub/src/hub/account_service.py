@@ -164,8 +164,8 @@ class CloudPort(Protocol):
         """켜고 끈다(active·paused). 서버가 받지 않으면 MailProblem."""
         ...
 
-    def delete_mail_subscription(self, goals_db: Path) -> bool:
-        """그만둔다. 신청한 것이 없었으면 False."""
+    def delete_mail_subscription(self, goals_db: Path, email: str | None, session: str | None) -> bool:
+        """그만둔다. email·session(구독을 본 로그인)이 지금 로그인과 다르면 SyncProblem — 아무것도 지우지 않는다. 신청한 것이 없었으면 False."""
         ...
 
     def send_test_mail(self, goals_db: Path) -> dict[str, str]:
@@ -330,9 +330,9 @@ class AccountService:
         """켜고 끄기."""
         return self._get_port().set_mail_status(goals_db, status)
 
-    def delete_mail_subscription(self, goals_db: Path) -> bool:
-        """그만두기."""
-        return self._get_port().delete_mail_subscription(goals_db)
+    def delete_mail_subscription(self, goals_db: Path, email: str | None, session: str | None) -> bool:
+        """그만두기. 구독을 본 로그인과 지금 로그인이 같을 때만 한다."""
+        return self._get_port().delete_mail_subscription(goals_db, email, session)
 
     def send_test_mail(self, goals_db: Path) -> dict[str, str]:
         """시험 메일."""

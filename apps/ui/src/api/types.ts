@@ -336,15 +336,19 @@ export interface MailSubscriptionState {
   subscription: MailSubscriptionView | null;
   /** 매일 보고서를 더 신청할 수 있는가(무료 요금제의 매일 구독자 상한). */
   daily_available: boolean;
+  /** 이 상태를 읽은 로그인(되돌릴 수 없는 동작 — 옮기기·그만 받기 — 에 함께 보내 hub가 그사이 계정이 바뀌지 않았는지 확인한다). */
   email: string | null;
+  session: string | null;
 }
 
 export interface MailSubscriptionInput extends MailScheduleFields {
   /** 이 PC의 목표 id. */
   goal_id: number;
   timezone: string;
-  /** 다른 목표를 구독 중이면 이 목표로 옮긴다. */
+  /** 다른 목표를 구독 중이면 이 목표로 옮긴다. 옮길 때는 확인한 로그인(email·session)을 함께 보낸다. */
   replace: boolean;
+  email?: string | null;
+  session?: string | null;
 }
 
 /** 첫 신청 확인 메일의 결과(서버). */
