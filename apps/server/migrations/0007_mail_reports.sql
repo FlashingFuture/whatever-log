@@ -8,6 +8,9 @@ CREATE TABLE mail_reports (
     -- unknown: 요청은 했지만 접수됐는지 모른다 — 멱등 키가 살아 있는 동안(첫 시도부터 23시간)만 같은 키로 다시 보내고, 그 뒤로는 다시 보내지 않는다
     status TEXT NOT NULL CHECK (status IN ('sending', 'sent', 'failed', 'unknown')),
     provider_id TEXT,
+    -- 첫 시도에서 잡은 발송 한도 자리(mail_sends.token). 결과를 모르는 구간을 같은 멱등 키로 다시 보낼 때는 새 자리를 잡지 않고 이 자리를 쓴다
+    -- (같은 키로 다시 보내는 것은 새 메일이 아니다 — 재시도가 한도를 깎아 다른 발송을 막지 않게).
+    send_token TEXT,
     -- 처음 자리를 잡은 시각(= 첫 발송 시도). 다시 잡아도 바꾸지 않는다 — 멱등 키의 유효 기간을 이 시각부터 센다.
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,

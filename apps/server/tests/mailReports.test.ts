@@ -254,20 +254,6 @@ test("거절된 구간은 failed로 두고 다시 보내지 않는다", async ()
   );
 });
 
-test("일시적 실패는 다음 실행이 같은 멱등 키로 다시 보내고, 하루 한도에서 멈춘다", async () => {
-  const { run, port } = await world();
-  port.results = [
-    { ok: false, reason: "unavailable", retryable: true },
-    { ok: false, reason: "unavailable", retryable: true },
-  ];
-  assert.equal((await run(MONDAY)).retry, 1);
-  assert.equal((await run("2026-11-09T00:15:00.000Z")).retry, 1);
-  // 접수됐을 수 있는 실패 두 번으로 이 사용자의 하루 보고서 한도(2)를 썼다 — 같은 날 더 보내지 않는다
-  assert.equal((await run("2026-11-09T00:25:00.000Z")).limited, 1);
-  assert.equal(port.sent.length, 2);
-  assert.equal(port.sent[0].idempotencyKey, port.sent[1].idempotencyKey);
-});
-
 test("서비스 한도(rate_limited)는 발송 한도의 자리를 돌려주고 다음 실행에 보낸다", async () => {
   const { run, port } = await world();
   port.results = [{ ok: false, reason: "rate_limited", retryable: true }];
@@ -300,6 +286,7 @@ test("발송 기록에는 주소·제목·본문을 담는 칸이 없다", () =>
     "period_key",
     "status",
     "provider_id",
+    "send_token",
     "created_at",
     "updated_at",
   ]);
@@ -532,25 +519,6 @@ test("접수 번호 없는 2xx(no_id)는 접수된 것으로 보고 다시 보�
   assert.equal(port.sent.length, 1);
 });
 
-test("다시 보내던 구간이 요청 전에 한도에 막히면 지우지 않고 unknown으로 되돌린다(첫 시도 시각을 지킨다)", async () => {
-  const { run, port, sqlite } = await world();
-  port.results = [
-    { ok: false, reason: "unavailable", retryable: true },
-    { ok: false, reason: "unavailable", retryable: true },
-  ];
-  await run(MONDAY);
-  await run("2026-11-09T00:15:00.000Z"); // 하루 한도(2)를 썼다
-  const created = (
-    sqlite.prepare("SELECT created_at FROM mail_reports").get() as Json
-  ).created_at;
-
-  assert.equal((await run("2026-11-09T00:25:00.000Z")).limited, 1);
-  const row = sqlite
-    .prepare("SELECT status, created_at FROM mail_reports")
-    .get() as Json;
-  assert.deepEqual([row.status, row.created_at], ["unknown", created]);
-});
-
 test("메일 요청 전에 실패하면 자리와 발송 한도를 모두 돌려준다", async () => {
   const { db, mail, sqlite, port } = await world();
   const real = db as unknown as import("../src/db.ts").Db;
@@ -653,4 +621,97 @@ test("보내는 사이 다른 목표로 옮긴 구독은 이전 목표의 종료
     .prepare("SELECT goal_id, status FROM mail_subscriptions")
     .get() as Json;
   assert.deepEqual([row.goal_id, row.status], [other, "active"]);
+});
+
+test("같은 멱등 키로 다시 보낼 때는 발송 한도를 새로 잡지 않는다(장애가 이어져도 한도가 줄지 않는다)", async () => {
+  const { run, port, sqlite } = await world();
+  port.results = [
+    { ok: false, reason: "unavailable", retryable: true },
+    { ok: false, reason: "unavailable", retryable: true },
+    { ok: false, reason: "unavailable", retryable: true },
+  ];
+  for (const minute of ["05", "15", "25", "35"]) {
+    const summary = await run(`2026-11-09T00:${minute}:00.000Z`);
+    assert.equal(summary.limited, 0);
+  }
+  assert.equal(port.sent.length, 4); // 세 번 결과 모름 → 네 번째에 보냄
+  assert.ok(
+    port.sent.every((m) => m.idempotencyKey === port.sent[0].idempotencyKey),
+  );
+  const reports = (
+    sqlite
+      .prepare("SELECT COUNT(*) AS n FROM mail_sends WHERE kind = 'report'")
+      .get() as Json
+  ).n;
+  assert.equal(reports, 1); // 첫 시도의 자리 하나
+  assert.equal(
+    (sqlite.prepare("SELECT status FROM mail_reports").get() as Json).status,
+    "sent",
+  );
+});
+
+test("다시 보내는 구간은 새 구간 뒤에 보낸다(장애 중에도 새 보고서가 먼저)", async () => {
+  const fixture = await world();
+  fixture.port.results = [
+    { ok: false, reason: "unavailable", retryable: true },
+  ];
+  await fixture.run(MONDAY); // 첫 구독(person): 결과 모름 → 다음 실행에서 다시 보낼 구간
+  await addSubscribers(fixture, 1); // 두 번째 구독(extra0): 같은 월요일 구간이 새로 보낼 것
+  // 정렬이 없으면 신청 순(updated_at)으로 person이 먼저 가도록, extra0을 더 늦게 신청한 것으로 둔다
+  fixture.sqlite
+    .prepare(
+      "UPDATE mail_subscriptions SET updated_at = '2026-11-06T05:00:00.000Z' WHERE user_id = (SELECT MAX(id) FROM users)",
+    )
+    .run();
+
+  await fixture.run("2026-11-09T00:15:00.000Z");
+
+  assert.deepEqual(
+    fixture.port.sent.map((m) => m.to),
+    ["extra0@example.com", "person@example.com"],
+  );
+});
+
+test("겹친 실행이 남긴 unknown을 다시 잡았으면, 실행 처음에 못 봤어도 다시 보내는 것으로 다룬다(요청 전 실패에도 첫 시도 시각을 지킨다)", async () => {
+  const { db, mail, sqlite } = await world();
+  const id = (sqlite.prepare("SELECT id FROM mail_subscriptions").get() as Json)
+    .id;
+  // 다른 실행이 첫 시도를 하고 결과를 몰라 unknown으로 둔 구간(첫 시도 00:01)
+  sqlite
+    .prepare(
+      "INSERT INTO mail_reports (subscription_id, period_key, status, created_at, updated_at) VALUES (?, '2026-11-09', 'unknown', '2026-11-09T00:01:00.000Z', '2026-11-09T00:01:00.000Z')",
+    )
+    .run(id);
+  const real = db as unknown as import("../src/db.ts").Db;
+  const stale = {
+    batch: real.batch.bind(real),
+    prepare(sql: string) {
+      // 이 실행의 처음 읽기는 그 행을 보지 못했고, 보고서 계산에서 실패한다(요청 전)
+      if (
+        sql.startsWith(
+          "SELECT subscription_id, period_key, status, created_at, updated_at FROM mail_reports",
+        )
+      ) {
+        const stub = {
+          bind: () => stub,
+          first: async () => null,
+          run: async () => ({ meta: { changes: 0 } }),
+          all: async () => ({ results: [] }),
+        };
+        return stub;
+      }
+      if (sql.startsWith("SELECT p.day AS day")) throw new Error("d1 down");
+      return real.prepare(sql);
+    },
+  } as import("../src/db.ts").Db;
+
+  await dispatchReports(stale, mail, new Date("2026-11-09T00:15:00.000Z"));
+
+  const row = sqlite
+    .prepare("SELECT status, created_at FROM mail_reports")
+    .get() as Json;
+  assert.deepEqual(
+    [row.status, row.created_at],
+    ["unknown", "2026-11-09T00:01:00.000Z"],
+  );
 });

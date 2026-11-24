@@ -213,15 +213,21 @@ export async function dispatchReports(
       .filter((row) => !retryable(row, windows))
       .map((row) => `${row.subscription_id}|${row.period_key}`),
   );
-  // 다시 보내는 구간(이미 행이 있다) — 요청 전에 실패하면 행을 지우지 않고 unknown으로 되돌려 첫 시도 시각을 지킨다.
+  // 다시 보내는 구간은 새 구간 뒤로 — 서비스 장애 중에도 새 보고서가 먼저 나간다(순서에만 쓴다. 다시 보내는지는 자리 잡기에서 정한다).
   const retrying = new Set(
     reports.results
       .filter((row) => retryable(row, windows))
       .map((row) => `${row.subscription_id}|${row.period_key}`),
   );
-  const due = pending.filter(
-    ({ sub, occurrence }) => !handled.has(`${sub.id}|${occurrence.key}`),
-  );
+  const due = pending
+    .filter(
+      ({ sub, occurrence }) => !handled.has(`${sub.id}|${occurrence.key}`),
+    )
+    .sort(
+      (a, b) =>
+        Number(retrying.has(`${a.sub.id}|${a.occurrence.key}`)) -
+        Number(retrying.has(`${b.sub.id}|${b.occurrence.key}`)),
+    );
   summary.due = due.length;
   if (due.length === 0) return done();
 
@@ -273,7 +279,6 @@ export async function dispatchReports(
       occurrence,
       now,
       windows,
-      retrying.has(`${sub.id}|${occurrence.key}`),
     );
     if (outcome === "sent") summary.sent += 1;
     else if (outcome === "ended") summary.ended += 1;
@@ -325,7 +330,8 @@ type SendOutcome =
 
 /**
  * 한 구독의 한 구간을 보낸다.
- * - 메일 요청을 하기 **전**의 실패(한도·보고서 계산·예외)는 자리와 발송 한도를 모두 돌려준다 — 보내지 않았으니 다시 보내도 된다.
+ * - 메일 요청을 하기 **전**의 실패(한도·보고서 계산·예외)는 자리와 이번에 잡은 발송 한도를 돌려준다 — 보내지 않았으니 다시 보내도 된다.
+ * - 같은 멱등 키로 다시 보낼 때는 발송 한도를 새로 잡지 않고 첫 시도의 자리(`send_token`)를 쓴다 — 새 메일이 아니다.
  * - 요청을 **한 뒤** 결과를 모르면(`unavailable`, 예외) 구간을 `unknown`으로 두고 발송 한도의 자리를 유지한다. 멱등 키가 살아 있는 동안만 다시 보낸다.
  * - 서비스가 "같은 키로 다른 내용"(409 `invalid_idempotent_request`)이라고 하면 첫 요청이 이미 접수된 것이다 — 진행 기록이 그사이 바뀌어 본문이
  *   달라졌을 뿐이므로 보낸 것으로 기록한다. 접수 번호 없는 2xx(`no_id`)도 접수된 것으로 본다.
@@ -337,18 +343,18 @@ async function sendOne(
   occurrence: Occurrence,
   now: Date,
   windows: Windows,
-  /** 전에 시도한 구간을 다시 보내는가(행이 이미 있다). */
-  retry: boolean,
 ): Promise<SendOutcome> {
   const stamp = now.toISOString();
   // 자리 잡기: 없으면 넣고, 다시 보낼 구간(결과 모름·죽은 실행의 오래된 sending)이면 다시 잡는다. 바뀐 행이 없으면 다른 실행의 것이다.
   // created_at(첫 시도)은 다시 잡아도 바꾸지 않는다.
+  // 다시 보내는지는 이 문장이 돌려준 행으로 정한다(실행 처음의 읽기는 겹친 실행 때문에 낡았을 수 있다): 첫 시도 시각이 지금이 아니면 다시 잡은 것이다.
   const claimed = await db
     .prepare(
       "INSERT INTO mail_reports (subscription_id, period_key, status, created_at, updated_at) VALUES (?1, ?2, 'sending', ?3, ?3) " +
         "ON CONFLICT(subscription_id, period_key) DO UPDATE SET status = 'sending', updated_at = excluded.updated_at " +
         "WHERE mail_reports.created_at >= ?5 AND (mail_reports.status = 'unknown' OR " +
-        "(mail_reports.status = 'sending' AND mail_reports.updated_at < ?4))",
+        "(mail_reports.status = 'sending' AND mail_reports.updated_at < ?4)) " +
+        "RETURNING created_at, send_token",
     )
     .bind(
       sub.id,
@@ -357,8 +363,9 @@ async function sendOne(
       windows.staleBefore,
       windows.retrySince,
     )
-    .run();
-  if (claimed.meta.changes === 0) return "skipped";
+    .first<{ created_at: string; send_token: string | null }>();
+  if (!claimed) return "skipped";
+  const retry = claimed.created_at !== stamp;
   // 자리 풀기: 처음 시도면 행을 지우고, 다시 보내던 구간이면 unknown으로 되돌린다(전에 한 요청이 접수됐을 수 있고, 첫 시도 시각을 지켜야 한다).
   const unclaim = () =>
     retry
@@ -372,17 +379,21 @@ async function sendOne(
             "DELETE FROM mail_reports WHERE subscription_id = ? AND period_key = ? AND status = 'sending'",
           )
           .bind(sub.id, occurrence.key);
+  // 구간의 결과를 적는다. 발송 한도 자리(send_token)도 남겨 다시 보낼 때 같은 자리를 쓰게 한다.
   const mark = (
     status: "sent" | "failed" | "unknown",
     providerId: string | null,
   ) =>
     db
       .prepare(
-        "UPDATE mail_reports SET status = ?, provider_id = ?, updated_at = ? WHERE subscription_id = ? AND period_key = ?",
+        "UPDATE mail_reports SET status = ?, provider_id = ?, send_token = COALESCE(?, send_token), updated_at = ? " +
+          "WHERE subscription_id = ? AND period_key = ?",
       )
-      .bind(status, providerId, stamp, sub.id, occurrence.key);
+      .bind(status, providerId, token, stamp, sub.id, occurrence.key);
 
-  let token: string | null = null;
+  // 발송 한도 자리: 같은 멱등 키로 다시 보낼 때는 첫 시도의 자리를 그대로 쓴다(새 메일이 아니다). 이번에 새로 잡은 자리(fresh)만 돌려줄 수 있다.
+  let token: string | null = retry ? claimed.send_token : null;
+  let fresh = false;
   let requested = false;
   const release = () =>
     db.prepare("DELETE FROM mail_sends WHERE token = ?").bind(token);
@@ -392,17 +403,20 @@ async function sendOne(
       await db.batch([unclaim(), endStatement(db, sub, "suppressed", now)]);
       return "ended";
     }
-    const reserved = await reserveSend(db, {
-      key: await userKey(sub.google_sub),
-      kind: "report",
-      perUserPerDay: LIMITS.reportPerUserPerDay,
-      now,
-    });
-    if (!reserved.ok) {
-      await unclaim().run();
-      return "limited";
+    if (token === null) {
+      const reserved = await reserveSend(db, {
+        key: await userKey(sub.google_sub),
+        kind: "report",
+        perUserPerDay: LIMITS.reportPerUserPerDay,
+        now,
+      });
+      if (!reserved.ok) {
+        await unclaim().run();
+        return "limited";
+      }
+      token = reserved.token;
+      fresh = true;
     }
-    token = reserved.token;
 
     const goal: ReportGoal = {
       name: sub.goal_name,
@@ -476,11 +490,11 @@ async function sendOne(
       return "retry";
     }
     if (result.reason === "rejected") {
-      await db.batch([release(), mark("failed", null)]);
+      await db.batch([...(fresh ? [release()] : []), mark("failed", null)]);
       return "failed";
     }
-    // 접수되지 않았음이 확실한 실패(서비스 한도·키 오류): 자리와 발송 한도를 돌려주고 다음 실행이 다시 보낸다.
-    await db.batch([unclaim(), release()]);
+    // 접수되지 않았음이 확실한 실패(서비스 한도·키 오류): 자리를 풀고, 이번에 잡은 발송 한도 자리는 돌려준다. 다음 실행이 다시 보낸다.
+    await db.batch([unclaim(), ...(fresh ? [release()] : [])]);
     return result.reason === "unauthorized" ? "stop" : "retry";
   } catch (error) {
     console.warn(`report error: ${String(error)}`);
@@ -489,8 +503,8 @@ async function sendOne(
         // 요청 뒤의 예외: 접수됐을 수 있다 — unknown으로 두고 발송 한도의 자리를 유지한다.
         await mark("unknown", null).run();
       } else {
-        // 요청 전의 예외: 보내지 않았다 — 자리와 발송 한도를 모두 돌려준다.
-        await db.batch(token ? [unclaim(), release()] : [unclaim()]);
+        // 요청 전의 예외: 이번에는 보내지 않았다 — 자리를 풀고, 이번에 잡은 발송 한도 자리는 돌려준다.
+        await db.batch(fresh ? [unclaim(), release()] : [unclaim()]);
       }
     } catch {
       // 정리하지 못해도 30분 뒤 다른 실행이 다시 잡는다(STALE_CLAIM_MINUTES, 멱등 키 기간 안에서만)
