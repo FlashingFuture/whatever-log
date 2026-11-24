@@ -40,14 +40,7 @@ def subscription_request(body: dict[str, Any]) -> dict[str, Any]:
     replace = body.get("replace", False)
     if not isinstance(replace, bool):
         raise BadRequest(400, api_error.INVALID_REQUEST, "replace는 true 또는 false여야 합니다.")
-    # 옮기기(다른 목표의 구독을 끝낸다)는 화면이 확인한 로그인(구독을 읽었을 때의 email·session)을 함께 보낸다 — 그사이 계정이 바뀌었으면 hub가 거절한다.
-    email, session = body.get("email"), body.get("session")
-    if replace and (
-        not isinstance(session, str)
-        or not 0 < len(session) <= MAX_CONFIRM_LENGTH
-        or (email is not None and (not isinstance(email, str) or len(email) > MAX_CONFIRM_LENGTH))
-    ):
-        raise BadRequest(400, api_error.INVALID_REQUEST, "옮기려면 확인한 로그인(email·session)을 함께 보내야 합니다.")
+    email, session = confirmed_login(body)
     return {
         "goal_id": goal_id,
         "frequency": frequency,
@@ -56,13 +49,27 @@ def subscription_request(body: dict[str, Any]) -> dict[str, Any]:
         "send_time": send_time,
         "timezone": timezone,
         "replace": replace,
-        "email": email or None,
-        "session": session if replace else None,
+        "email": email,
+        "session": session,
     }
 
 
-def status_request(body: dict[str, Any]) -> str:
-    """`POST /api/mail/subscription/status`의 본문 `{status: "active" | "paused"}`."""
-    if set(body) != {"status"} or body["status"] not in ("active", "paused"):
+def confirmed_login(body: dict[str, Any]) -> tuple[str | None, str]:
+    """메일 구독의 쓰기(신청·수정·옮기기·켜고 끄기)에 함께 오는 **확인한 로그인**: 화면이 구독을 읽었을 때의 email·session. 그사이 다른 계정으로
+    바뀌었으면 hub가 거절한다 — A 계정의 화면에서 누른 저장·켜기가 B 계정의 구독을 만들거나 바꾸거나 되살리지 않게(기기 삭제와 같은 규칙)."""
+    email, session = body.get("email"), body.get("session")
+    if (
+        not isinstance(session, str)
+        or not 0 < len(session) <= MAX_CONFIRM_LENGTH
+        or (email is not None and (not isinstance(email, str) or len(email) > MAX_CONFIRM_LENGTH))
+    ):
+        raise BadRequest(400, api_error.INVALID_REQUEST, "확인한 로그인(email·session)을 함께 보내야 합니다.")
+    return email or None, session
+
+
+def status_request(body: dict[str, Any]) -> dict[str, Any]:
+    """`POST /api/mail/subscription/status`의 본문 `{status: "active" | "paused", email, session}`."""
+    if set(body) - {"status", "email", "session"} or body.get("status") not in ("active", "paused"):
         raise BadRequest(400, api_error.INVALID_REQUEST, "status는 active 또는 paused여야 합니다.")
-    return body["status"]
+    email, session = confirmed_login(body)
+    return {"status": body["status"], "email": email, "session": session}

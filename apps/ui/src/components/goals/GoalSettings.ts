@@ -293,6 +293,8 @@ export function createGoalSettings(goalId: number): GoalSettings {
               void runMailAction(button, async () => {
                 await setMailSubscriptionStatus(
                   mine.status === "active" ? "paused" : "active",
+                  mail.state.email,
+                  mail.state.session,
                 );
                 mailNotice =
                   mine.status === "active"
@@ -403,18 +405,21 @@ export function createGoalSettings(goalId: number): GoalSettings {
       sectionKind(state.subscription, goalId) === "mine"
         ? state.subscription
         : null;
+    // 고칠 때는 지금 구독의 시간대를 그대로 둔다(다른 시간대의 PC에서 저장해도 보내는 시각·구간이 바뀌지 않게). 새로 신청하면 이 PC의 시간대.
+    const editing = mine !== null && mine.status !== "ended";
     openScene({
       title: "보고서 메일",
       content: createScheduleForm({
         initial: initialFields(mine, legacy),
         allowDaily: canChooseDaily(state.daily_available, mine),
-        timezone: localZone(),
-        submitLabel: mine !== null && mine.status !== "ended" ? "저장" : "신청",
+        timezone: editing ? mine.timezone : localZone(),
+        localTimezone: localZone(),
+        submitLabel: editing ? "저장" : "신청",
         onCancel: () => modal.close(),
-        onSubmit: async (fields) => {
+        onSubmit: async (fields, timezone) => {
           const startedScene = scene;
           try {
-            await subscribe(fields, replace, state, startedScene);
+            await subscribe(fields, timezone, replace, state, startedScene);
           } catch (error) {
             // 그사이 다른 목표를 신청했다(다른 PC 등) — 옮길지 묻는다. 단, 이 신청 장면이 아직 그대로일 때만(취소하고 다른 폼을 열었으면 그 폼을 덮지 않는다).
             if (
@@ -423,7 +428,7 @@ export function createGoalSettings(goalId: number): GoalSettings {
               !replace
             ) {
               if (scene === startedScene && !destroyed) {
-                showMoveMail(fields, state);
+                showMoveMail(fields, timezone, state);
               }
               return;
             }
@@ -436,6 +441,7 @@ export function createGoalSettings(goalId: number): GoalSettings {
 
   async function subscribe(
     fields: MailScheduleFields,
+    timezone: string,
     replace: boolean,
     state: MailSubscriptionState,
     startedScene: number,
@@ -443,10 +449,11 @@ export function createGoalSettings(goalId: number): GoalSettings {
     const saved = await saveMailSubscription({
       ...fields,
       goal_id: goalId,
-      timezone: localZone(),
+      timezone,
       replace,
-      // 옮기기는 이 화면을 그린 로그인을 함께 보낸다(그사이 계정이 바뀌었으면 hub가 거절한다)
-      ...(replace ? { email: state.email, session: state.session } : {}),
+      // 이 화면을 그린 로그인을 함께 보낸다(그사이 계정이 바뀌었으면 hub가 거절한다 — 다른 계정의 구독을 만들거나 바꾸지 않게)
+      email: state.email,
+      session: state.session,
     });
     mailNotice = savedText(saved.created, saved.welcome);
     await done(startedScene);
@@ -454,6 +461,7 @@ export function createGoalSettings(goalId: number): GoalSettings {
 
   function showMoveMail(
     fields: MailScheduleFields,
+    timezone: string,
     state: MailSubscriptionState,
   ): void {
     showConfirm({
@@ -467,7 +475,7 @@ export function createGoalSettings(goalId: number): GoalSettings {
         const saved = await saveMailSubscription({
           ...fields,
           goal_id: goalId,
-          timezone: localZone(),
+          timezone,
           replace: true,
           email: state.email,
           session: state.session,

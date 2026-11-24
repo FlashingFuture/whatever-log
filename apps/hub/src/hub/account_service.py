@@ -160,8 +160,8 @@ class CloudPort(Protocol):
         """신청·변경(request의 goal_id는 이 PC의 목표 id). 서버가 받지 않으면 MailProblem. 성공하면 이 PC의 옛 보고서 일정을 비운다."""
         ...
 
-    def set_mail_status(self, goals_db: Path, status: str) -> dict[str, Any]:
-        """켜고 끈다(active·paused). 서버가 받지 않으면 MailProblem."""
+    def set_mail_status(self, goals_db: Path, request: dict[str, Any]) -> dict[str, Any]:
+        """켜고 끈다(request: status, 확인한 email·session). 로그인이 바뀌었으면 SyncProblem, 서버가 받지 않으면 MailProblem."""
         ...
 
     def delete_mail_subscription(self, goals_db: Path, email: str | None, session: str | None) -> bool:
@@ -326,9 +326,9 @@ class AccountService:
         """신청·변경."""
         return self._get_port().put_mail_subscription(goals_db, request)
 
-    def set_mail_status(self, goals_db: Path, status: str) -> dict[str, Any]:
+    def set_mail_status(self, goals_db: Path, request: dict[str, Any]) -> dict[str, Any]:
         """켜고 끄기."""
-        return self._get_port().set_mail_status(goals_db, status)
+        return self._get_port().set_mail_status(goals_db, request)
 
     def delete_mail_subscription(self, goals_db: Path, email: str | None, session: str | None) -> bool:
         """그만두기. 구독을 본 로그인과 지금 로그인이 같을 때만 한다."""

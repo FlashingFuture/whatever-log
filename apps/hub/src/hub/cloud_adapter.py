@@ -6,6 +6,7 @@ packages/cloud/tests/test_isolation.py가 검사한다.
 """
 
 import hashlib
+import logging
 import threading
 import time
 import webbrowser
@@ -35,6 +36,11 @@ META_DELETION_UNCERTAIN = "deletion_uncertain"
 # 다른 기기의 기록은 에이전트가 5분마다 올리므로 1분 늦는 것은 눈에 띄지 않는다.
 TOTALS_CACHE_SECONDS = 60.0
 _TOTALS_CACHE_MAX = 32
+
+
+logger = logging.getLogger(__name__)
+
+_LOGIN_CHANGED = "로그인한 계정이 바뀌었어요. 보고서 메일을 다시 열어 확인해 주세요."
 
 
 def _now() -> float:
@@ -170,9 +176,9 @@ class _CloudBackend:
 
         def run():
             api, email, key = self._server()
-            if request["replace"] and not self._same_login(email, key, request["email"], request["session"]):
-                # 옮기기는 지금 구독(다른 목표)을 끝낸다 — 확인 창을 연 뒤 다른 계정으로 바뀌었으면 그 계정의 구독을 옮기지 않는다.
-                raise SyncProblem("로그인한 계정이 바뀌었어요. 보고서 메일을 다시 열어 확인해 주세요.")
+            if not self._same_login(email, key, request["email"], request["session"]):
+                # 폼을 연 뒤 다른 계정으로 바뀌었으면 그 계정의 구독을 만들거나 바꾸거나 옮기지 않는다(시간대도 덮어쓰게 된다).
+                raise SyncProblem(_LOGIN_CHANGED)
             with _open_goals(goals_db) as store:
                 goal = store.get(request["goal_id"])
                 link = next((item for item in store.sync_links() if item.goal_id == request["goal_id"]), None)
@@ -193,19 +199,31 @@ class _CloudBackend:
                 timezone=request["timezone"],
                 replace=request["replace"],
             )
-            with _open_goals(goals_db) as store:
-                store.clear_report_schedules()
-                view = _subscription_json(subscription, store)
+            # 서버에는 저장됐다 — 이 PC의 정리(그 목표의 옛 일정 지우기)가 실패해도 성공으로 답한다(다시 누르면 같은 값으로 저장될 뿐이다).
+            try:
+                with _open_goals(goals_db) as store:
+                    if store.report_schedule(request["goal_id"]) is not None:
+                        store.delete_report_schedule(request["goal_id"])
+            except Exception as error:  # noqa: BLE001 — 로컬 정리의 어떤 실패도 서버 저장의 성공을 뒤집지 않는다
+                logger.warning("옛 보고서 일정을 지우지 못했습니다: %s", type(error).__name__)
+            try:
+                with _open_goals(goals_db) as store:
+                    view = _subscription_json(subscription, store)
+            except Exception as error:  # noqa: BLE001
+                logger.warning("구독의 목표 이름을 읽지 못했습니다: %s", type(error).__name__)
+                view = _subscription_json(subscription, None)
             return {"subscription": view, "created": created, "welcome": welcome}
 
         return self._mail(goals_db, run)
 
-    def set_mail_status(self, goals_db: Path, status: str) -> dict[str, Any]:
-        """켜고 끈다."""
+    def set_mail_status(self, goals_db: Path, request: dict[str, Any]) -> dict[str, Any]:
+        """켜고 끈다. 확인한 로그인과 지금 로그인이 다르면 거절한다(다른 계정이 꺼 둔 구독을 되살리지 않게)."""
 
         def run():
-            api, _, _ = self._server()
-            subscription = api.set_mail_subscription_status(status)
+            api, email, key = self._server()
+            if not self._same_login(email, key, request["email"], request["session"]):
+                raise SyncProblem(_LOGIN_CHANGED)
+            subscription = api.set_mail_subscription_status(request["status"])
             with _open_goals(goals_db) as store:
                 return {"subscription": _subscription_json(subscription, store)}
 
@@ -217,7 +235,7 @@ class _CloudBackend:
         def run():
             api, email, key = self._server()
             if not self._same_login(email, key, confirmed_email, confirmed_session):
-                raise SyncProblem("로그인한 계정이 바뀌었어요. 보고서 메일을 다시 열어 확인해 주세요.")
+                raise SyncProblem(_LOGIN_CHANGED)
             return api.delete_mail_subscription()
 
         return self._mail(goals_db, run)
@@ -547,7 +565,7 @@ class _CloudBackend:
 
 def _subscription_json(subscription, store) -> dict[str, Any]:
     """서버의 구독을 화면용으로: 서버 목표 id 대신 **이 PC의 목표 id·이름**(이 PC에 연결된 목표가 없으면 둘 다 null — 다른 PC에서 신청했다)."""
-    link = next((item for item in store.sync_links() if item.remote_id == subscription.goal_id), None)
+    link = None if store is None else next((item for item in store.sync_links() if item.remote_id == subscription.goal_id), None)
     goal = store.get(link.goal_id) if link is not None else None
     return {
         "goal_id": None if goal is None else goal.id,

@@ -905,7 +905,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _set_mail_status(self) -> None:
         """POST /api/mail/subscription/status {"status": "active" | "paused"} — 켜고 끈다."""
         self._mail_request(
-            lambda status: self.account.set_mail_status(self.goals_db_path, status),
+            lambda request: self.account.set_mail_status(self.goals_db_path, request),
             write=True,
             parse=status_request,
         )

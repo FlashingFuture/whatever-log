@@ -9,10 +9,12 @@ export interface ScheduleFormProps {
   initial: ScheduleFieldsLike;
   /** 매일을 고를 수 있는가(무료 요금제의 매일 구독자 상한). 못 고르면 매일을 꺼 두고 이유를 보인다. */
   allowDaily: boolean;
-  /** 보낼 시각의 시간대(이 PC의 시간대 — 보이기만 한다). */
+  /** 보낼 시각의 시간대: 고칠 때는 지금 구독의 시간대, 새로 신청하면 이 PC의 시간대. */
   timezone: string;
+  /** 이 PC의 시간대. timezone과 다르면 "이 PC의 시간대로 바꾸기"를 보인다(기본은 바꾸지 않음). */
+  localTimezone: string;
   submitLabel: string;
-  onSubmit: (fields: MailScheduleFields) => Promise<void>;
+  onSubmit: (fields: MailScheduleFields, timezone: string) => Promise<void>;
   onCancel: () => void;
 }
 
@@ -78,7 +80,20 @@ export function createScheduleForm(props: ScheduleFormProps): HTMLElement {
 
   const zone = document.createElement("p");
   zone.className = styles.hint;
-  zone.textContent = `보낼 시각은 이 PC의 시간대(${props.timezone}) 기준이에요. 매일은 전날, 매주는 지난주(월~일), 매달은 지난달의 달성도를 보내요.`;
+  const differs = props.timezone !== props.localTimezone;
+  zone.textContent = differs
+    ? `보낼 시각은 이 구독의 시간대(${props.timezone}) 기준이에요. 이 PC의 시간대(${props.localTimezone})와 달라요.`
+    : `보낼 시각은 이 PC의 시간대(${props.timezone}) 기준이에요. 매일은 전날, 매주는 지난주(월~일), 매달은 지난달의 달성도를 보내요.`;
+  // 다른 시간대의 PC에서 고칠 때만: 바꾸지 않는 것이 기본이다(일정을 안 바꿔도 보내는 시각·구간이 달라지므로 사용자가 고르게).
+  const switchZone = document.createElement("input");
+  switchZone.type = "checkbox";
+  const switchLabel = document.createElement("label");
+  switchLabel.className = styles.hint;
+  switchLabel.append(
+    switchZone,
+    ` 이 PC의 시간대(${props.localTimezone})로 바꾸기`,
+  );
+  switchLabel.hidden = !differs;
 
   kit.form.append(
     kit.field("frequency", "주기", frequency),
@@ -86,6 +101,7 @@ export function createScheduleForm(props: ScheduleFormProps): HTMLElement {
     dayField,
     kit.field("send_time", "보낼 시각", sendTime),
     zone,
+    switchLabel,
     kit.actions(props.submitLabel, props.onCancel),
   );
 
@@ -93,12 +109,15 @@ export function createScheduleForm(props: ScheduleFormProps): HTMLElement {
     event.preventDefault();
     const chosen = frequency.value as MailScheduleFields["frequency"];
     kit.submit(() =>
-      props.onSubmit({
-        frequency: chosen,
-        weekday: chosen === "weekly" ? Number(weekday.value) : null,
-        day_of_month: chosen === "monthly" ? Number(dayOfMonth.value) : null,
-        send_time: sendTime.value,
-      }),
+      props.onSubmit(
+        {
+          frequency: chosen,
+          weekday: chosen === "weekly" ? Number(weekday.value) : null,
+          day_of_month: chosen === "monthly" ? Number(dayOfMonth.value) : null,
+          send_time: sendTime.value,
+        },
+        differs && switchZone.checked ? props.localTimezone : props.timezone,
+      ),
     );
   });
   return kit.form;

@@ -29,14 +29,16 @@ export function saveMailSubscription(
   );
 }
 
-/** 켜고 끈다. */
+/** 켜고 끈다. email·session은 구독을 읽었을 때의 로그인이다(그사이 계정이 바뀌었으면 hub가 거절한다). */
 export async function setMailSubscriptionStatus(
   status: "active" | "paused",
+  email: string | null,
+  session: string | null,
 ): Promise<MailSubscriptionView> {
   const response = await sendJson<{ subscription: MailSubscriptionView }>(
     "POST",
     "/api/mail/subscription/status",
-    { status },
+    { status, email, session },
     SHORT_REQUEST_TIMEOUT_MS,
   );
   return response.subscription;

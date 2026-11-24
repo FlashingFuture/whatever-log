@@ -345,10 +345,11 @@ export interface MailSubscriptionInput extends MailScheduleFields {
   /** 이 PC의 목표 id. */
   goal_id: number;
   timezone: string;
-  /** 다른 목표를 구독 중이면 이 목표로 옮긴다. 옮길 때는 확인한 로그인(email·session)을 함께 보낸다. */
+  /** 다른 목표를 구독 중이면 이 목표로 옮긴다. */
   replace: boolean;
-  email?: string | null;
-  session?: string | null;
+  /** 확인한 로그인 — 구독 상태(MailSubscriptionState)를 읽었을 때의 email·session. 그사이 계정이 바뀌었으면 hub가 거절한다. */
+  email: string | null;
+  session: string | null;
 }
 
 /** 첫 신청 확인 메일의 결과(서버). */

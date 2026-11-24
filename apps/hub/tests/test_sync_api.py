@@ -1520,6 +1520,12 @@ MAIL_REMOTE = "00000000-0000-4000-8000-0000000000aa"
 MAIL_SCHEDULE = {"frequency": "weekly", "weekday": 0, "day_of_month": None, "send_time": "09:00", "timezone": "Asia/Seoul"}
 
 
+def _login(port) -> dict:
+    """화면이 구독을 읽었을 때의 로그인(쓰기에 함께 보내는 확인한 로그인)."""
+    state = call(port, "GET", "/api/mail/subscription")[1]
+    return {"email": state["email"], "session": state["session"]}
+
+
 def _mail_goal(goals_db, name="공부", remote=MAIL_REMOTE):
     goal = _local_goal(goals_db, name)
     with GoalStore(goals_db) as store:
@@ -1549,26 +1555,47 @@ def test_a_subscription_for_a_goal_this_pc_does_not_have_shows_no_goal(sync_serv
     assert (body["subscription"]["goal_id"], body["subscription"]["goal_name"]) == (None, None)
 
 
-def test_subscribing_sends_the_server_goal_and_clears_the_old_local_schedule(sync_server) -> None:
+def test_subscribing_sends_the_server_goal_and_clears_only_that_goals_old_schedule(sync_server) -> None:
     port, goals_db, _ = sync_server
     goal = _mail_goal(goals_db)
+    other = _local_goal(goals_db, "운동", processes=("chrome.exe",))
     with GoalStore(goals_db) as store:
-        store.set_report_schedule(goal.id, enabled=True, frequency="weekly", weekday=0, day_of_month=None, send_time="09:00")
+        for goal_id in (goal.id, other.id):
+            store.set_report_schedule(goal_id, enabled=True, frequency="weekly", weekday=0, day_of_month=None, send_time="09:00")
 
-    status, body = call(port, "PUT", "/api/mail/subscription", {"goal_id": goal.id, **MAIL_SCHEDULE, "replace": False})
+    status, body = call(
+        port, "PUT", "/api/mail/subscription", {"goal_id": goal.id, **MAIL_SCHEDULE, "replace": False, **_login(port)}
+    )
 
     assert status == 200 and body["created"] is True and body["welcome"] == "sent"
     assert body["subscription"]["goal_id"] == goal.id
     assert FakeApi.mail_puts == [{"goal_id": MAIL_REMOTE, **MAIL_SCHEDULE, "replace": False}]
     with GoalStore(goals_db) as store:
-        assert store.report_schedule(goal.id) is None  # 이제 일정의 원본은 서버다
+        assert store.report_schedule(goal.id) is None  # 이제 이 목표의 일정 원본은 서버다
+        assert store.report_schedule(other.id) is not None  # 다른 목표의 옛 일정은 나중에 그 목표를 신청할 때 쓴다
 
+
+def test_a_local_cleanup_failure_after_the_server_saved_still_answers_success(sync_server, monkeypatch) -> None:
+    import sqlite3
+
+    port, goals_db, _ = sync_server
+    goal = _mail_goal(goals_db)
+    with GoalStore(goals_db) as store:
+        store.set_report_schedule(goal.id, enabled=True, frequency="weekly", weekday=0, day_of_month=None, send_time="09:00")
+
+    def locked(self, goal_id):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(GoalStore, "delete_report_schedule", locked)
+    status, body = call(port, "PUT", "/api/mail/subscription", {"goal_id": goal.id, **MAIL_SCHEDULE, **_login(port)})
+
+    assert status == 200 and body["subscription"]["goal_id"] == goal.id  # 서버에는 저장됐다
 
 def test_a_goal_that_is_not_synced_cannot_be_subscribed(sync_server) -> None:
     port, goals_db, _ = sync_server
     goal = _local_goal(goals_db)
 
-    status, body = call(port, "PUT", "/api/mail/subscription", {"goal_id": goal.id, **MAIL_SCHEDULE})
+    status, body = call(port, "PUT", "/api/mail/subscription", {"goal_id": goal.id, **MAIL_SCHEDULE, **_login(port)})
 
     assert status == 409 and body["error"]["code"] == "goal_not_synced"
     assert FakeApi.mail_puts == []
@@ -1577,9 +1604,10 @@ def test_a_goal_that_is_not_synced_cannot_be_subscribed(sync_server) -> None:
 def test_the_servers_refusals_pass_through_with_their_code(sync_server) -> None:
     port, goals_db, _ = sync_server
     goal = _mail_goal(goals_db)
+    login = _login(port)
     FakeApi.mail_refuse = MailRefused(409, "subscription_exists", "이미 다른 목표의 보고서를 받고 있어요.")
 
-    status, body = call(port, "PUT", "/api/mail/subscription", {"goal_id": goal.id, **MAIL_SCHEDULE})
+    status, body = call(port, "PUT", "/api/mail/subscription", {"goal_id": goal.id, **MAIL_SCHEDULE, **login})
 
     assert status == 409
     assert body["error"] == {"code": "subscription_exists", "message": "이미 다른 목표의 보고서를 받고 있어요."}
@@ -1590,7 +1618,7 @@ def test_status_delete_and_test_mail_are_forwarded(sync_server) -> None:
     _mail_goal(goals_db)
     FakeApi.mail = MailSubscription(MAIL_REMOTE, "weekly", 0, None, "09:00", "Asia/Seoul", "active", None, "t", "t")
 
-    status, body = call(port, "POST", "/api/mail/subscription/status", {"status": "paused"})
+    status, body = call(port, "POST", "/api/mail/subscription/status", {"status": "paused", **_login(port)})
     assert status == 200 and body["subscription"]["status"] == "paused"
     assert call(port, "POST", "/api/mail/test", {})[1] == {"to": "a***@example.com", "mode": "domain"}
     login = call(port, "GET", "/api/mail/subscription")[1]
@@ -1658,3 +1686,18 @@ def test_moving_needs_the_login_that_saw_the_other_subscription(sync_server) -> 
     status, _ = call(port, "PUT", "/api/mail/subscription", {**move, "email": login["email"], "session": login["session"]})
     assert status == 200 and FakeApi.mail_puts[0]["replace"] is True
     assert "session" not in FakeApi.mail_puts[0] and "email" not in FakeApi.mail_puts[0]  # 서버로는 보내지 않는다
+
+
+
+def test_every_mail_write_needs_the_login_that_saw_the_subscription(sync_server) -> None:
+    """폼을 연 뒤 다른 계정으로 바뀌었으면 그 계정의 구독을 만들거나 바꾸거나 되살리지 않는다(시험 메일은 결과가 가벼워 제외)."""
+    port, goals_db, _ = sync_server
+    goal = _mail_goal(goals_db)
+    FakeApi.mail = MailSubscription(MAIL_REMOTE, "weekly", 0, None, "09:00", "Asia/Seoul", "paused", None, "t", "t")
+    stale = {**_login(port), "session": "someone-else"}
+
+    assert call(port, "PUT", "/api/mail/subscription", {"goal_id": goal.id, **MAIL_SCHEDULE})[0] == 400  # 확인한 로그인 없이
+    assert call(port, "PUT", "/api/mail/subscription", {"goal_id": goal.id, **MAIL_SCHEDULE, **stale})[0] == 503
+    assert call(port, "POST", "/api/mail/subscription/status", {"status": "active"})[0] == 400
+    assert call(port, "POST", "/api/mail/subscription/status", {"status": "active", **stale})[0] == 503
+    assert FakeApi.mail_puts == [] and FakeApi.mail.status == "paused"
