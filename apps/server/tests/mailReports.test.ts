@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import worker, { type Env, runReports } from "../src/index.ts";
+import { LIMITS } from "../src/mail/config.ts";
 import { dispatchReports } from "../src/mail/dispatch.ts";
 import type { MailMessage, SendResult } from "../src/mail/port.ts";
 import { formatMinutes } from "../src/mail/report.ts";
@@ -328,12 +329,16 @@ test("확인과 자리 잡기 사이에 다른 실행이 끼어도 자리를 잡
   const racing = {
     batch: real.batch.bind(real),
     prepare(sql: string) {
-      if (sql.startsWith("SELECT 1 AS present FROM mail_reports")) {
+      if (
+        sql.startsWith(
+          "SELECT subscription_id, period_key, status, updated_at FROM mail_reports",
+        )
+      ) {
         sqlite
           .prepare(
-            "INSERT OR IGNORE INTO mail_reports (subscription_id, period_key, status, created_at, updated_at) VALUES (?, '2026-11-09', 'sending', 't', 't')",
+            "INSERT OR IGNORE INTO mail_reports (subscription_id, period_key, status, created_at, updated_at) VALUES (?, '2026-11-09', 'sending', ?, ?)",
           )
-          .run(id);
+          .run(id, MONDAY, MONDAY);
         const stub = {
           bind: () => stub,
           first: async () => null,
@@ -350,4 +355,120 @@ test("확인과 자리 잡기 사이에 다른 실행이 끼어도 자리를 잡
 
   assert.equal(summary.sent, 0);
   assert.equal(port.sent.length, 0);
+});
+
+// --- 쿼리 예산, 예외, 남은 자리 ---
+
+/** 같은 시각(월 09:00 서울)에 매주 보고서를 받는 사용자 n명을 더한다. */
+async function addSubscribers(
+  fixture: Awaited<ReturnType<typeof world>>,
+  n: number,
+) {
+  for (let i = 0; i < n; i++) {
+    const token = await fixture.signIn(`extra-${i}`, `extra${i}@example.com`);
+    const goal = uuid();
+    await fixture.call("PUT", `/goals/${goal}`, { token, body: GOAL });
+    await fixture.call("PUT", "/mail/subscription", {
+      token,
+      body: {
+        goal_id: goal,
+        frequency: "weekly",
+        weekday: 0,
+        send_time: "09:00",
+        timezone: "Asia/Seoul",
+      },
+    });
+  }
+  fixture.port.sent = [];
+}
+
+test("한 실행은 쿼리 예산 안에서만 보내고 남은 것은 다음 실행이 보낸다(모두 한 번씩)", async () => {
+  const fixture = await world();
+  await addSubscribers(fixture, 11); // 모두 12명
+  const counts: number[] = [];
+  let total = 0;
+  for (const minute of ["05", "15", "25", "35"]) {
+    const summary = await fixture.run(`2026-11-09T00:${minute}:00.000Z`);
+    assert.ok(
+      summary.queries <= LIMITS.queriesPerRun,
+      `queries ${summary.queries}`,
+    );
+    counts.push(summary.sent);
+    total += summary.sent;
+  }
+  assert.ok(counts[0] > 0 && counts[0] < 12, `첫 실행 ${counts[0]}통`);
+  assert.equal(total, 12);
+  assert.equal(new Set(fixture.port.sent.map((m) => m.to)).size, 12);
+});
+
+test("보낼 것이 없으면 구독이 많아도 쿼리는 몇 번뿐이다", async () => {
+  const fixture = await world();
+  await addSubscribers(fixture, 40);
+  // 41명을 모두 보낼 때까지 10분마다 돈다(한 실행에 다섯 통 안팎)
+  let at = Date.parse(MONDAY);
+  for (
+    let i = 0;
+    i < 20 && fixture.port.sent.length < 41;
+    i++, at += 10 * 60 * 1000
+  ) {
+    await fixture.run(new Date(at).toISOString());
+  }
+  assert.equal(fixture.port.sent.length, 41);
+
+  const idle = await fixture.run(new Date(at + 10 * 60 * 1000).toISOString());
+  assert.equal(idle.sent, 0);
+  assert.ok(idle.queries <= 3, `queries ${idle.queries}`);
+});
+
+test("자리를 잡은 뒤 예외가 나면 자리를 풀고 다음 구독으로 가며, 다음 실행이 같은 멱등 키로 다시 보낸다", async () => {
+  const fixture = await world();
+  await addSubscribers(fixture, 1);
+  let calls = 0;
+  const original = fixture.port.send.bind(fixture.port);
+  fixture.port.send = async (message) => {
+    calls += 1;
+    if (calls === 1) throw new Error("boom");
+    return original(message);
+  };
+
+  const first = await fixture.run(MONDAY);
+  assert.equal(first.retry, 1);
+  assert.equal(first.sent, 1); // 다른 구독은 같은 실행에서 보냈다
+  const second = await fixture.run("2026-11-09T00:15:00.000Z");
+  assert.equal(second.sent, 1);
+  assert.equal(
+    (
+      fixture.sqlite
+        .prepare("SELECT COUNT(*) AS n FROM mail_reports WHERE status = 'sent'")
+        .get() as Json
+    ).n,
+    2,
+  );
+});
+
+test("구독 하나의 값이 이상해도(시간대) 그 구독만 건너뛰고 나머지는 보낸다", async () => {
+  const fixture = await world();
+  await addSubscribers(fixture, 1);
+  fixture.sqlite
+    .prepare(
+      "UPDATE mail_subscriptions SET timezone = 'Mars/Olympus' WHERE user_id = (SELECT MIN(id) FROM users)",
+    )
+    .run();
+  const summary = await fixture.run(MONDAY);
+  assert.equal(summary.sent, 1);
+});
+
+test("도중에 죽은 실행이 남긴 자리(30분 넘은 sending)는 다시 잡아 보낸다", async () => {
+  const { run, port, sqlite } = await world();
+  const id = (sqlite.prepare("SELECT id FROM mail_subscriptions").get() as Json)
+    .id;
+  sqlite
+    .prepare(
+      "INSERT INTO mail_reports (subscription_id, period_key, status, created_at, updated_at) VALUES (?, '2026-11-09', 'sending', ?, ?)",
+    )
+    .run(id, MONDAY, MONDAY);
+
+  assert.equal((await run("2026-11-09T00:20:00.000Z")).sent, 0); // 15분 — 아직 다른 실행이 보내는 중일 수 있다
+  assert.equal((await run("2026-11-09T00:40:00.000Z")).sent, 1); // 35분 — 다시 잡는다
+  assert.equal(port.sent.length, 1);
 });
