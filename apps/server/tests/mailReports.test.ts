@@ -331,7 +331,7 @@ test("확인과 자리 잡기 사이에 다른 실행이 끼어도 자리를 잡
     prepare(sql: string) {
       if (
         sql.startsWith(
-          "SELECT subscription_id, period_key, status, updated_at FROM mail_reports",
+          "SELECT subscription_id, period_key, status, created_at, updated_at FROM mail_reports",
         )
       ) {
         sqlite
@@ -424,10 +424,12 @@ test("자리를 잡은 뒤 예외가 나면 자리를 풀고 다음 구독으로
   const fixture = await world();
   await addSubscribers(fixture, 1);
   let calls = 0;
+  const attempts: MailMessage[] = [];
   const original = fixture.port.send.bind(fixture.port);
   fixture.port.send = async (message) => {
     calls += 1;
-    if (calls === 1) throw new Error("boom");
+    attempts.push(message);
+    if (calls === 1) throw new Error("boom"); // 요청을 보낸 뒤의 예외 — 접수됐을 수 있다
     return original(message);
   };
 
@@ -436,6 +438,10 @@ test("자리를 잡은 뒤 예외가 나면 자리를 풀고 다음 구독으로
   assert.equal(first.sent, 1); // 다른 구독은 같은 실행에서 보냈다
   const second = await fixture.run("2026-11-09T00:15:00.000Z");
   assert.equal(second.sent, 1);
+  // 다시 보낸 것은 예외가 난 첫 요청과 같은 수신자·같은 멱등 키다
+  const retried = attempts[2];
+  assert.equal(retried.to, attempts[0].to);
+  assert.equal(retried.idempotencyKey, attempts[0].idempotencyKey);
   assert.equal(
     (
       fixture.sqlite
@@ -471,4 +477,180 @@ test("도중에 죽은 실행이 남긴 자리(30분 넘은 sending)는 다시 �
   assert.equal((await run("2026-11-09T00:20:00.000Z")).sent, 0); // 15분 — 아직 다른 실행이 보내는 중일 수 있다
   assert.equal((await run("2026-11-09T00:40:00.000Z")).sent, 1); // 35분 — 다시 잡는다
   assert.equal(port.sent.length, 1);
+});
+
+// --- 결과를 모르는 발송, 멱등 키의 유효 기간, 요청 전 실패 ---
+
+const reportRow = (sqlite: ReturnType<typeof setup>["sqlite"]) =>
+  sqlite.prepare("SELECT status, provider_id FROM mail_reports").get() as Json;
+
+test("결과를 모르는 발송은 unknown으로 두고, 멱등 키가 살아 있는 동안(23시간)만 같은 키로 다시 보낸다", async () => {
+  const { run, port, sqlite } = await world();
+  port.results = [{ ok: false, reason: "unavailable", retryable: true }];
+
+  assert.equal((await run(MONDAY)).retry, 1);
+  assert.equal(reportRow(sqlite).status, "unknown");
+  // 다음 날 01:00 UTC(첫 시도 25시간 뒤) — 하루 한도도 새로 열렸지만 멱등 키가 지났을 수 있어 다시 보내지 않는다
+  const late = await run("2026-11-10T01:05:00.000Z");
+  assert.equal(late.sent + late.retry, 0);
+  assert.equal(port.sent.length, 1);
+});
+
+test("멱등 키 기간 안이면 다시 보내고, 같은 키로 다른 내용(409)이면 이미 접수된 것으로 보고 sent로 둔다", async () => {
+  const { run, port, sqlite, progress } = await world();
+  port.results = [
+    { ok: false, reason: "unavailable", retryable: true },
+    {
+      ok: false,
+      reason: "rejected",
+      retryable: false,
+      detail: "invalid_idempotent_request",
+    },
+  ];
+  await run(MONDAY);
+  await progress(uuid(), "2026-11-06", 15); // 그사이 진행 기록이 바뀌어 본문이 달라졌다
+  const second = await run("2026-11-09T00:15:00.000Z");
+
+  assert.equal(second.sent, 1);
+  assert.equal(second.failed, 0);
+  assert.equal(reportRow(sqlite).status, "sent");
+  assert.equal(port.sent[0].idempotencyKey, port.sent[1].idempotencyKey);
+  assert.equal((await run("2026-11-09T00:25:00.000Z")).sent, 0);
+});
+
+test("접수 번호 없는 2xx(no_id)는 접수된 것으로 보고 다시 보내지 않는다", async () => {
+  const { run, port, sqlite } = await world();
+  port.results = [
+    { ok: false, reason: "unavailable", retryable: false, detail: "no_id" },
+  ];
+  assert.equal((await run(MONDAY)).sent, 1);
+  assert.deepEqual(
+    { ...reportRow(sqlite) },
+    { status: "sent", provider_id: null },
+  );
+  assert.equal((await run("2026-11-09T00:15:00.000Z")).sent, 0);
+  assert.equal(port.sent.length, 1);
+});
+
+test("다시 보내던 구간이 요청 전에 한도에 막히면 지우지 않고 unknown으로 되돌린다(첫 시도 시각을 지킨다)", async () => {
+  const { run, port, sqlite } = await world();
+  port.results = [
+    { ok: false, reason: "unavailable", retryable: true },
+    { ok: false, reason: "unavailable", retryable: true },
+  ];
+  await run(MONDAY);
+  await run("2026-11-09T00:15:00.000Z"); // 하루 한도(2)를 썼다
+  const created = (
+    sqlite.prepare("SELECT created_at FROM mail_reports").get() as Json
+  ).created_at;
+
+  assert.equal((await run("2026-11-09T00:25:00.000Z")).limited, 1);
+  const row = sqlite
+    .prepare("SELECT status, created_at FROM mail_reports")
+    .get() as Json;
+  assert.deepEqual([row.status, row.created_at], ["unknown", created]);
+});
+
+test("메일 요청 전에 실패하면 자리와 발송 한도를 모두 돌려준다", async () => {
+  const { db, mail, sqlite, port } = await world();
+  const real = db as unknown as import("../src/db.ts").Db;
+  let broken = true;
+  const failing = {
+    batch: real.batch.bind(real),
+    prepare(sql: string) {
+      if (broken && sql.startsWith("SELECT p.day AS day")) {
+        broken = false;
+        throw new Error("d1 down");
+      }
+      return real.prepare(sql);
+    },
+  } as import("../src/db.ts").Db;
+
+  assert.equal(
+    (await dispatchReports(failing, mail, new Date(MONDAY))).retry,
+    1,
+  );
+  const count = (table: string) =>
+    (
+      sqlite
+        .prepare(
+          `SELECT COUNT(*) AS n FROM ${table} WHERE ${table === "mail_sends" ? "kind = 'report'" : "1"}`,
+        )
+        .get() as Json
+    ).n;
+  assert.equal(count("mail_sends"), 0);
+  assert.equal(count("mail_reports"), 0);
+  assert.equal(port.sent.length, 0);
+});
+
+test("실행 처음에 못 본 막힌 주소도 보내기 직전에 다시 보고 막는다", async () => {
+  const { db, mail, sqlite, port } = await world();
+  const real = db as unknown as import("../src/db.ts").Db;
+  // 실행 처음의 막힌 주소 읽기는 비어 있었고, 그 직후 웹훅이 막았다
+  const late = {
+    batch: real.batch.bind(real),
+    prepare(sql: string) {
+      if (
+        sql.startsWith(
+          "SELECT address_hash FROM mail_suppressions WHERE address_hash IN",
+        )
+      ) {
+        const stub = {
+          bind: () => stub,
+          first: async () => null,
+          run: async () => ({ meta: { changes: 0 } }),
+          all: async () => ({ results: [] }),
+        };
+        return stub;
+      }
+      return real.prepare(sql);
+    },
+  } as import("../src/db.ts").Db;
+  sqlite
+    .prepare(
+      "INSERT INTO mail_suppressions (address_hash, reason, created_at) VALUES (?, 'complained', 't')",
+    )
+    .run(await addressHash("person@example.com"));
+
+  const summary = await dispatchReports(late, mail, new Date(MONDAY));
+
+  assert.equal(summary.sent, 0);
+  assert.equal(port.sent.length, 0);
+  assert.equal(
+    (
+      sqlite
+        .prepare("SELECT ended_reason FROM mail_subscriptions")
+        .get() as Json
+    ).ended_reason,
+    "suppressed",
+  );
+});
+
+test("보내는 사이 다른 목표로 옮긴 구독은 이전 목표의 종료 처리로 끝나지 않는다", async () => {
+  const { run, port, sqlite, call, token } = await world(
+    {},
+    { start_date: "2026-11-06", end_date: "2026-11-07" }, // 이번 보고서가 마지막
+  );
+  const other = uuid();
+  await call("PUT", `/goals/${other}`, {
+    token,
+    body: { ...GOAL, name: "운동" },
+  });
+  const original = port.send.bind(port);
+  port.send = async (message) => {
+    // 발송 응답을 기다리는 사이 사용자가 구독을 다른 목표로 옮겼다(같은 id, 새 updated_at)
+    sqlite
+      .prepare(
+        "UPDATE mail_subscriptions SET goal_id = ?, updated_at = '2026-11-09T00:05:30.000Z'",
+      )
+      .run(other);
+    return original(message);
+  };
+
+  await run(MONDAY);
+
+  const row = sqlite
+    .prepare("SELECT goal_id, status FROM mail_subscriptions")
+    .get() as Json;
+  assert.deepEqual([row.goal_id, row.status], [other, "active"]);
 });
