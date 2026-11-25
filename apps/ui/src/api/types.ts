@@ -190,7 +190,23 @@ export interface LogoutResponse extends AccountSnapshot {
 }
 
 /** 화면이 시스템 브라우저로 열어 달라고 요청할 수 있는 링크의 이름(hub가 고정 목록으로 주소를 정한다). */
-export type ExternalLink = "privacy";
+export type ExternalLink = "privacy" | "releases";
+
+/** 새 버전 확인의 상태(`GET /api/update`, docs/updates.md). supported가 false면 개발 모양이라 확인하지 않는다. */
+export interface UpdateState {
+  supported: boolean;
+  enabled: boolean;
+  current: string;
+  /** 지금보다 높은 가장 새 버전(없으면 null). */
+  latest: { version: string; url: string; published_at: string } | null;
+  available: boolean;
+  checked_at: string | null;
+  /** 마지막 확인이 실패했으면 그 사유(사용자용 문장). */
+  error: string | null;
+  /** 사용자가 "나중에"로 넘긴 버전(hub가 기억한다 — 화면의 저장소는 실행마다 바뀐다). */
+  dismissed: string | null;
+  releases_url: string;
+}
 
 /**
  * 동기화 확인 창의 한 줄(`GET /api/sync/plan`). 올라가는 값(이름·목표 시간·요일)만 있고, 프로세스·사이트 연결은 없다.

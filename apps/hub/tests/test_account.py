@@ -489,13 +489,13 @@ def test_open_link_only_opens_listed_links(account_server) -> None:
     assert opened == ["privacy", "https://evil.example"]  # 목록 판단은 opener(open_link)가 한다
 
 
-def test_the_real_link_table_has_only_the_privacy_doc() -> None:
+def test_the_real_link_table_has_only_this_repositorys_pages() -> None:
     from hub.external_links import LINKS, open_link
 
     opened: list[str] = []
 
-    assert list(LINKS) == ["privacy"]
-    assert LINKS["privacy"].startswith("https://github.com/FlashingFuture/whatever-log/")
+    assert list(LINKS) == ["privacy", "releases"]  # 데이터 취급 문서와 릴리스 목록(새 버전 받기, docs/updates.md)
+    assert all(url.startswith("https://github.com/FlashingFuture/whatever-log/") for url in LINKS.values())
     assert open_link("privacy", lambda url: opened.append(url) or True) == "opened"
     assert open_link("https://evil.example", lambda url: opened.append(url) or True) == "unknown"
     assert opened == [LINKS["privacy"]]

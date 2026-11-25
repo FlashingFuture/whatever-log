@@ -1,0 +1,43 @@
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin: var(--space-2) 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-warn-bg);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+}
+.text {
+  flex: 1;
+  min-width: 12rem;
+}
+/* 맨 아래 버전 줄: 알림 줄과 같은 배경으로 본문과 구별하고, 글씨는 본문과 같은 색으로 읽기 쉽게 한다. */
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-8);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-warn-bg);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+}
+.linkButton {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-link);
+  font: inherit;
+  cursor: pointer;
+}
+.linkButton:disabled {
+  color: var(--color-text-disabled);
+  cursor: default;
+}

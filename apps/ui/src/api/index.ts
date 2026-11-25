@@ -86,6 +86,13 @@ export type {
   SyncStatus,
   TestMailResult,
   TopTarget,
+  UpdateState,
   WelcomeOutcome,
 } from "./types";
+export {
+  checkUpdateNow,
+  dismissUpdate,
+  fetchUpdate,
+  setUpdateEnabled,
+} from "./update";
 export { fetchProcessUsage, fetchSiteUsage, fetchUsage } from "./usage";
