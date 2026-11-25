@@ -104,6 +104,10 @@ class UpdateCheckFailed(Exception):
     """GitHub에 묻지 못했거나 응답을 이해하지 못했다(다음에 다시 묻는다)."""
 
 
+class UpdateSettingsFailed(Exception):
+    """사용자 설정(켜고 끄기·나중에)을 저장하지 못했다. 저장하지 못한 설정을 바뀐 것처럼 돌려주지 않는다 — 다음에 예전 설정으로 돌아가므로."""
+
+
 Fetch = Callable[[], Any]
 
 
@@ -153,22 +157,30 @@ class UpdateChecker:
             return {}
         return data if isinstance(data, dict) else {}
 
-    def _save(self, data: dict[str, Any]) -> None:
+    def _save(self, data: dict[str, Any]) -> bool:
+        """저장했으면 True. 확인 결과는 저장하지 못해도 된다(다음에 다시 묻는다) — 사용자 설정은 호출부가 실패를 알린다."""
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             temporary = self._path.with_suffix(".tmp")
             temporary.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
             temporary.replace(self._path)
         except OSError:
-            pass  # 기억하지 못해도 확인은 된다 — 다음에 다시 묻는다
+            return False
+        return True
+
+    def _channel(self) -> str:
+        """지금 버전의 채널: 시험 버전이면 prerelease, 정식이면 stable. 확인 결과는 그때의 채널과 함께 기억한다."""
+        return "prerelease" if self._current is not None and self._current.is_prerelease else "stable"
 
     def _view(self, data: dict[str, Any]) -> dict[str, Any]:
         latest = data.get("latest") if isinstance(data.get("latest"), dict) else None
         # 기억해 둔 최신 버전이 그사이 설치한 지금 버전 이하면(직접 업데이트했다) 알리지 않는다.
         if latest is not None and self._current is not None:
             seen = parse_version(str(latest.get("version", "")))
-            if seen is None or not self._current < seen:
+            # 그사이 정식 버전을 설치했다면 시험 채널에서 기억해 둔 시험 버전은 알리지 않는다(정식 사용자에게는 정식만).
+            if seen is None or not self._current < seen or (seen.is_prerelease and not self._current.is_prerelease):
                 latest = None
+        dismissed = data.get("dismissed") if isinstance(data.get("dismissed"), str) else None
         return {
             "supported": self._supported,
             "enabled": self._supported and data.get("enabled", True) is not False,
@@ -177,6 +189,8 @@ class UpdateChecker:
             "available": latest is not None,
             "checked_at": data.get("checked_at") if isinstance(data.get("checked_at"), str) else None,
             "error": data.get("error") if isinstance(data.get("error"), str) else None,
+            # 사용자가 "나중에"로 넘긴 버전(화면은 그 버전의 알림 줄을 보이지 않는다). 앱을 다시 열어도 남는다(화면의 저장소는 실행마다 바뀐다).
+            "dismissed": dismissed,
             "releases_url": RELEASES_PAGE,
         }
 
@@ -188,7 +202,8 @@ class UpdateChecker:
             if not view["enabled"] or self._current is None:
                 return view
             checked = view["checked_at"]
-            due = force or checked is None
+            # 채널이 바뀌었으면(시험 → 정식 설치) 그때의 결과는 이 채널에 맞지 않을 수 있다 — 다시 묻는다.
+            due = force or checked is None or data.get("channel") != self._channel()
             if not due:
                 try:
                     due = self._now() - datetime.fromisoformat(checked) >= CHECK_INTERVAL
@@ -197,6 +212,7 @@ class UpdateChecker:
             if not due:
                 return view
             data["checked_at"] = self._now().isoformat()
+            data["channel"] = self._channel()
             try:
                 data["latest"] = newest_release(self._fetch(), self._current)
                 data.pop("error", None)
@@ -207,12 +223,24 @@ class UpdateChecker:
             return self._view(data)
 
     def set_enabled(self, enabled: bool) -> dict[str, Any]:
-        """확인을 켜고 끈다. 끄면 GitHub에 묻지 않는다."""
+        """확인을 켜고 끈다. 끄면 GitHub에 묻지 않는다. 저장하지 못하면 UpdateSettingsFailed."""
         with self._lock:
             data = self._load()
             data["enabled"] = enabled
-            self._save(data)
+            if not self._save(data):
+                raise UpdateSettingsFailed("설정을 저장하지 못했어요.")
         return self.state() if enabled else self._view(data)
+
+    def dismiss(self, version: str) -> dict[str, Any]:
+        """그 버전의 알림 줄을 다시 보이지 않게 한다("나중에"). 더 새 버전이 나오면 다시 알린다. 저장하지 못하면 UpdateSettingsFailed."""
+        if parse_version(version) is None:
+            raise ValueError("버전 모양이 아닙니다.")
+        with self._lock:
+            data = self._load()
+            data["dismissed"] = version
+            if not self._save(data):
+                raise UpdateSettingsFailed("설정을 저장하지 못했어요.")
+            return self._view(data)
 
 
 def default_checker(legacy_dir: Path) -> UpdateChecker:

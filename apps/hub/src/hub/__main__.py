@@ -38,7 +38,7 @@ from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
 from common.memory import keep_trimmed
 from common.paths import data_path
 from common.ports import HUB_PORT
-from common.updates import UpdateChecker, default_checker
+from common.updates import UpdateChecker, UpdateSettingsFailed, default_checker
 from goals import sync_status
 from goals import (
     META_SYNC_ENABLED,
@@ -966,17 +966,35 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_json(200, self.update_checker.state(force=True))
 
     def _set_update_settings(self) -> None:
-        """POST /api/update/settings {"enabled": bool} — 새 버전 확인을 켜고 끈다."""
+        """POST /api/update/settings {"enabled": bool} 또는 {"dismissed": "<버전>"} — 새 버전 확인을 켜고 끄거나, 그 버전을 "나중에"로 넘긴다.
+        저장하지 못하면 503(바뀐 것처럼 답하지 않는다)."""
         try:
             check_write_origin(self.headers.get("Origin"), self.allowed_origins)
             body = read_json_object(self.headers, self.rfile)
         except BadRequest as error:
             self._send_bad_request(error)
             return
-        if set(body) != {"enabled"} or not isinstance(body["enabled"], bool):
-            self._send_json(400, api_error.error_body(api_error.INVALID_REQUEST, "enabled(true/false) 하나만 보내야 합니다."))
+        enabled = set(body) == {"enabled"} and isinstance(body["enabled"], bool)
+        dismissed = set(body) == {"dismissed"} and isinstance(body["dismissed"], str) and len(body["dismissed"]) <= 64
+        if not (enabled or dismissed):
+            self._send_json(
+                400,
+                api_error.error_body(api_error.INVALID_REQUEST, "enabled(true/false) 또는 dismissed(버전) 하나만 보내야 합니다."),
+            )
             return
-        self._send_json(200, self.update_checker.set_enabled(body["enabled"]))
+        try:
+            state = (
+                self.update_checker.set_enabled(body["enabled"])
+                if enabled
+                else self.update_checker.dismiss(body["dismissed"])
+            )
+        except ValueError:
+            self._send_json(400, api_error.error_body(api_error.INVALID_REQUEST, "dismissed는 버전이어야 합니다."))
+            return
+        except UpdateSettingsFailed as error:
+            self._send_json(503, api_error.error_body(api_error.UNAVAILABLE, str(error)))
+            return
+        self._send_json(200, state)
 
     def _open_link(self) -> None:
         """POST /api/links/open {"link"} — 고정된 목록의 바깥 링크를 시스템 브라우저로 연다."""

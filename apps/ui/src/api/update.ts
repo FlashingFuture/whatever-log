@@ -13,6 +13,16 @@ export function checkUpdateNow(): Promise<UpdateState> {
   return sendJson("POST", "/api/update/check", {}, SHORT_REQUEST_TIMEOUT_MS);
 }
 
+/** 그 버전의 알림 줄을 다시 보이지 않게 한다("나중에"). 더 새 버전이 나오면 다시 알린다. */
+export function dismissUpdate(version: string): Promise<UpdateState> {
+  return sendJson(
+    "POST",
+    "/api/update/settings",
+    { dismissed: version },
+    SHORT_REQUEST_TIMEOUT_MS,
+  );
+}
+
 /** 새 버전 알림(확인)을 켜고 끈다. */
 export function setUpdateEnabled(enabled: boolean): Promise<UpdateState> {
   return sendJson(

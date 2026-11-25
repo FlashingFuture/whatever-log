@@ -123,14 +123,47 @@ def test_the_dev_checkout_does_not_check(tmp_path) -> None:
 
 
 def test_a_remembered_version_that_is_already_installed_is_not_announced(tmp_path) -> None:
-    made, _, _ = checker(tmp_path, [release("v1.0.0")])
-    made.state()
-    upgraded, calls, _ = checker(tmp_path, [release("v1.0.0")], current="1.0.0")
+    made, _, clock = checker(tmp_path, [release("v1.0.0-beta.3", prerelease=True)])
+    assert made.state()["latest"]["version"] == "1.0.0-beta.3"
+    upgraded, calls, _ = checker(tmp_path, [release("v1.0.0-beta.3", prerelease=True)], current="1.0.0-beta.3", clock=clock)
     assert upgraded.state()["available"] is False  # 같은 캐시를 읽어도 지금 버전이 그 버전이다
-    assert calls == []
+    assert calls == []  # 같은 채널이고 하루가 안 지났다 — 다시 묻지 않는다
 
 
 def test_a_broken_cache_file_is_treated_as_empty(tmp_path) -> None:
     (tmp_path / "update-check.json").write_text("{not json", encoding="utf-8")
     made, calls, _ = checker(tmp_path, [release("v1.0.0")])
     assert made.state()["available"] is True and calls == [1]
+
+
+def test_dismissing_a_version_is_remembered_across_restarts(tmp_path) -> None:
+    made, _, _ = checker(tmp_path, [release("v1.0.0")])
+    made.state()
+    assert made.dismiss("1.0.0")["dismissed"] == "1.0.0"
+    reopened, _, _ = checker(tmp_path, [release("v1.0.0")])
+    assert reopened.state()["dismissed"] == "1.0.0"  # 앱을 다시 열어도(화면의 저장소가 바뀌어도) 남는다
+    with pytest.raises(ValueError):
+        made.dismiss("latest")
+
+
+def test_settings_that_could_not_be_saved_are_reported_not_pretended(tmp_path) -> None:
+    from common.updates import UpdateSettingsFailed
+
+    blocker = tmp_path / "not-a-folder"
+    blocker.write_text("x", encoding="utf-8")
+    made = UpdateChecker(blocker / "update-check.json", "1.0.0-beta.2", supported=True, fetch=lambda: [])
+    with pytest.raises(UpdateSettingsFailed):
+        made.set_enabled(False)
+    with pytest.raises(UpdateSettingsFailed):
+        made.dismiss("1.0.0")
+
+
+def test_a_prerelease_remembered_on_the_beta_channel_is_not_shown_after_installing_a_stable_version(tmp_path) -> None:
+    beta, _, clock = checker(tmp_path, [release("v1.1.0-beta.1", prerelease=True)])
+    assert beta.state()["latest"]["version"] == "1.1.0-beta.1"
+
+    # 같은 날 1.0.0(정식)을 설치했다 — 기억해 둔 시험 버전은 알리지 않고, 채널이 바뀌었으니 정식 채널로 다시 묻는다
+    stable, calls, _ = checker(tmp_path, [release("v1.1.0-beta.1", prerelease=True), release("v1.0.1")], current="1.0.0", clock=clock)
+    state = stable.state()
+    assert calls == [1]
+    assert state["latest"]["version"] == "1.0.1"

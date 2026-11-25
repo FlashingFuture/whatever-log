@@ -203,6 +203,8 @@ export interface UpdateState {
   checked_at: string | null;
   /** 마지막 확인이 실패했으면 그 사유(사용자용 문장). */
   error: string | null;
+  /** 사용자가 "나중에"로 넘긴 버전(hub가 기억한다 — 화면의 저장소는 실행마다 바뀐다). */
+  dismissed: string | null;
   releases_url: string;
 }
 

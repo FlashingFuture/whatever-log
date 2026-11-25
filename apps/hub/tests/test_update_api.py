@@ -82,3 +82,13 @@ def test_turning_it_off_stops_asking_and_needs_the_apps_origin(server) -> None:
 
 def test_the_release_page_is_one_of_the_fixed_links() -> None:
     assert LINKS["releases"] == RELEASES_PAGE
+
+
+def test_later_is_kept_by_the_hub(server) -> None:
+    port, _ = server
+    call(port, "GET", "/api/update")
+    status, body = call(port, "POST", "/api/update/settings", {"dismissed": "1.0.0"})
+    assert status == 200 and body["dismissed"] == "1.0.0"
+    assert call(port, "GET", "/api/update")[1]["dismissed"] == "1.0.0"
+    assert call(port, "POST", "/api/update/settings", {"dismissed": "soon"})[0] == 400
+    assert call(port, "POST", "/api/update/settings", {"dismissed": "1.0.0", "enabled": False})[0] == 400
