@@ -38,6 +38,7 @@ from common.exit_codes import EXIT_ALREADY_RUNNING, EXIT_ARGUMENT_ERROR
 from common.memory import keep_trimmed
 from common.paths import data_path
 from common.ports import HUB_PORT
+from common.updates import UpdateChecker, default_checker
 from goals import sync_status
 from goals import (
     META_SYNC_ENABLED,
@@ -320,6 +321,8 @@ class _Handler(BaseHTTPRequestHandler):
     account: AccountService = AccountService(create_cloud_port)
     # 화면이 요청한 바깥 링크를 시스템 브라우저로 여는 함수(테스트가 바꾼다).
     link_opener = staticmethod(open_link)
+    # 새 버전 확인(docs/updates.md 1단계). main()이 이 설치본의 것으로 바꾼다. 기본값은 개발 모양이라 확인하지 않는다.
+    update_checker: UpdateChecker = default_checker(_APP_DIR)
 
     def _send_json(
         self, status: int, payload: dict, extra_headers: dict[str, str] | None = None
@@ -405,6 +408,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._apply_sync()
         elif path == "/api/account/delete":
             self._delete_account()
+        elif path == "/api/update/check":
+            self._check_update()
+        elif path == "/api/update/settings":
+            self._set_update_settings()
         elif path == "/api/mail/subscription/status":
             self._set_mail_status()
         elif path == "/api/mail/test":
@@ -480,6 +487,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._get_devices()
         elif parsed.path == "/api/mail/subscription":
             self._get_mail_subscription()
+        elif parsed.path == "/api/update":
+            self._send_json(200, self.update_checker.state())
         elif parsed.path == "/api/goals/progress":
             self._get_goal_progress(parsed.query)
         elif parsed.path == "/api/goals/all-devices":
@@ -944,6 +953,30 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_json(
             503, api_error.error_body(api_error.UNAVAILABLE, "이 설치에서는 로그인 기능을 쓸 수 없습니다.")
         )
+
+    # --- 새 버전 확인(docs/updates.md) ---
+
+    def _check_update(self) -> None:
+        """POST /api/update/check — 하루를 기다리지 않고 지금 GitHub에 묻는다("지금 확인")."""
+        try:
+            check_write_origin(self.headers.get("Origin"), self.allowed_origins)
+        except BadRequest as error:
+            self._send_bad_request(error)
+            return
+        self._send_json(200, self.update_checker.state(force=True))
+
+    def _set_update_settings(self) -> None:
+        """POST /api/update/settings {"enabled": bool} — 새 버전 확인을 켜고 끈다."""
+        try:
+            check_write_origin(self.headers.get("Origin"), self.allowed_origins)
+            body = read_json_object(self.headers, self.rfile)
+        except BadRequest as error:
+            self._send_bad_request(error)
+            return
+        if set(body) != {"enabled"} or not isinstance(body["enabled"], bool):
+            self._send_json(400, api_error.error_body(api_error.INVALID_REQUEST, "enabled(true/false) 하나만 보내야 합니다."))
+            return
+        self._send_json(200, self.update_checker.set_enabled(body["enabled"]))
 
     def _open_link(self) -> None:
         """POST /api/links/open {"link"} — 고정된 목록의 바깥 링크를 시스템 브라우저로 연다."""

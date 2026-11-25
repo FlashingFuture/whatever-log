@@ -13,6 +13,8 @@ REPOSITORY_URL = "https://github.com/FlashingFuture/whatever-log"
 LINKS: dict[str, str] = {
     # 무엇이 저장되고 무엇이 서버로 나가는지 사용자용으로 설명한 문서
     "privacy": f"{REPOSITORY_URL}/blob/main/docs/data-handling.md",
+    # 새 버전을 받는 곳(릴리스 목록 — 가장 새 것이 맨 위다, docs/updates.md)
+    "releases": f"{REPOSITORY_URL}/releases",
 }
 
 

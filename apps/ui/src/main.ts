@@ -1,6 +1,7 @@
 import { cancelLogin, fetchAccount, logout, startLogin } from "./api";
 import { createDeleteAccountDialog } from "./components/account/DeleteAccountDialog";
 import { createSyncDialog } from "./components/sync/SyncDialog";
+import { createUpdateNotice } from "./components/update/UpdateNotice";
 import { mountLayout } from "./layouts/Layouts";
 import { createNavBar } from "./layouts/NavBar";
 import { mountGoalPage } from "./pages/GoalPage";
@@ -80,7 +81,14 @@ if (app) {
   });
   // 상단 막대는 한 번만 그리고, 화면 틀(레이아웃)은 그 아래 자리(stage)에 갈아 끼운다.
   const stage = document.createElement("div");
-  app.replaceChildren(navBar.element, stage);
+  // 새 버전 알림: 상단 막대 아래 한 줄(새 버전이 있을 때만)과 맨 아래의 버전 줄(docs/updates.md).
+  const updateNotice = createUpdateNotice();
+  app.replaceChildren(
+    navBar.element,
+    updateNotice.banner,
+    stage,
+    updateNotice.footer,
+  );
   void account.refresh();
   window.addEventListener("focus", () => void account.refresh());
 

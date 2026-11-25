@@ -6,6 +6,7 @@
     whatever-log status       지금 무엇이 떠 있고 무엇이 등록됐는지 본다
     whatever-log uninstall    끄고 자동 시작·바로가기를 지운다(데이터는 그대로)
     whatever-log import-data --from <개발 폴더>   개발 폴더의 기록·목표를 이 설치본으로 복사한다(원본은 그대로)
+    whatever-log update --check   새 버전이 있는지 GitHub에 묻는다(받기·설치는 하지 않는다 — docs/updates.md)
 
 `install --dry-run`은 아무것도 바꾸지 않고 할 일만 보여 준다.
 """
@@ -14,7 +15,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from common import paths
+from common import paths, updates
 
 from launcher import commands, data_import
 
@@ -48,9 +49,34 @@ def build_parser() -> argparse.ArgumentParser:
     imp.add_argument("--dry-run", action="store_true", help="아무것도 바꾸지 않고 할 일만 보여 준다")
     imp.add_argument("--replace", action="store_true", help="이미 있는 데이터는 <이름>.before-import로 옮기고 가져온다")
 
+    update = sub.add_parser("update", help="새 버전이 있는지 본다(받기·설치는 아직 하지 않는다)")
+    update.add_argument("--check", action="store_true", required=True, help="GitHub에 새 버전이 있는지 묻는다")
+
     sub.add_parser("stop", help="기록기·동기화 에이전트를 끈다")
     sub.add_parser("status", help="실행·등록 상태를 본다")
     return parser
+
+
+def check_update(say, fetch=updates.fetch_releases) -> bool:
+    """`update --check`: 지금 버전과 GitHub의 가장 새 버전을 견줘 알린다. 직접 부른 명령이라 화면의 "알림 끄기"·하루 한 번 규칙과 상관없이
+    바로 묻는다. 묻지 못했으면 False(종료 코드 1)."""
+    current_text = paths.version()
+    current = updates.parse_version(current_text)
+    say(f"지금 버전: {current_text}")
+    if current is None:
+        say("지금 버전을 알 수 없어 견주지 못했어요.")
+        return False
+    try:
+        latest = updates.newest_release(fetch(), current)
+    except (updates.UpdateCheckFailed, ValueError) as error:
+        say(f"새 버전을 확인하지 못했어요({error}). 인터넷 연결을 확인하고 다시 시도해 주세요.")
+        return False
+    if latest is None:
+        say("최신 버전이에요.")
+    else:
+        say(f"새 버전 {latest['version']}이(가) 있어요: {latest['url']}")
+        say("받은 zip을 새 폴더에 풀고 install.cmd를 실행하면 업데이트돼요(docs/packaging.md).")
+    return True
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -76,6 +102,8 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(0 if commands.start(_say, open_window=not args.no_window) else 1)
     elif args.command == "import-data":
         sys.exit(0 if data_import.run(args.source, _say, dry_run=args.dry_run, replace=args.replace) else 1)
+    elif args.command == "update":
+        sys.exit(0 if check_update(_say) else 1)
     elif args.command == "stop":
         sys.exit(0 if commands.stop(_say) else 1)
     else:
