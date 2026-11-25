@@ -40,6 +40,8 @@ import.lock
 # 로그(recorder·supervisor·hub·hub-supervisor·sync·sync-supervisor·notifier·notifier-supervisor)와 설치 도구가 남기는 임시 파일
 *.log
 *.log.*
+# 새 버전 확인의 결과·설정(docs/updates.md). 개발 모양에서는 apps/hub/ 안에 생긴다.
+update-check.json
 *.tmp
 
 # hub가 프로세스·사이트에서 뽑아 둔 아이콘 캐시
