@@ -102,12 +102,16 @@ jobs:
 
           status="$(run status)"
           echo "$status"
-          echo "$status" | grep -q "(개발)" && { echo "번들인데 개발용 저장소로 인식했어요(release.json)"; exit 1; }
-          [ "$(echo "$status" | grep -c '자동 시작 등록됨')" -eq 2 ] || { echo "기록기·동기화 에이전트가 자동 시작에 등록되지 않았어요"; exit 1; }
-          echo "$status" | grep -q "runtime.whatever-log-cli.exe" || { echo "번들 안의 파이썬으로 실행되지 않았어요"; exit 1; }
+          # 파이프 대신 <<<로 넘긴다 — pipefail에서 grep -q가 일찍 끝나면 앞쪽이 SIGPIPE로 실패해 찾았어도 못 찾은 것으로 판정이 뒤집힐 수 있다(&& 검사는 거짓 통과가 된다).
+          grep -q "(개발)" <<<"$status" && { echo "번들인데 개발용 저장소로 인식했어요(release.json)"; exit 1; }
+          # 자동 시작 대상의 개수는 세지 않는다(알림 에이전트가 늘었을 때 여기서 멈췄다) — 등록되지 않은 것이 하나도 없고, 등록된 것이 있으면 된다.
+          grep -q '자동 시작 등록 안 됨' <<<"$status" && { echo "자동 시작에 등록되지 않은 구성 요소가 있어요"; exit 1; }
+          grep -q '자동 시작 등록됨' <<<"$status" || { echo "자동 시작에 등록된 구성 요소가 없어요"; exit 1; }
+          grep -q "runtime.whatever-log-cli.exe" <<<"$status" || { echo "번들 안의 파이썬으로 실행되지 않았어요"; exit 1; }
 
           run uninstall
-          [ "$(run status | grep -c '자동 시작 등록 안 됨')" -eq 2 ] || { echo "uninstall 뒤에도 자동 시작이 남아 있어요"; exit 1; }
+          after="$(run status)"
+          if grep -q '자동 시작 등록됨' <<<"$after"; then echo "$after"; echo "uninstall 뒤에도 자동 시작이 남아 있어요"; exit 1; fi
 
       # 설치 시험을 통과한 zip만 다음 job(Release 올리기)에 넘긴다.
       - name: 번들 넘기기
