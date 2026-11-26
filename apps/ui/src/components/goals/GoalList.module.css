@@ -35,8 +35,12 @@
   text-align: left;
   cursor: pointer;
 }
+/* 누를 수 없는 줄(고르는 목록에서 이미 다른 목표에 연결됨 등)은 이름을 흐리게 해 눌리는 줄과 구분한다. */
 .main:disabled {
   cursor: default;
+}
+.main:disabled .name {
+  color: var(--color-text-muted);
 }
 .row:has(.main:disabled):hover {
   background: transparent;

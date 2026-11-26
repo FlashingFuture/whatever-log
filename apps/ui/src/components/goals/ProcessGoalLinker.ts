@@ -1,5 +1,9 @@
 import { fetchGoals, type Goal, updateGoal } from "../../api";
-import { addProcess, processLinkState } from "../../lib/processPick";
+import {
+  addProcess,
+  processLinkState,
+  removeProcess,
+} from "../../lib/processPick";
 import { createErrorView } from "../common/ErrorView";
 import { createModal } from "../common/Modal";
 import { showToast } from "../common/Toast";
@@ -7,14 +11,14 @@ import { createGoalList } from "./GoalList";
 import styles from "./GoalManager.module.css";
 
 export interface ProcessGoalLinker {
-  /** 목표 목록 팝업을 연다. 목표를 누르면 이 프로세스를 그 목표에 연결한다. */
+  /** 목표 목록 팝업을 연다. 목표를 누르면 이 프로세스를 그 목표에 연결한다(이미 연결된 목표를 누르면 연결을 해제한다). */
   open: () => void;
   destroy: () => void;
 }
 
 export interface ProcessGoalLinkerProps {
   process: string;
-  /** 연결했다(팝업은 닫혔다) — 화면의 수행 시간을 다시 불러오게 한다. */
+  /** 연결하거나 해제했다(팝업은 닫혔다) — 화면의 수행 시간을 다시 불러오게 한다. */
   onLinked: () => void;
   /** 팝업이 닫혔다. 열었던 버튼으로 포커스를 돌려주는 데 쓴다(15초 갱신으로 버튼이 새로 그려졌을 수 있다). */
   onClose?: () => void;
@@ -34,8 +38,9 @@ function paragraph(text: string, className: string): HTMLParagraphElement {
 /**
  * 프로세스 상세의 "프로세스 연결": 홈의 "목표 프로세스 관리"와 같은 목표 목록을 팝업으로 띄우고, 목표를 누르면 지금 보는 프로세스를
  * 그 목표에 연결한 뒤 팝업을 닫고 토스트로 알린다(화면은 그대로 프로세스 상세다).
- * 한 프로세스는 한 목표에만 연결되므로, 이미 어느 목표에 있거나 브라우저의 사이트가 연결돼 있으면 목록은 보이되 누를 수 없고 이유를 적는다.
- * 다른 목표로 옮기거나 연결을 끊는 일은 목표 관리 화면에서 한다.
+ * 이미 연결된 목표를 누르면 연결을 해제한다(같은 방식으로 닫고 토스트로 알린다).
+ * 한 프로세스는 한 목표에만 연결되므로, 이미 어느 목표에 있으면 다른 목표는 누를 수 없다(먼저 해제한다). 브라우저의 사이트가 연결돼 있으면
+ * 브라우저 전체는 연결할 수 없어 목록 전체를 잠그고 이유를 적는다.
  */
 export function createProcessGoalLinker(
   props: ProcessGoalLinkerProps,
@@ -82,7 +87,7 @@ export function createProcessGoalLinker(
     content.append(
       paragraph(
         state.kind === "linked"
-          ? `${props.process}은(는) 이미 '${state.goalName}' 목표에 연결되어 있어요. 다른 목표로 옮기려면 목표 관리에서 연결을 먼저 해제하세요.`
+          ? `${props.process}은(는) '${state.goalName}' 목표에 연결되어 있어요. 그 목표를 누르면 연결이 해제돼요. 다른 목표로 옮기려면 먼저 해제하세요.`
           : state.kind === "sitesLinked"
             ? `${props.process}의 사이트가 '${state.goalName}' 목표에 연결되어 있어 브라우저 전체는 연결할 수 없어요.`
             : `${props.process}을(를) 연결할 목표를 고르세요.`,
@@ -102,13 +107,25 @@ export function createProcessGoalLinker(
           )
         : createGoalList({
             goals,
-            onOpen: (goal) => void link(goal),
+            onOpen: (goal) =>
+              void (state.kind === "linked" && goal.id === state.goalId
+                ? save(
+                    goal,
+                    removeProcess(goal.processes, props.process),
+                    `'${goal.name}' 목표에서 연결이 해제되었습니다.`,
+                    "연결을 해제하지 못했습니다",
+                  )
+                : save(
+                    goal,
+                    addProcess(goal.processes, props.process),
+                    `'${goal.name}' 목표에 등록되었습니다.`,
+                    "연결하지 못했습니다",
+                  )),
             status: (goal) => {
               if (state.kind === "linked") {
-                return {
-                  note: goal.id === state.goalId ? "연결됨" : "",
-                  disabled: true,
-                };
+                return goal.id === state.goalId
+                  ? { note: "연결됨 · 누르면 연결 해제", disabled: false }
+                  : { note: "", disabled: true };
               }
               return state.kind === "sitesLinked"
                 ? { note: "", disabled: true }
@@ -119,7 +136,13 @@ export function createProcessGoalLinker(
     modal.show({ title, content });
   }
 
-  async function link(goal: Goal): Promise<void> {
+  /** 목표의 연결 프로세스를 processes로 바꿔 저장한다. 저장되면 팝업을 닫고 done을 토스트로, 실패하면 팝업에 failed와 이유를 보인다. */
+  async function save(
+    goal: Goal,
+    processes: string[],
+    done: string,
+    failed: string,
+  ): Promise<void> {
     if (saving) {
       return;
     }
@@ -133,7 +156,7 @@ export function createProcessGoalLinker(
         name: goal.name,
         daily_target_minutes: goal.daily_target_minutes,
         weekdays: goal.weekdays,
-        processes: addProcess(goal.processes, props.process),
+        processes,
         sites: goal.sites,
         // 연결만 바꾸는 수정이라 기간은 지금 값을 그대로 보낸다.
         start_date: goal.start_date,
@@ -141,7 +164,7 @@ export function createProcessGoalLinker(
       });
     } catch (failure) {
       if (scene === sceneId && !destroyed) {
-        await showList(`연결하지 못했습니다: ${message(failure)}`);
+        await showList(`${failed}: ${message(failure)}`);
       }
       return;
     } finally {
@@ -154,7 +177,7 @@ export function createProcessGoalLinker(
     if (scene === sceneId) {
       modal.close();
     }
-    showToast(`'${goal.name}' 목표에 등록되었습니다.`);
+    showToast(done);
     props.onLinked();
   }
 
