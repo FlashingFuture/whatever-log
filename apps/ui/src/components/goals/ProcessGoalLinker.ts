@@ -124,7 +124,7 @@ export function createProcessGoalLinker(
             status: (goal) => {
               if (state.kind === "linked") {
                 return goal.id === state.goalId
-                  ? { note: "연결됨 · 누르면 연결 해제", disabled: false }
+                  ? { note: "연결됨 · 눌러서 연결 해제", disabled: false }
                   : { note: "", disabled: true };
               }
               return state.kind === "sitesLinked"

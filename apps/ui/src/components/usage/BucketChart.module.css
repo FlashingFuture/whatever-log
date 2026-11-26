@@ -10,14 +10,10 @@
   flex-direction: column;
   align-items: center;
   padding: var(--space-1) 0;
-  border-radius: var(--radius-sm);
 }
-.column:hover {
-  background: var(--color-track);
-}
-/* hover하면 칸 바탕이 막대 바탕색이 되므로, 막대 바탕은 화면 바탕색으로 바꿔 구분한다. */
-.column:hover .bar {
-  background: var(--color-bg);
+/* 마우스를 올린 막대만 살짝 어둡게 한다(라벨은 그대로). 툴팁도 막대에만 있다. */
+.bar:hover {
+  filter: brightness(0.93);
 }
 /* 라벨이 칸보다 넓으면 옆 칸 위로 넘친다(가운데 정렬이라 양쪽으로 고르게) — 옆 칸의 라벨은 그 폭에서 감춰져 있다. */
 .label {

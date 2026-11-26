@@ -43,7 +43,7 @@ function labelClasses(unit: PeriodUnit, index: number): string[] {
 
 /**
  * 시간 칸 하나: 세로 막대 + 짧은 라벨(`01:00`, `11/03`). 칸이 좁아 수치는 글자로 늘어놓지 않고
- * 툴팁·스크린 리더(전체 라벨 + 활성/유휴/백그라운드/총)로 준다.
+ * 막대의 툴팁·스크린 리더(전체 라벨 + 활성/유휴/백그라운드/총)로 준다.
  * 차트가 좁으면 라벨을 하나 건너 하나(더 좁으면 넷에 하나)만 남긴다(labelClasses) — 감춘 라벨도 자리는 남아 막대 높이는 그대로다.
  */
 function createBucketColumn(
@@ -60,16 +60,17 @@ function createBucketColumn(
     `유휴 ${formatDuration(usage.idle_seconds)}, ` +
     `백그라운드 ${formatDuration(usage.background_seconds)}, ` +
     `총 ${formatDuration(usage.total_seconds)}`;
-  // 막대는 색으로만 구분되므로 수치를 텍스트로도 준다.
-  column.setAttribute("role", "img");
-  column.setAttribute("aria-label", breakdown);
-  column.title = breakdown;
-
+  // 막대는 색으로만 구분되므로 수치를 텍스트로도 준다. 툴팁은 막대에만 둔다(라벨 위에서는 뜨지 않는다).
   const bar = createUsageBar(usage, maxTotal);
   bar.classList.add(styles.bar);
+  bar.setAttribute("role", "img");
+  bar.setAttribute("aria-label", breakdown);
+  bar.title = breakdown;
 
+  // 짧은 라벨은 막대의 이름(전체 라벨)에 이미 들어 있어 스크린 리더에는 숨긴다.
   const label = document.createElement("span");
   label.className = labelClassNames.join(" ");
+  label.setAttribute("aria-hidden", "true");
   label.textContent = shortLabel;
 
   column.append(bar, label);
