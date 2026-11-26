@@ -5,11 +5,6 @@
 .empty {
   composes: muted from "../../styles/shared.module.css";
 }
-.summary {
-  composes: muted from "../../styles/shared.module.css";
-  margin: 0 0 var(--space-3);
-  font-size: var(--text-md);
-}
 .column {
   display: flex;
   flex-direction: column;
@@ -31,14 +26,30 @@
   white-space: nowrap;
   color: var(--color-text-muted);
 }
-/* 칸마다 라벨(약 2.3rem)이 들어갈 폭이 아니면 하나 건너 하나를 감춘다. 자리(높이)는 그대로 둔다. */
+/* 주(7칸)는 날짜와 요일이 좁으면 두 줄로 나뉜다. */
+.week {
+  white-space: normal;
+  text-align: center;
+}
+/* 단위마다 칸 수가 달라(일 24, 월 28~31) 라벨 하나(약 2.3rem)가 들어갈 폭이 다르다. 그 폭이 안 되면 하나 건너 하나,
+   그것도 안 되면 넷에 하나만 남긴다. 감춰도 자리(높이)는 그대로다. */
 @container (max-width: 56rem) {
-  .minorDay {
+  .day.odd {
+    visibility: hidden;
+  }
+}
+@container (max-width: 28rem) {
+  .day.offFour {
     visibility: hidden;
   }
 }
 @container (max-width: 74rem) {
-  .minorMonth {
+  .month.odd {
+    visibility: hidden;
+  }
+}
+@container (max-width: 37rem) {
+  .month.offFour {
     visibility: hidden;
   }
 }

@@ -3,14 +3,20 @@ import {
   fetchSiteUsage,
   isSiteTrackingBrowser,
 } from "../api";
+import { createDashboard } from "../components/common/Dashboard";
+import { createProcessGoalLinker } from "../components/goals/ProcessGoalLinker";
 import { createPeriodView } from "../components/period/PeriodView";
-import { createBucketChart } from "../components/usage/BucketChart";
+import {
+  createBucketChart,
+  seriesTotals,
+} from "../components/usage/BucketChart";
 import { createProcessIcon } from "../components/usage/ProcessIcon";
 import {
   createSiteUsageList,
   createSiteUsageLoading,
   createSiteUsageUnavailable,
 } from "../components/usage/SiteUsageList";
+import { createProcessSummary } from "../components/usage/UsageSummary";
 import { bucketsOf } from "../lib/period";
 import { settleWithin } from "../lib/settle";
 import styles from "./ProcessPage.module.css";
@@ -19,9 +25,10 @@ import styles from "./ProcessPage.module.css";
 const SITES_GRACE_MS = 300;
 
 /**
- * 프로세스 상세 화면: 맨 위 한 줄에 아이콘 + 이름(왼쪽)과 구간 이동(오른쪽), 그 아래에 선택한 구간을 칸(일: 시간, 주/월:
- * 날짜)으로 나눈 사용 시간(세로 막대). 브라우저(Chrome·Edge 등)는 그 아래에 사이트별 사용 시간이 더 붙는다.
- * 구간 이동은 홈과 같은 PeriodView를 쓰고, 이름은 그 줄의 왼쪽 조각(leading)으로 넣는다.
+ * 프로세스 상세 화면: 맨 위 한 줄에 아이콘 + 이름(왼쪽)과 구간 이동(오른쪽), 그 아래는 홈과 같은 두 칸 — 왼쪽 요약(구간의
+ * 사용 시간과 "프로세스 연결")과 오른쪽 차트(구간을 칸으로 나눈 사용 시간, 일: 시간, 주/월: 날짜). 브라우저(Chrome·Edge 등)는
+ * 차트 아래에 사이트별 사용 시간이 더 붙는다. 구간 이동은 홈과 같은 PeriodView를 쓰고, 이름은 그 줄의 왼쪽 조각(leading)으로 넣는다.
+ * "프로세스 연결" 팝업은 15초마다 다시 그려지는 내용 밖(페이지)에 두어, 열려 있는 동안 갱신에 지워지지 않게 한다.
  */
 export function mountProcessPage(
   root: HTMLElement,
@@ -33,6 +40,14 @@ export function mountProcessPage(
   name.className = styles.name;
   name.textContent = process;
   title.append(createProcessIcon(process, { large: true }), name);
+
+  const linker = createProcessGoalLinker({
+    process,
+    onLinked: () => view.refresh(),
+    // 15초마다 요약이 다시 그려져 열었던 버튼이 사라졌을 수 있다 — 지금 있는 버튼으로 포커스를 돌려준다.
+    onClose: () =>
+      root.querySelector<HTMLElement>("[data-process-link]")?.focus(),
+  });
 
   const view = createPeriodView({
     leading: title,
@@ -56,26 +71,27 @@ export function mountProcessPage(
             )
           : null,
       );
-      const chart = createBucketChart(
-        period.unit,
-        await seriesPromise,
-        buckets,
-      );
+      const series = await seriesPromise;
+      const side = [
+        createProcessSummary({
+          usage: seriesTotals(series),
+          onLinkGoal: linker.open,
+        }),
+      ];
+      const page: Node[] = [createBucketChart(period.unit, series, buckets)];
       // 그 안에 끝나면 차트와 함께 그린다(15초 갱신마다 자리가 깜빡이지 않게).
       const sites = await settleWithin(sitesPromise, SITES_GRACE_MS);
       if (sites === null) {
-        return chart;
+        return createDashboard(side, page);
       }
-      const page = document.createElement("div");
-      page.append(chart);
       if (sites !== undefined) {
-        page.append(sites);
-        return page;
+        page.push(sites);
+        return createDashboard(side, page);
       }
       // 아직 모른다(느린 hub): 차트를 먼저 보여 주고 "불러오는 중" 자리를 두었다가, 도착하면
       // 사이트 목록으로 바꾼다. 사이트 목록을 붙이지 않는 프로세스로 밝혀지면 자리를 치운다.
       const slot = createSiteUsageLoading();
-      page.append(slot);
+      page.push(slot);
       void sitesPromise.then((loaded) => {
         if (loaded === null) {
           slot.remove();
@@ -83,10 +99,13 @@ export function mountProcessPage(
           slot.replaceWith(loaded);
         }
       });
-      return page;
+      return createDashboard(side, page);
     },
   });
 
   root.replaceChildren(view.element);
-  return view.destroy;
+  return () => {
+    view.destroy();
+    linker.destroy();
+  };
 }

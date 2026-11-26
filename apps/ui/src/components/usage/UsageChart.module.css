@@ -13,15 +13,15 @@
   flex: none;
   width: 6.5rem;
 }
-/* 좁은 칸: 칸들이 폭을 똑같이 나눠 가져 하루(24칸)·한 달(31칸)이 한 화면에 들어온다. 아주 좁은 창에서만 스크롤한다. */
+/* 좁은 칸: 칸들이 폭을 똑같이 나눠 가져 하루(24칸)·한 달(31칸)이 요약 옆의 좁은 자리에도 한 화면에 들어온다. 아주 좁은 창에서만 스크롤한다. */
 .compact {
-  gap: var(--space-1);
+  gap: 0.125rem;
   /* 양 끝 칸의 라벨이 칸보다 넓어 넘쳐도 이 안에 들어와 가로 스크롤이 생기지 않게 */
   padding-inline: var(--space-3);
 }
 .compact > * {
   flex: 1 1 0;
-  min-width: 1.1rem;
+  min-width: 0.6rem;
 }
 .empty {
   composes: muted from "../../styles/shared.module.css";

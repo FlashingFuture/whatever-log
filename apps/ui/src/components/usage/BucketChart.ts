@@ -12,21 +12,46 @@ import { createUsageBar } from "./UsageBar";
 import { createColumnChart } from "./UsageChart";
 import type { UsageNumbers } from "./UsageRow";
 
-function sum(series: ProcessSeries, field: "active_seconds" | "total_seconds") {
-  return series.buckets.reduce((total, bucket) => total + bucket[field], 0);
+/** 칸들을 모두 더한 구간의 사용 시간(프로세스 상세 왼쪽 요약에 쓴다). */
+export function seriesTotals(series: ProcessSeries): UsageNumbers {
+  const totals: UsageNumbers = {
+    active_seconds: 0,
+    idle_seconds: 0,
+    background_seconds: 0,
+    total_seconds: 0,
+  };
+  for (const bucket of series.buckets) {
+    totals.active_seconds += bucket.active_seconds;
+    totals.idle_seconds += bucket.idle_seconds;
+    totals.background_seconds += bucket.background_seconds;
+    totals.total_seconds += bucket.total_seconds;
+  }
+  return totals;
+}
+
+/** 라벨을 감추는 단계에 쓰는 클래스: 단위(칸 수가 다르다)와, 하나 건너 하나·넷에 하나만 남길 때 감출 칸인지. */
+function labelClasses(unit: PeriodUnit, index: number): string[] {
+  const classes = [styles.label, styles[unit]];
+  if (index % 2 === 1) {
+    classes.push(styles.odd);
+  }
+  if (index % 4 !== 0) {
+    classes.push(styles.offFour);
+  }
+  return classes;
 }
 
 /**
  * 시간 칸 하나: 세로 막대 + 짧은 라벨(`01:00`, `11/03`). 칸이 좁아 수치는 글자로 늘어놓지 않고
  * 툴팁·스크린 리더(전체 라벨 + 활성/유휴/백그라운드/총)로 준다.
- * 칸이 많으면(일·월) 하나 건너 하나의 라벨은 좁은 화면에서 감춘다(minor) — 자리는 남겨 막대 높이는 그대로다.
+ * 차트가 좁으면 라벨을 하나 건너 하나(더 좁으면 넷에 하나)만 남긴다(labelClasses) — 감춘 라벨도 자리는 남아 막대 높이는 그대로다.
  */
 function createBucketColumn(
   usage: UsageNumbers,
   maxTotal: number,
   fullLabel: string,
   shortLabel: string,
-  minorLabel: "day" | "month" | null,
+  labelClassNames: string[],
 ): HTMLElement {
   const column = document.createElement("div");
   column.className = styles.column;
@@ -44,12 +69,7 @@ function createBucketColumn(
   bar.classList.add(styles.bar);
 
   const label = document.createElement("span");
-  label.className = styles.label;
-  if (minorLabel === "day") {
-    label.classList.add(styles.minorDay);
-  } else if (minorLabel === "month") {
-    label.classList.add(styles.minorMonth);
-  }
+  label.className = labelClassNames.join(" ");
   label.textContent = shortLabel;
 
   column.append(bar, label);
@@ -71,8 +91,7 @@ export function createBucketChart(
   const container = document.createElement("div");
   container.className = styles.container;
 
-  const total = sum(series, "total_seconds");
-  if (total === 0) {
+  if (seriesTotals(series).total_seconds === 0) {
     const empty = document.createElement("p");
     empty.className = styles.empty;
     empty.textContent = "이 구간에는 기록된 사용 내역이 없습니다.";
@@ -80,27 +99,18 @@ export function createBucketChart(
     return container;
   }
 
-  const summary = document.createElement("p");
-  summary.className = styles.summary;
-  summary.textContent = `이 구간 합계 — 활성 ${formatDuration(sum(series, "active_seconds"))} / 총 ${formatDuration(total)}`;
-
   // 가장 많이 쓴 칸을 기준으로 막대 높이를 정한다(칸 길이 전체가 기준이면 대부분 짤막하다).
   const maxTotal = maxOf(series.buckets, (b) => b.total_seconds);
-  // 주(7칸)는 라벨이 다 들어간다. 일(24칸)·월(28~31칸)은 좁은 화면에서 하나 건너 하나만 보인다.
-  const minor = unit === "week" ? null : unit;
   const columns = series.buckets.map((usage, index) =>
     createBucketColumn(
       usage,
       maxTotal,
       formatBucketLabel(unit, buckets[index]),
       formatBucketShortLabel(unit, buckets[index]),
-      index % 2 === 1 ? minor : null,
+      labelClasses(unit, index),
     ),
   );
 
-  container.append(
-    summary,
-    createColumnChart(columns, "", { spacing: "compact" }),
-  );
+  container.append(createColumnChart(columns, "", { spacing: "compact" }));
   return container;
 }

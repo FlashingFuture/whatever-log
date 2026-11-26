@@ -1,0 +1,30 @@
+/* 화면 맨 아래 가운데. 자리 자체는 누를 수 없고(아래 화면을 막지 않게) 알림만 보인다. */
+.region {
+  position: fixed;
+  left: 50%;
+  bottom: var(--space-8);
+  z-index: 1000;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.toast {
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--color-text);
+  color: var(--color-bg);
+  box-shadow: var(--shadow-popover);
+  font-size: var(--text-md);
+  white-space: nowrap;
+  animation: toast-in 0.15s ease-out;
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
+}

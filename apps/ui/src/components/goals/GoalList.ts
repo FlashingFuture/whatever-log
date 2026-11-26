@@ -6,10 +6,14 @@ import styles from "./GoalList.module.css";
 
 export interface GoalListProps {
   goals: Goal[];
-  /** 목표를 눌렀다 — 연결 프로세스 화면으로 간다. */
+  /** 목표를 눌렀다(관리: 연결 프로세스 화면으로, 고르기: 그 목표에 연결). */
   onOpen: (goal: Goal) => void;
-  onEdit: (goal: Goal) => void;
-  onDelete: (goal: Goal) => void;
+  /** 주면 수정 아이콘이 생긴다. 목표를 고르기만 하는 목록(프로세스 상세의 "프로세스 연결")에서는 주지 않는다. */
+  onEdit?: (goal: Goal) => void;
+  /** 주면 삭제 아이콘이 생긴다. */
+  onDelete?: (goal: Goal) => void;
+  /** 목표마다 덧붙일 한 줄과, 누를 수 없게 할지(이미 연결됨 등). 없으면 보통의 줄이다. */
+  status?: (goal: Goal) => { note: string; disabled: boolean } | null;
 }
 
 function describe(goal: Goal): string {
@@ -82,32 +86,52 @@ export function createGoalList(props: GoalListProps): HTMLElement {
     meta.className = styles.meta;
     meta.textContent = describe(goal);
     main.append(name, meta);
+    const status = props.status?.(goal) ?? null;
+    if (status !== null) {
+      if (status.note) {
+        const note = document.createElement("span");
+        note.className = styles.note;
+        note.textContent = status.note;
+        main.append(note);
+      }
+      main.disabled = status.disabled;
+    }
     main.addEventListener("click", () => props.onOpen(goal));
 
     const actions = document.createElement("span");
     actions.className = styles.actions;
-    actions.append(
-      createIconButton({
-        icon: "pencil",
-        label: `${goal.name} 수정`,
-        onClick: () => props.onEdit(goal),
-      }),
-      createIconButton({
-        icon: "trash",
-        label: `${goal.name} 삭제`,
-        tone: "danger",
-        onClick: () => props.onDelete(goal),
-      }),
-    );
+    const { onEdit, onDelete } = props;
+    if (onEdit) {
+      actions.append(
+        createIconButton({
+          icon: "pencil",
+          label: `${goal.name} 수정`,
+          onClick: () => onEdit(goal),
+        }),
+      );
+    }
+    if (onDelete) {
+      actions.append(
+        createIconButton({
+          icon: "trash",
+          label: `${goal.name} 삭제`,
+          tone: "danger",
+          onClick: () => onDelete(goal),
+        }),
+      );
+    }
 
-    row.addEventListener("contextmenu", (event) => {
-      event.preventDefault();
-      unpin();
-      pinned = row;
-      row.setAttribute("data-pinned", "true");
-    });
-
-    row.append(main, actions);
+    row.append(main);
+    // 아이콘이 있을 때만 오른쪽 클릭으로 고정한다(고르기만 하는 목록에서는 브라우저 메뉴를 막지 않는다).
+    if (actions.childElementCount > 0) {
+      row.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        unpin();
+        pinned = row;
+        row.setAttribute("data-pinned", "true");
+      });
+      row.append(actions);
+    }
     list.append(row);
   }
   return list;
