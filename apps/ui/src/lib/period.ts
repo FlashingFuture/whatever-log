@@ -242,3 +242,19 @@ export function formatBucketLabel(unit: PeriodUnit, bucket: Bucket): string {
   }
   return `${start.getMonth() + 1}/${start.getDate()} (${WEEKDAYS[start.getDay()]})`;
 }
+
+/**
+ * 프로세스 상세의 좁은 막대 칸 아래에 쓰는 짧은 라벨: 일은 `01:00`, 주는 `11/03 (화)`(칸이 일곱 개라 요일까지 들어간다), 월은 `11/03`.
+ * 일광절약시간 종료일에 두 번 나오는 시(時)의 구분은 짧은 라벨에 없다 — 전체 라벨(formatBucketLabel)을 툴팁·스크린 리더에 같이 준다.
+ */
+export function formatBucketShortLabel(
+  unit: PeriodUnit,
+  bucket: Bucket,
+): string {
+  const { start } = bucket;
+  if (unit === "day") {
+    return `${pad(start.getHours())}:00`;
+  }
+  const date = `${pad(start.getMonth() + 1)}/${pad(start.getDate())}`;
+  return unit === "week" ? `${date} (${WEEKDAYS[start.getDay()]})` : date;
+}

@@ -1,5 +1,8 @@
 /* 홈 맨 위의 목표 캐러셀의 가운데 칸(이름). 단추 둘과 줄의 틀은 common/TripleNav가 그린다. */
 .carousel {
+  /* 구간 이동 줄의 왼쪽 조각(PeriodView의 leading). 화살표(바깥)·이웃 글자·이름이 한 줄에 들어가게 요약 칸(16rem)보다 조금 넓다. */
+  flex: 0 1 18rem;
+  min-width: 12rem;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);

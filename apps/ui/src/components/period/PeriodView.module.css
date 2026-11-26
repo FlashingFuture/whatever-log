@@ -8,11 +8,6 @@
   gap: var(--space-3);
   margin-bottom: var(--space-5);
 }
-/* 왼쪽 조각(홈의 목표 캐러셀). 화살표(바깥)·이웃 글자·이름이 한 줄에 들어가게 요약 칸(16rem)보다 조금 넓다. */
-.leading {
-  flex: 0 1 18rem;
-  min-width: 12rem;
-}
 /* 구간 이동(← 라벨 →): 오른쪽에 붙는다. */
 .controls {
   display: flex;

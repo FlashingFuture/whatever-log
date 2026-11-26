@@ -9,6 +9,7 @@ import {
   bucketsOf,
   calendarWeeks,
   formatBucketLabel,
+  formatBucketShortLabel,
   formatPeriod,
   formatPeriodShort,
   isCurrentPeriod,
@@ -284,4 +285,16 @@ test("칸 라벨", () => {
 
   assert.equal(formatBucketLabel("day", hour), "0시");
   assert.equal(formatBucketLabel("week", dayBucket), "10/26 (월)");
+});
+
+test("짧은 칸 라벨(상세의 세로 막대 아래): 일은 01:00, 주는 날짜와 요일, 월은 날짜만", () => {
+  useTimezone("Asia/Seoul");
+  const hours = bucketsOf(periodContaining("day", new Date(2026, 10, 3, 13)));
+  const [weekDay] = bucketsOf(periodContaining("week", new Date(2026, 10, 3)));
+  const month = bucketsOf(periodContaining("month", new Date(2026, 10, 3)));
+
+  assert.equal(formatBucketShortLabel("day", hours[1]), "01:00");
+  assert.equal(formatBucketShortLabel("day", hours[23]), "23:00");
+  assert.equal(formatBucketShortLabel("week", weekDay), "11/02 (월)");
+  assert.equal(formatBucketShortLabel("month", month[2]), "11/03");
 });

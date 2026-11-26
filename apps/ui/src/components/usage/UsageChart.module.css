@@ -1,15 +1,27 @@
-/* 세로 막대 칸을 한 줄로 늘어놓고, 넘치면 이 안에서 옆으로 스크롤한다(칸이 아래 줄로
-   내려가지 않는다). 칸은 집중 시간순이라 눈에 띄는 상위 대여섯 칸이 첫 화면에 보이고,
-   그다음 칸이 한 칸 걸쳐 보여 더 있음을 알려 준다. */
+/* 세로 막대 칸을 한 줄로 늘어놓는다(칸이 아래 줄로 내려가지 않는다). */
 .chart {
   display: flex;
-  gap: var(--space-3);
   overflow-x: auto;
   padding-bottom: var(--space-2); /* 가로 스크롤 막대가 칸을 가리지 않게 */
 }
-.chart > * {
+/* 넓은 칸: 넘치면 이 안에서 옆으로 스크롤한다. 칸은 집중 시간순이라 눈에 띄는 상위 대여섯 칸이 첫 화면에 보이고,
+   그다음 칸이 한 칸 걸쳐 보여 더 있음을 알려 준다. */
+.regular {
+  gap: var(--space-3);
+}
+.regular > * {
   flex: none;
   width: 6.5rem;
+}
+/* 좁은 칸: 칸들이 폭을 똑같이 나눠 가져 하루(24칸)·한 달(31칸)이 한 화면에 들어온다. 아주 좁은 창에서만 스크롤한다. */
+.compact {
+  gap: var(--space-1);
+  /* 양 끝 칸의 라벨이 칸보다 넓어 넘쳐도 이 안에 들어와 가로 스크롤이 생기지 않게 */
+  padding-inline: var(--space-3);
+}
+.compact > * {
+  flex: 1 1 0;
+  min-width: 1.1rem;
 }
 .empty {
   composes: muted from "../../styles/shared.module.css";

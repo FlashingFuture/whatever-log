@@ -2,7 +2,6 @@ import { cancelLogin, fetchAccount, logout, startLogin } from "./api";
 import { createDeleteAccountDialog } from "./components/account/DeleteAccountDialog";
 import { createSyncDialog } from "./components/sync/SyncDialog";
 import { createUpdateNotice } from "./components/update/UpdateNotice";
-import { mountLayout } from "./layouts/Layouts";
 import { createNavBar } from "./layouts/NavBar";
 import { mountGoalPage } from "./pages/GoalPage";
 import { mountProcessPage } from "./pages/ProcessPage";
@@ -16,7 +15,7 @@ import {
   savedScroll,
   saveScroll,
 } from "./router/router";
-import { type LayoutName, layoutOf } from "./router/routes";
+import { hasBack } from "./router/routes";
 import { restoreScroll, trackScroll } from "./router/scroll";
 import {
   type AccountStore,
@@ -75,26 +74,24 @@ if (app) {
     }
   });
   const navBar = createNavBar(account, {
+    onBack: goBack,
     onOpenSync: () => void syncDialog.open({ afterLogin: false }),
     onDeleteAccount: (email, session) =>
       deleteAccountDialog.open(email, session),
   });
-  // 상단 막대는 한 번만 그리고, 화면 틀(레이아웃)은 그 아래 자리(stage)에 갈아 끼운다.
-  const stage = document.createElement("div");
+  // 상단 막대는 한 번만 그리고, 화면은 그 아래 자리(content)에 갈아 끼운다. 뒤로 가기는 상단 막대에 있다.
+  const content = document.createElement("main");
   // 새 버전 알림: 상단 막대 아래 한 줄(새 버전이 있을 때만)과 맨 아래의 버전 줄(docs/updates.md).
   const updateNotice = createUpdateNotice();
   app.replaceChildren(
     navBar.element,
     updateNotice.banner,
-    stage,
+    content,
     updateNotice.footer,
   );
   void account.refresh();
   window.addEventListener("focus", () => void account.refresh());
 
-  const root = stage;
-  let layout: LayoutName | null = null;
-  let content: HTMLElement | null = null;
   // 지금 화면의 정리 함수. 화면을 갈아 끼우기 전에 부른다(타이머·키보드 리스너 해제).
   let destroyPage: (() => void) | null = null;
   let cancelScrollRestore: () => void = () => {};
@@ -108,12 +105,7 @@ if (app) {
     destroyPage = null;
 
     const route = currentRoute();
-    const nextLayout = layoutOf(route);
-    // 레이아웃은 바뀔 때만 다시 그린다(같은 틀 안에서의 이동은 틀을 그대로 둔다).
-    if (nextLayout !== layout || content === null) {
-      content = mountLayout(root, nextLayout, { onBack: goBack });
-      layout = nextLayout;
-    }
+    navBar.setBackVisible(hasBack(route));
     destroyPage = mountPage(content, route, account);
     // 뒤로 가기로 돌아온 화면은 떠날 때의 위치로, 새로 들어간 화면은 맨 위로.
     cancelScrollRestore = restoreScroll(kind === "pop" ? savedScroll() : 0);

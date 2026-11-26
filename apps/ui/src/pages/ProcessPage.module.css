@@ -1,9 +1,14 @@
+/* 구간 이동 줄의 왼쪽(PeriodView의 leading). 남는 폭을 다 쓰고, 긴 이름은 줄을 바꿔 이어진다 — 구간 이동은 오른쪽에 붙어 있다. */
 .title {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--period-row-height);
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  margin: 0 0 var(--space-5);
+  margin: 0;
   font-size: 1.5rem;
+  line-height: 1.2;
 }
 .name {
   overflow-wrap: anywhere;

@@ -1,0 +1,29 @@
+/* 막대가 놓이는 칸. 높이가 모든 칸에서 같아야 막대끼리 비교된다. 굵기는 칸이 좁으면 칸 폭까지 줄어든다. */
+.track {
+  display: flex;
+  align-items: flex-end;
+  width: 100%;
+  max-width: 1.5rem; /* 막대는 가늘게 — 칸 크기는 그대로, 막대끼리 구분이 잘 되게 */
+  height: 9rem;
+  margin-bottom: var(--space-1);
+  background: var(--color-track);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.fill {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+.segActive {
+  width: 100%;
+  background: var(--color-active);
+}
+.segIdle {
+  width: 100%;
+  background: var(--color-idle);
+}
+.segBackground {
+  width: 100%;
+  background: var(--color-background-segment);
+}

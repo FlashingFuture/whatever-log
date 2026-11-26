@@ -19,9 +19,9 @@ import styles from "./ProcessPage.module.css";
 const SITES_GRACE_MS = 300;
 
 /**
- * 프로세스 상세 화면: 아이콘 + 이름, 그 아래에 선택한 구간을 칸(일: 시간, 주/월:
- * 날짜)으로 나눈 사용 시간. 브라우저(Chrome·Edge 등)는 그 아래에 사이트별 사용 시간이 더 붙는다.
- * 구간 이동은 홈과 같은 PeriodView를 쓴다.
+ * 프로세스 상세 화면: 맨 위 한 줄에 아이콘 + 이름(왼쪽)과 구간 이동(오른쪽), 그 아래에 선택한 구간을 칸(일: 시간, 주/월:
+ * 날짜)으로 나눈 사용 시간(세로 막대). 브라우저(Chrome·Edge 등)는 그 아래에 사이트별 사용 시간이 더 붙는다.
+ * 구간 이동은 홈과 같은 PeriodView를 쓰고, 이름은 그 줄의 왼쪽 조각(leading)으로 넣는다.
  */
 export function mountProcessPage(
   root: HTMLElement,
@@ -35,6 +35,7 @@ export function mountProcessPage(
   title.append(createProcessIcon(process, { large: true }), name);
 
   const view = createPeriodView({
+    leading: title,
     loadContent: async (period) => {
       // 라벨은 클라이언트가 계산한 칸으로 만든다(서버 응답의 시각이 아니라) — 같은
       // 시(時)가 두 번 나오는 일광절약시간 종료일의 표시가 칸에 들어 있다.
@@ -86,6 +87,6 @@ export function mountProcessPage(
     },
   });
 
-  root.replaceChildren(title, view.element);
+  root.replaceChildren(view.element);
   return view.destroy;
 }
