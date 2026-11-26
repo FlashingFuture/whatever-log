@@ -44,6 +44,9 @@ def check(server_url: str, required: int = REQUIRED_SERVER_API, fetch: Fetch = f
 
 
 def main() -> int:
+    # GitHub의 Windows 러너는 콘솔 인코딩이 cp1252라 한글을 그대로 출력하지 못한다(v1.0.0-beta.3 첫 실행이 여기서 멈췄다).
+    if sys.stdout is not None:
+        sys.stdout.reconfigure(encoding="utf-8")
     ok, message = check(load_config().server_url)
     print(message)
     return 0 if ok else 1
