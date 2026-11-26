@@ -139,3 +139,17 @@ def test_the_server_has_no_local_deploy_script() -> None:
     package = (ROOT / "apps" / "server" / "package.json").read_text(encoding="utf-8")
 
     assert '"deploy"' not in package
+
+
+def test_the_result_prints_on_a_console_that_cannot_encode_korean(monkeypatch) -> None:
+    """Windows 러너의 콘솔(cp1252)에서도 한글 결과를 출력한다 — 출력에서 터지면 서버가 맞아도 출시가 멈춘다."""
+    import io
+
+    raw = io.BytesIO()
+    console = io.TextIOWrapper(raw, encoding="cp1252")
+    monkeypatch.setattr(check_server_api.sys, "stdout", console)
+    monkeypatch.setattr(check_server_api, "check", lambda url: (True, "운영 서버 API 계약 3 ≥ 요구 3"))
+
+    assert check_server_api.main() == 0
+    console.flush()
+    assert "운영 서버".encode() in raw.getvalue()
