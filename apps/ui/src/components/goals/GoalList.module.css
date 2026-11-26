@@ -35,6 +35,16 @@
   text-align: left;
   cursor: pointer;
 }
+/* 누를 수 없는 줄(고르는 목록에서 이미 다른 목표에 연결됨 등)은 이름을 흐리게 해 눌리는 줄과 구분한다. */
+.main:disabled {
+  cursor: default;
+}
+.main:disabled .name {
+  color: var(--color-text-muted);
+}
+.row:has(.main:disabled):hover {
+  background: transparent;
+}
 .main:focus-visible {
   outline: var(--focus-ring);
   outline-offset: -2px;
@@ -53,6 +63,15 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--text-sm);
+}
+/* 고르는 목록에서 덧붙이는 한 줄(이미 연결됨 등). */
+.note {
+  max-width: 100%;
+  color: var(--color-link);
+  font-size: var(--text-sm);
+}
+.main:disabled .note {
+  color: var(--color-text-muted);
 }
 /* 수정·삭제 아이콘: 평소엔 숨기고, 마우스를 올리거나 키보드 포커스가 들어오거나 오른쪽 클릭하면 보인다. */
 .actions {

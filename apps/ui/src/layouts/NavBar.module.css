@@ -10,6 +10,20 @@
   border-bottom: 1px solid var(--color-border);
 }
 
+.start {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+/* 왼쪽 끝을 막대 선에 맞춘다(아이콘 버튼의 안쪽 여백만큼 당긴다). */
+.back {
+  margin-left: calc(-1 * var(--space-2));
+}
+/* 돌아갈 곳이 없는 화면(홈)에서는 감추되 자리는 남겨, 앱 이름이 화면마다 같은 자리에 있게 한다.
+   visibility는 탭 이동과 스크린 리더에서도 빠진다. */
+.backHidden {
+  visibility: hidden;
+}
 .brand {
   font-weight: 600;
   letter-spacing: 0.01em;

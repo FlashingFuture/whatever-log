@@ -17,36 +17,9 @@
   outline: var(--focus-ring);
   outline-offset: -2px;
 }
-/* 막대가 놓이는 칸. 높이가 모든 칸에서 같아야 막대끼리 비교된다. */
-.track {
-  display: flex;
-  align-items: flex-end;
-  width: 1.5rem; /* 막대는 가늘게 — 칸 크기는 그대로, 막대끼리 구분이 잘 되게 */
-  height: 9rem;
-  margin-bottom: var(--space-1);
-  background: var(--color-track);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-}
-.column:hover .track {
+/* hover하면 칸 바탕이 막대 바탕색(track)이 되므로, 막대(UsageBar) 바탕은 화면 바탕색으로 바꿔 구분한다. */
+.column:hover .bar {
   background: var(--color-bg);
-}
-.fill {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-}
-.segActive {
-  width: 100%;
-  background: var(--color-active);
-}
-.segIdle {
-  width: 100%;
-  background: var(--color-idle);
-}
-.segBackground {
-  width: 100%;
-  background: var(--color-background-segment);
 }
 .name {
   max-width: 100%;

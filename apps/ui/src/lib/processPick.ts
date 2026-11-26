@@ -161,6 +161,37 @@ export function splitProcesses(
   };
 }
 
+/**
+ * 프로세스 하나를 목표에 연결할 수 있는지(프로세스 상세의 "프로세스 연결").
+ * - linked: 이미 그 목표에 연결돼 있다(한 프로세스는 한 목표에만 — 다른 목표에는 연결할 수 없다).
+ * - sitesLinked: 이 브라우저의 사이트가 그 목표에 연결돼 있어 브라우저 전체는 연결할 수 없다(같은 시간을 두 번 센다).
+ * - free: 어느 목표에든 연결할 수 있다.
+ */
+export type ProcessLinkState =
+  | { kind: "free" }
+  | { kind: "linked"; goalId: number; goalName: string }
+  | { kind: "sitesLinked"; goalName: string };
+
+export function processLinkState(
+  process: string,
+  goals: readonly GoalLike[],
+): ProcessLinkState {
+  const key = processKey(process);
+  const owner = goals.find((goal) =>
+    goal.processes.some((name) => processKey(name) === key),
+  );
+  if (owner) {
+    return { kind: "linked", goalId: owner.id, goalName: owner.name };
+  }
+  const siteOwner = goals.find((goal) =>
+    (goal.sites ?? []).some((site) => processKey(site.browser) === key),
+  );
+  if (siteOwner) {
+    return { kind: "sitesLinked", goalName: siteOwner.name };
+  }
+  return { kind: "free" };
+}
+
 /** 목록에 프로세스를 더한 새 목록(이미 있으면 그대로). 이름 순으로 돌려준다. */
 export function addProcess(list: readonly string[], name: string): string[] {
   if (list.some((item) => processKey(item) === processKey(name))) {

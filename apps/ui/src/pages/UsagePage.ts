@@ -1,4 +1,5 @@
 import { fetchGoalProgress, fetchGoalTotals, fetchUsage } from "../api";
+import { createDashboard } from "../components/common/Dashboard";
 import { createEmptyNotice } from "../components/common/EmptyNotice";
 import { createGoalCarousel } from "../components/goals/GoalCarousel";
 import { createGoalManager } from "../components/goals/GoalManager";
@@ -10,7 +11,6 @@ import { dayRange, settleSelection } from "../lib/goalSelection";
 import { syncNotice } from "../lib/syncNotice";
 import { navigate } from "../router/router";
 import type { AccountStore } from "../state/accountStore";
-import styles from "./UsagePage.module.css";
 
 /**
  * 홈 화면: 맨 위 한 줄에 목표 캐러셀(목표 전체 → 목표 하나씩, 화살표·점 단추로 넘김, 자동 전환 없음)과 일/주/월 선택·구간 이동이 나란히, 그 아래에 왼쪽 요약(목표 수행 시간 `전체 | 현 기기`·
@@ -30,7 +30,9 @@ export function mountUsagePage(
     onOpenGoal: (goal) => navigate({ name: "goal", goalId: goal.id }),
     // 15초마다 요약이 다시 그려져 열었던 버튼이 사라졌을 수 있다 — 지금 있는 버튼으로 포커스를 돌려준다.
     onClose: () =>
-      root.querySelector<HTMLElement>("[data-goal-manage]")?.focus(),
+      root
+        .querySelector<HTMLElement>('[data-focus-key="goal-manage"]')
+        ?.focus(),
   });
 
   // 고른 목표(null = 목표 전체). 목표가 지워지면 다음에 그릴 때 목표 전체로 돌아간다(settleSelection). 조회가 실패한 갱신은 선택을 바꾸지 않는다.
@@ -71,11 +73,10 @@ export function mountUsagePage(
           carousel.update({ goals: carouselGoals ?? [], selectedId: settled });
         }
       }
-      const side = document.createElement("div");
-      side.className = styles.side;
+      const side: Node[] = [];
       // 목표가 하나도 없으면 목표를 만들러 가는 길을 먼저 보인다(비어 있는 요약만 보여서는 무엇을 해야 하는지 모른다).
       if (progress !== null && progress.goals.length === 0) {
-        side.append(
+        side.push(
           createEmptyNotice({
             text: "아직 목표가 없어요. 목표를 만들고 프로세스를 연결해 보세요.",
             actionLabel: "목표 만들기",
@@ -83,7 +84,7 @@ export function mountUsagePage(
           }),
         );
       }
-      side.append(
+      side.push(
         createUsageSummary({
           usage,
           progress,
@@ -92,18 +93,14 @@ export function mountUsagePage(
           onManageGoals: goals.open,
         }),
       );
-      const dashboard = document.createElement("div");
-      dashboard.className = styles.dashboard;
-      dashboard.append(
-        side,
+      return createDashboard(side, [
         createScopedUsageChart({
           usage,
           progress,
           selectedGoalId: settled,
           onAddProcesses: goals.openDetail,
         }),
-      );
-      return dashboard;
+      ]);
     },
   });
 

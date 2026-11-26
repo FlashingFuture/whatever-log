@@ -13,6 +13,7 @@ import {
 import { chooseTopBlocks, type TopProcess } from "../../lib/goalSummary";
 import { createRouteLink } from "../../router/router";
 import { createProcessIcon, createSiteIcon } from "./ProcessIcon";
+import type { UsageNumbers } from "./UsageRow";
 import styles from "./UsageSummary.module.css";
 
 export interface UsageSummaryProps {
@@ -29,7 +30,12 @@ export interface UsageSummaryProps {
   manageLabel?: string;
 }
 
-function stat(label: string, value: Node, detail?: string): HTMLElement {
+/** 요약의 한 칸: 흐린 라벨, 큰 값, (있으면) 흐린 설명. 홈 요약과 프로세스 상세 요약이 같이 쓴다. */
+export function createStat(
+  label: string,
+  value: Node,
+  detail?: string,
+): HTMLElement {
   const block = document.createElement("div");
   block.className = styles.stat;
 
@@ -59,7 +65,7 @@ function text(value: string): HTMLSpanElement {
 
 function processStat(label: string, top: TopProcess | null): HTMLElement {
   if (top === null) {
-    return stat(label, text("-"));
+    return createStat(label, text("-"));
   }
   // 사이트면 도메인을 이름으로, 그 사이트를 본 브라우저는 시간 옆에 덧붙인다. 눌러서 가는 곳은 브라우저 상세다.
   const shown = top.site ?? top.process;
@@ -73,7 +79,7 @@ function processStat(label: string, top: TopProcess | null): HTMLElement {
     top.site ? createSiteIcon(top.site) : createProcessIcon(top.process),
     name,
   );
-  return stat(
+  return createStat(
     label,
     link,
     top.site
@@ -96,6 +102,38 @@ function timePart(label: string, seconds: number | null): HTMLElement {
   return part;
 }
 
+/** `라벨 시간 | 라벨 시간` 한 줄(예: 전체 1시간 | 현 기기 30분). 좁으면 칸 사이에서 줄이 바뀐다. 시간을 모르면 null("-"). */
+export function createTimePair(
+  parts: readonly { label: string; seconds: number | null }[],
+): HTMLElement {
+  const value = document.createElement("span");
+  value.className = styles.timePair;
+  parts.forEach((part, index) => {
+    if (index > 0) {
+      const separator = document.createElement("span");
+      separator.className = styles.timeSeparator;
+      separator.setAttribute("aria-hidden", "true");
+      separator.textContent = "|";
+      value.append(separator);
+    }
+    value.append(timePart(part.label, part.seconds));
+  });
+  return value;
+}
+
+/** 요약 맨 아래의 링크 모양 버튼(홈의 "목표 프로세스 관리", 상세의 "프로세스 연결"). */
+export function createSummaryAction(
+  label: string,
+  onClick: () => void,
+): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = styles.manage;
+  button.textContent = label;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
 /**
  * "목표 수행 시간"의 값: `전체 xx분 | 현 기기 xx분`. 전체는 모든 기기를 더한 것이고 현 기기는 이 PC의 것이다. 전체를 알 수 없으면
  * (합계를 받지 못함) 전체 칸만 "-"다.
@@ -106,18 +144,10 @@ function timeValue(
   totals: GoalTotals | null,
 ): HTMLElement {
   const pair = timePair(goals, selectedId, totals);
-  const value = document.createElement("span");
-  value.className = styles.timePair;
-  const separator = document.createElement("span");
-  separator.className = styles.timeSeparator;
-  separator.setAttribute("aria-hidden", "true");
-  separator.textContent = "|";
-  value.append(
-    timePart("전체", pair.total),
-    separator,
-    timePart("현 기기", pair.device),
-  );
-  return value;
+  return createTimePair([
+    { label: "전체", seconds: pair.total },
+    { label: "현 기기", seconds: pair.device },
+  ]);
 }
 
 /**
@@ -125,7 +155,7 @@ function timeValue(
  * 이유만 보인다. 분자가 이 PC만의 값이면(전체를 못 받음) 그렇다고 적는다.
  */
 function achievementBlock(rate: Achievement | null): HTMLElement {
-  const block = stat(
+  const block = createStat(
     "달성률",
     text(rate === null ? "-" : `${rate.percent}%`),
     rate === null
@@ -223,10 +253,10 @@ export function createUsageSummary(props: UsageSummaryProps): HTMLElement {
   const selectedGoal =
     progress?.goals.find((goal) => goal.id === props.selectedGoalId) ?? null;
   if (progress === null) {
-    container.append(stat("목표 수행 시간", text("-")));
+    container.append(createStat("목표 수행 시간", text("-")));
   } else if (selectedGoal !== null) {
     container.append(
-      stat(
+      createStat(
         "목표 수행 시간",
         timeValue(progress.goals, selectedGoal.id, props.totals),
       ),
@@ -237,7 +267,10 @@ export function createUsageSummary(props: UsageSummaryProps): HTMLElement {
     );
   } else {
     container.append(
-      stat("목표 수행 시간", timeValue(progress.goals, null, props.totals)),
+      createStat(
+        "목표 수행 시간",
+        timeValue(progress.goals, null, props.totals),
+      ),
       achievementBlock(achievement(progress.goals, null, props.totals)),
     );
   }
@@ -261,12 +294,44 @@ export function createUsageSummary(props: UsageSummaryProps): HTMLElement {
     );
   }
 
-  const manage = document.createElement("button");
-  manage.type = "button";
-  manage.className = styles.manage;
-  manage.dataset.goalManage = "";
-  manage.textContent = props.manageLabel ?? "목표 프로세스 관리";
-  manage.addEventListener("click", props.onManageGoals);
+  const manage = createSummaryAction(
+    props.manageLabel ?? "목표 프로세스 관리",
+    props.onManageGoals,
+  );
+  // 15초 갱신으로 요약이 다시 그려져도 포커스가 같은 버튼으로 이어진다(PeriodView의 data-focus-key).
+  manage.dataset.focusKey = "goal-manage";
   container.append(manage);
+  return container;
+}
+
+export interface ProcessSummaryProps {
+  /** 고른 구간에서 이 프로세스의 사용 시간(칸을 모두 더한 것). */
+  usage: UsageNumbers;
+  /** "프로세스 연결"을 눌렀다(목표 목록 팝업을 연다). */
+  onLinkGoal: () => void;
+}
+
+/**
+ * 프로세스 상세 왼쪽 요약: 고른 구간의 사용 시간(`활성 | 총`, 아래에 유휴·백그라운드)과 그 아래 "프로세스 연결"(이 프로세스를 목표에 연결).
+ * 홈 요약과 같은 칸 모양을 쓴다.
+ */
+export function createProcessSummary(props: ProcessSummaryProps): HTMLElement {
+  const container = document.createElement("section");
+  container.className = styles.summary;
+  container.setAttribute("aria-label", "요약");
+  const { usage } = props;
+  const link = createSummaryAction("프로세스 연결", props.onLinkGoal);
+  link.dataset.focusKey = "process-link";
+  container.append(
+    createStat(
+      "사용 시간",
+      createTimePair([
+        { label: "활성", seconds: usage.active_seconds },
+        { label: "총", seconds: usage.total_seconds },
+      ]),
+      `유휴 ${formatDuration(usage.idle_seconds)} · 백그라운드 ${formatDuration(usage.background_seconds)}`,
+    ),
+    link,
+  );
   return container;
 }

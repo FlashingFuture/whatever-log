@@ -36,8 +36,9 @@ export interface PeriodViewProps {
   /** 구간이 정해지면 그 구간의 내용을 만든다. 무엇을 보여주는지는 호출부 몫이다. */
   loadContent: (period: Period) => Promise<HTMLElement>;
   /**
-   * 조회 단위·구간 이동 줄의 **왼쪽**에 나란히 놓을 조각(홈의 목표 캐러셀). 한 번만 붙이고 구간이 바뀌어도 다시 그리지 않는다 —
-   * 그 안의 포커스와 상태가 구간 이동에 지워지지 않는다.
+   * 조회 단위·구간 이동 줄의 **왼쪽**에 나란히 놓을 조각(홈의 목표 캐러셀, 상세의 프로세스 이름). 한 번만 붙이고 구간이 바뀌어도 다시 그리지 않는다 —
+   * 그 안의 포커스와 상태가 구간 이동에 지워지지 않는다. 얼마나 넓게 차지할지(flex)는 조각이 스스로 정한다.
+   * 줄의 높이는 `--period-row-height`로 맞출 수 있다.
    */
   leading?: HTMLElement;
 }
@@ -76,15 +77,30 @@ export function createPeriodView(props: PeriodViewProps): PeriodView {
   const controls = document.createElement("div");
   controls.className = styles.controls;
   if (props.leading) {
-    const leading = document.createElement("div");
-    leading.className = styles.leading;
-    leading.append(props.leading);
-    header.append(leading, controls);
+    header.append(props.leading, controls);
   } else {
     header.append(controls);
   }
   const content = document.createElement("div");
   element.append(header, content);
+
+  /**
+   * 내용을 갈아 끼운다. 포커스가 `data-focus-key`가 붙은 요소에 있었으면 새 내용의 같은 키 요소로 옮긴다 — 15초 갱신이나
+   * 저장 뒤 다시 불러오기로 요약이 새로 그려져도 키보드 포커스가 body로 빠지지 않게(어떤 요소인지는 내용을 만드는 쪽이 정한다).
+   */
+  function replaceContent(next: HTMLElement): void {
+    const focused = document.activeElement;
+    const key =
+      focused instanceof HTMLElement && content.contains(focused)
+        ? focused.dataset.focusKey
+        : undefined;
+    content.replaceChildren(next);
+    if (key !== undefined) {
+      content
+        .querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(key)}"]`)
+        ?.focus();
+    }
+  }
 
   function goTo(next: Period): void {
     period = next;
@@ -204,7 +220,7 @@ export function createPeriodView(props: PeriodViewProps): PeriodView {
       .loadContent(period)
       .then((loaded) => {
         if (requestId === latestRequestId && !destroyed) {
-          content.replaceChildren(loaded);
+          replaceContent(loaded);
         }
       })
       .catch((error: unknown) => {

@@ -1,17 +1,66 @@
-.chart {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
+/* 라벨을 감출지는 차트 자리의 폭으로 정한다(창 폭이 아니라). */
+.container {
+  container-type: inline-size;
 }
 .empty {
   composes: muted from "../../styles/shared.module.css";
 }
-.summary {
-  composes: muted from "../../styles/shared.module.css";
-  margin: 0 0 var(--space-3);
-  font-size: var(--text-md);
+.column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--space-1) 0;
 }
-.label {
-  color: var(--color-text);
+/* 마우스를 올린 막대만 살짝 어둡게 한다(라벨은 그대로). 툴팁도 막대에만 있다. */
+.bar:hover,
+.bar:focus-visible {
+  filter: brightness(0.93);
+}
+.bar:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+/* 가리키거나 고른 막대의 수치(한 줄). 글자가 바뀌어도 높이가 변하지 않게 한 줄 자리를 둔다. */
+.readout {
+  min-height: 1.5em;
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
+}
+.readoutHint {
+  color: var(--color-text-muted);
+}
+/* 라벨이 칸보다 넓으면 옆 칸 위로 넘친다(가운데 정렬이라 양쪽으로 고르게) — 옆 칸의 라벨은 그 폭에서 감춰져 있다. */
+.label {
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+}
+/* 주(7칸)는 날짜와 요일이 좁으면 두 줄로 나뉜다. */
+.week {
+  white-space: normal;
+  text-align: center;
+}
+/* 단위마다 칸 수가 달라(일 24, 월 28~31) 라벨 하나(약 2.3rem)가 들어갈 폭이 다르다. 그 폭이 안 되면 하나 건너 하나,
+   그것도 안 되면 넷에 하나만 남긴다. 감춰도 자리(높이)는 그대로다. */
+@container (max-width: 56rem) {
+  .day.odd {
+    visibility: hidden;
+  }
+}
+@container (max-width: 28rem) {
+  .day.offFour {
+    visibility: hidden;
+  }
+}
+@container (max-width: 74rem) {
+  .month.odd {
+    visibility: hidden;
+  }
+}
+@container (max-width: 37rem) {
+  .month.offFour {
+    visibility: hidden;
+  }
 }

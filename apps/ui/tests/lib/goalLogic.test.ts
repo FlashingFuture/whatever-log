@@ -8,6 +8,7 @@ import {
   addSite,
   decodeTarget,
   encodeTarget,
+  processLinkState,
   removeProcess,
   removeSite,
   splitProcesses,
@@ -232,4 +233,27 @@ test("서버의 casefold처럼 ß와 ss를 같은 프로세스로 본다", () =>
 
   assert.deepEqual(split.available, ["other.exe"]);
   assert.deepEqual(removeProcess(["Straße.exe"], "STRASSE.EXE"), []);
+});
+
+test("프로세스 상세의 연결: 어느 목표에 있는지, 사이트 때문에 막혔는지, 자유로운지", () => {
+  const goals = [
+    { id: 1, name: "공부", processes: ["Code.exe"] },
+    {
+      id: 2,
+      name: "읽기",
+      processes: [],
+      sites: [{ browser: "chrome.exe", domain: "docs.python.org" }],
+    },
+  ];
+  assert.deepEqual(processLinkState("code.EXE", goals), {
+    kind: "linked",
+    goalId: 1,
+    goalName: "공부",
+  });
+  assert.deepEqual(processLinkState("Chrome.exe", goals), {
+    kind: "sitesLinked",
+    goalName: "읽기",
+  });
+  assert.deepEqual(processLinkState("explorer.exe", goals), { kind: "free" });
+  assert.deepEqual(processLinkState("Code.exe", []), { kind: "free" });
 });
