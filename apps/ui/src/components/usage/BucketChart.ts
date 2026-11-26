@@ -42,8 +42,8 @@ function labelClasses(unit: PeriodUnit, index: number): string[] {
 }
 
 /**
- * 시간 칸 하나: 세로 막대 + 짧은 라벨(`01:00`, `11/03`). 칸이 좁아 수치는 글자로 늘어놓지 않고
- * 막대의 툴팁·스크린 리더(전체 라벨 + 활성/유휴/백그라운드/총)로 준다.
+ * 시간 칸 하나: 세로 막대 + 짧은 라벨(`01:00`, `11/03`). 칸이 좁아 수치는 칸 아래에 늘어놓지 않고, 막대를 가리키거나 키보드로 고르면
+ * 차트 아래 한 줄(readout)에 보인다. 툴팁·스크린 리더 이름(전체 라벨 + 활성/유휴/백그라운드/총)도 막대에 둔다.
  * 차트가 좁으면 라벨을 하나 건너 하나(더 좁으면 넷에 하나)만 남긴다(labelClasses) — 감춘 라벨도 자리는 남아 막대 높이는 그대로다.
  */
 function createBucketColumn(
@@ -52,6 +52,7 @@ function createBucketColumn(
   fullLabel: string,
   shortLabel: string,
   labelClassNames: string[],
+  index: number,
 ): HTMLElement {
   const column = document.createElement("div");
   column.className = styles.column;
@@ -66,6 +67,10 @@ function createBucketColumn(
   bar.setAttribute("role", "img");
   bar.setAttribute("aria-label", breakdown);
   bar.title = breakdown;
+  // 막대들은 Tab 한 번으로 들어가 ←/→로 옮겨 다닌다(createBucketChart). 15초 갱신으로 다시 그려져도 같은 막대로 포커스가 이어진다.
+  bar.tabIndex = -1;
+  bar.dataset.focusKey = `bucket-${index}`;
+  bar.dataset.readout = breakdown;
 
   // 짧은 라벨은 막대의 이름(전체 라벨)에 이미 들어 있어 스크린 리더에는 숨긴다.
   const label = document.createElement("span");
@@ -109,9 +114,66 @@ export function createBucketChart(
       formatBucketLabel(unit, buckets[index]),
       formatBucketShortLabel(unit, buckets[index]),
       labelClasses(unit, index),
+      index,
     ),
   );
+  const bars = columns.map(
+    (column) =>
+      column.querySelector<HTMLElement>("[data-readout]") as HTMLElement,
+  );
+  bars[0].tabIndex = 0;
 
-  container.append(createColumnChart(columns, "", { spacing: "compact" }));
+  // 가리키거나 고른 막대의 수치를 보이는 한 줄. 스크린 리더는 막대 이름으로 이미 읽으므로 숨긴다.
+  const readout = document.createElement("p");
+  readout.className = styles.readout;
+  readout.setAttribute("aria-hidden", "true");
+  const hint = "막대를 가리키거나 Tab으로 들어가 ←/→로 고르면 수치가 보여요.";
+  const show = (bar: HTMLElement | null): void => {
+    readout.textContent = bar?.dataset.readout ?? hint;
+    readout.classList.toggle(styles.readoutHint, bar === null);
+  };
+  const focusedBar = (): HTMLElement | null => {
+    const active = document.activeElement;
+    return active instanceof HTMLElement && bars.includes(active)
+      ? active
+      : null;
+  };
+  show(null);
+
+  bars.forEach((bar, index) => {
+    bar.addEventListener("mouseenter", () => show(bar));
+    bar.addEventListener("mouseleave", () => show(focusedBar()));
+    bar.addEventListener("focus", () => {
+      // 마지막으로 고른 막대가 Tab으로 다시 들어올 자리다(나머지는 Tab 순서에서 뺀다).
+      for (const other of bars) {
+        other.tabIndex = other === bar ? 0 : -1;
+      }
+      show(bar);
+    });
+    bar.addEventListener("blur", () => show(null));
+    bar.addEventListener("keydown", (event) => {
+      const next =
+        event.key === "ArrowLeft"
+          ? index - 1
+          : event.key === "ArrowRight"
+            ? index + 1
+            : event.key === "Home"
+              ? 0
+              : event.key === "End"
+                ? bars.length - 1
+                : null;
+      if (next === null) {
+        return;
+      }
+      // 구간 이동(PeriodView)도 ←/→를 쓴다 — 막대 안에서 쓴 방향키는 여기서 끝낸다.
+      event.preventDefault();
+      bars[Math.max(0, Math.min(bars.length - 1, next))].focus();
+    });
+  });
+
+  container.append(
+    createColumnChart(columns, "", { spacing: "compact" }),
+    readout,
+  );
   return container;
 }

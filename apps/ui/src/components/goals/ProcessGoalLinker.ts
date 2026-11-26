@@ -47,7 +47,8 @@ export function createProcessGoalLinker(
 ): ProcessGoalLinker {
   // 화면을 연달아 바꿀 때 먼저 보낸 요청의 늦은 응답이 나중 화면을 덮지 않게 하는 순번.
   let sceneId = 0;
-  let saving = false;
+  // 진행 중인 저장. 저장 중에 팝업을 닫았다 다시 열면 이것이 끝난 뒤에 목록을 읽는다(저장 전 목록이 남지 않게). 실패했으면 그 문구로 끝난다.
+  let pendingSave: Promise<string | null> | null = null;
   let destroyed = false;
   const title = "프로세스 연결";
 
@@ -108,19 +109,19 @@ export function createProcessGoalLinker(
         : createGoalList({
             goals,
             onOpen: (goal) =>
-              void (state.kind === "linked" && goal.id === state.goalId
-                ? save(
-                    goal,
-                    removeProcess(goal.processes, props.process),
+              state.kind === "linked" && goal.id === state.goalId
+                ? startSave(
+                    goal.id,
+                    (processes) => removeProcess(processes, props.process),
                     `'${goal.name}' 목표에서 연결이 해제되었습니다.`,
                     "연결을 해제하지 못했습니다",
                   )
-                : save(
-                    goal,
-                    addProcess(goal.processes, props.process),
+                : startSave(
+                    goal.id,
+                    (processes) => addProcess(processes, props.process),
                     `'${goal.name}' 목표에 등록되었습니다.`,
                     "연결하지 못했습니다",
-                  )),
+                  ),
             status: (goal) => {
               if (state.kind === "linked") {
                 return goal.id === state.goalId
@@ -136,55 +137,92 @@ export function createProcessGoalLinker(
     modal.show({ title, content });
   }
 
-  /** 목표의 연결 프로세스를 processes로 바꿔 저장한다. 저장되면 팝업을 닫고 done을 토스트로, 실패하면 팝업에 failed와 이유를 보인다. */
-  async function save(
-    goal: Goal,
-    processes: string[],
+  /** 저장을 시작한다(이미 저장 중이면 무시). 끝날 때까지 지금 목록을 잠근다. */
+  function startSave(
+    goalId: number,
+    change: (processes: readonly string[]) => string[],
     done: string,
     failed: string,
-  ): Promise<void> {
-    if (saving) {
+  ): void {
+    if (pendingSave !== null) {
       return;
     }
-    saving = true;
-    const scene = sceneId;
     for (const button of modal.body.querySelectorAll("button")) {
       button.disabled = true;
     }
+    const saving = save(goalId, change, done, failed);
+    pendingSave = saving;
+    void saving.finally(() => {
+      if (pendingSave === saving) {
+        pendingSave = null;
+      }
+    });
+  }
+
+  /**
+   * 목표의 연결 프로세스를 change로 바꿔 저장한다. 목록을 연 뒤 다른 곳(목표 관리·동기화)에서 목표가 바뀌었을 수 있어, 저장 직전에 최신 값을
+   * 다시 읽고 연결만 바꿔 보낸다(나머지 값을 연 때의 것으로 되돌리지 않게). 저장되면 팝업을 닫고 done을 토스트로 알린다. 실패하면 팝업에 failed와
+   * 이유를 보이고, 그 문구를 돌려준다(성공이면 null).
+   */
+  async function save(
+    goalId: number,
+    change: (processes: readonly string[]) => string[],
+    done: string,
+    failed: string,
+  ): Promise<string | null> {
+    const scene = sceneId;
     try {
+      const goal = (await fetchGoals()).find(
+        (candidate) => candidate.id === goalId,
+      );
+      if (goal === undefined) {
+        throw new Error("목표가 그새 지워졌어요.");
+      }
       await updateGoal(goal.id, {
         name: goal.name,
         daily_target_minutes: goal.daily_target_minutes,
         weekdays: goal.weekdays,
-        processes,
+        processes: change(goal.processes),
         sites: goal.sites,
         // 연결만 바꾸는 수정이라 기간은 지금 값을 그대로 보낸다.
         start_date: goal.start_date,
         end_date: goal.end_date,
       });
     } catch (failure) {
+      const text = `${failed}: ${message(failure)}`;
       if (scene === sceneId && !destroyed) {
-        await showList(`${failed}: ${message(failure)}`);
+        await showList(text);
       }
-      return;
-    } finally {
-      saving = false;
+      return text;
     }
     if (destroyed) {
-      return;
+      return null;
     }
-    // 닫혔든 아니든 저장은 됐다 — 화면을 다시 불러오고 알린다.
+    // 닫혔든 아니든 저장은 됐다 — 화면을 다시 불러오고 알린다(닫은 뒤 다시 열었다면 open이 저장 뒤의 목록을 읽는다).
     if (scene === sceneId) {
       modal.close();
     }
     showToast(done);
     props.onLinked();
+    return null;
   }
 
   return {
     open() {
       modal.open();
-      void showList();
+      const saving = pendingSave;
+      if (saving === null) {
+        void showList();
+        return;
+      }
+      // 저장 중에 닫았다 다시 열었다 — 저장이 끝난 뒤의 목록을 보인다(실패했으면 그 이유와 함께).
+      const id = ++sceneId;
+      modal.show({ title, content: paragraph("저장하는 중…", styles.muted) });
+      void saving.then((error) => {
+        if (id === sceneId && !destroyed) {
+          void showList(error ?? undefined);
+        }
+      });
     },
     destroy() {
       destroyed = true;

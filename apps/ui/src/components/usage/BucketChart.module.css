@@ -12,8 +12,23 @@
   padding: var(--space-1) 0;
 }
 /* 마우스를 올린 막대만 살짝 어둡게 한다(라벨은 그대로). 툴팁도 막대에만 있다. */
-.bar:hover {
+.bar:hover,
+.bar:focus-visible {
   filter: brightness(0.93);
+}
+.bar:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+/* 가리키거나 고른 막대의 수치(한 줄). 글자가 바뀌어도 높이가 변하지 않게 한 줄 자리를 둔다. */
+.readout {
+  min-height: 1.5em;
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+.readoutHint {
+  color: var(--color-text-muted);
 }
 /* 라벨이 칸보다 넓으면 옆 칸 위로 넘친다(가운데 정렬이라 양쪽으로 고르게) — 옆 칸의 라벨은 그 폭에서 감춰져 있다. */
 .label {

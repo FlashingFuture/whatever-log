@@ -14,7 +14,9 @@
   color: var(--color-bg);
   box-shadow: var(--shadow-popover);
   font-size: var(--text-md);
-  white-space: nowrap;
+  /* 긴 목표 이름이 들어가도 화면 밖으로 넘치지 않고 줄이 바뀐다(자리의 폭은 left: 50%라 화면 절반까지). */
+  overflow-wrap: anywhere;
+  text-align: center;
   animation: toast-in 0.15s ease-out;
 }
 @keyframes toast-in {
