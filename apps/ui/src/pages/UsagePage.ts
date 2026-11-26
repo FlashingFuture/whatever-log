@@ -30,7 +30,9 @@ export function mountUsagePage(
     onOpenGoal: (goal) => navigate({ name: "goal", goalId: goal.id }),
     // 15초마다 요약이 다시 그려져 열었던 버튼이 사라졌을 수 있다 — 지금 있는 버튼으로 포커스를 돌려준다.
     onClose: () =>
-      root.querySelector<HTMLElement>("[data-goal-manage]")?.focus(),
+      root
+        .querySelector<HTMLElement>('[data-focus-key="goal-manage"]')
+        ?.focus(),
   });
 
   // 고른 목표(null = 목표 전체). 목표가 지워지면 다음에 그릴 때 목표 전체로 돌아간다(settleSelection). 조회가 실패한 갱신은 선택을 바꾸지 않는다.

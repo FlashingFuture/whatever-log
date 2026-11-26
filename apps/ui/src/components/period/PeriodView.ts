@@ -84,6 +84,24 @@ export function createPeriodView(props: PeriodViewProps): PeriodView {
   const content = document.createElement("div");
   element.append(header, content);
 
+  /**
+   * 내용을 갈아 끼운다. 포커스가 `data-focus-key`가 붙은 요소에 있었으면 새 내용의 같은 키 요소로 옮긴다 — 15초 갱신이나
+   * 저장 뒤 다시 불러오기로 요약이 새로 그려져도 키보드 포커스가 body로 빠지지 않게(어떤 요소인지는 내용을 만드는 쪽이 정한다).
+   */
+  function replaceContent(next: HTMLElement): void {
+    const focused = document.activeElement;
+    const key =
+      focused instanceof HTMLElement && content.contains(focused)
+        ? focused.dataset.focusKey
+        : undefined;
+    content.replaceChildren(next);
+    if (key !== undefined) {
+      content
+        .querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(key)}"]`)
+        ?.focus();
+    }
+  }
+
   function goTo(next: Period): void {
     period = next;
     rememberedPeriod = next;
@@ -202,7 +220,7 @@ export function createPeriodView(props: PeriodViewProps): PeriodView {
       .loadContent(period)
       .then((loaded) => {
         if (requestId === latestRequestId && !destroyed) {
-          content.replaceChildren(loaded);
+          replaceContent(loaded);
         }
       })
       .catch((error: unknown) => {

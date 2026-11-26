@@ -46,7 +46,9 @@ export function mountProcessPage(
     onLinked: () => view.refresh(),
     // 15초마다 요약이 다시 그려져 열었던 버튼이 사라졌을 수 있다 — 지금 있는 버튼으로 포커스를 돌려준다.
     onClose: () =>
-      root.querySelector<HTMLElement>("[data-process-link]")?.focus(),
+      root
+        .querySelector<HTMLElement>('[data-focus-key="process-link"]')
+        ?.focus(),
   });
 
   const view = createPeriodView({

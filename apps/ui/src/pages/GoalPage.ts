@@ -113,7 +113,9 @@ export function mountGoalPage(
     },
     // 15초마다 요약이 다시 그려져 열었던 링크가 사라졌을 수 있다 — 지금 있는 링크로 포커스를 돌려준다.
     onClose: () =>
-      root.querySelector<HTMLElement>("[data-goal-manage]")?.focus(),
+      root
+        .querySelector<HTMLElement>('[data-focus-key="goal-manage"]')
+        ?.focus(),
   });
 
   const header = document.createElement("div");

@@ -298,7 +298,8 @@ export function createUsageSummary(props: UsageSummaryProps): HTMLElement {
     props.manageLabel ?? "목표 프로세스 관리",
     props.onManageGoals,
   );
-  manage.dataset.goalManage = "";
+  // 15초 갱신으로 요약이 다시 그려져도 포커스가 같은 버튼으로 이어진다(PeriodView의 data-focus-key).
+  manage.dataset.focusKey = "goal-manage";
   container.append(manage);
   return container;
 }
@@ -320,7 +321,7 @@ export function createProcessSummary(props: ProcessSummaryProps): HTMLElement {
   container.setAttribute("aria-label", "요약");
   const { usage } = props;
   const link = createSummaryAction("프로세스 연결", props.onLinkGoal);
-  link.dataset.processLink = "";
+  link.dataset.focusKey = "process-link";
   container.append(
     createStat(
       "사용 시간",
